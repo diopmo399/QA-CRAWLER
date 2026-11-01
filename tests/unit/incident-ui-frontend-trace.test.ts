@@ -590,3 +590,68 @@ describe('reduceFrontendTrace, étapes en échec', () => {
     );
   });
 });
+
+describe('renderFrontendTrace — panneau de l’espace de travail', () => {
+  it('section qui tient dans le panneau : en-tête compact, légende repliée, étapes et chaîne côte à côte', () => {
+    const html = renderFrontendTrace(context(), emptyFrontendTraceUi());
+    expect(html).toMatch(
+      /^<section class="ws-frontend-trace ws-frontend-trace-pane" aria-label="Traçabilité frontend">/,
+    );
+    const head = html.slice(
+      html.indexOf('<div class="ws-frontend-trace-head">'),
+      html.indexOf('<div class="ws-frontend-trace-body-grid">'),
+    );
+    expect(head).toContain('<h3>Traçabilité frontend</h3>');
+    expect(head).toContain(
+      '<details class="ws-frontend-trace-legend" data-ws-details="frontend-trace-legend"><summary>Légende et aide</summary>',
+    );
+    // Rien n'est retiré : l'introduction, la légende et la note statique sont dans le volet.
+    expect(head).toContain('Pour chaque étape de la reproduction');
+    expect(head).toContain('class="ws-legend"');
+    expect(head).toContain('ce n’est pas une trace d’exécution');
+    expect(html).not.toMatch(/<details[^>]* open/);
+    const grid = html.slice(html.indexOf('<div class="ws-frontend-trace-body-grid">'));
+    expect(grid.indexOf('<nav class="ws-frontend-trace-steps"')).toBeLessThan(
+      grid.indexOf('<div class="ws-frontend-trace-detail">'),
+    );
+    // Le statut reste écrit sur chaque carte, légende repliée ou non.
+    expect(grid).toContain('déduit, non observable sans instrumentation');
+    expect(grid).toContain('ws-rel ws-rel-observed');
+  });
+
+  it('limites repliées avec leur nombre, à la fin du panneau', () => {
+    const html = renderFrontendTrace(context(), emptyFrontendTraceUi());
+    expect(html).toContain(
+      '<details class="note warn ws-frontend-trace-limits" data-ws-details="frontend-trace-limits"><summary><b>Ce que la traçabilité ne peut pas établir</b> <span class="ws-frontend-trace-count">(1)</span></summary>',
+    );
+    expect(html.trimEnd().endsWith('</details></section>')).toBe(true);
+    expect(renderFrontendTrace(context({ lang: 'en' }), emptyFrontendTraceUi())).toContain('Legend and help');
+    for (const html of [
+      renderFrontendTrace(context(), emptyFrontendTraceUi()),
+      renderFrontendTrace(context({ withTrace: false }), emptyFrontendTraceUi()),
+    ])
+      expect(html.replace(/data-[a-z-]+="[^"]*"/g, '')).not.toMatch(FORBIDDEN);
+  });
+
+  it('CSS : hauteur du panneau, chaque colonne défile seule, empilement quand le panneau est étroit', () => {
+    const css = INCIDENT_FRONTEND_TRACE_CSS;
+    expect(css).toContain('.ws-frontend-trace-pane{height:100%;min-height:0;container-type:inline-size}');
+    expect(css).toContain('.ws-frontend-trace-pane>.ws-frontend-trace-body-grid{flex:1 1 auto}');
+    expect(css).toMatch(
+      /\.ws-frontend-trace-body-grid\{display:flex;gap:12px;align-items:stretch;min-height:0\}/,
+    );
+    expect(css).toMatch(/\.ws-frontend-trace-steps\{[^}]*min-height:0;overflow:auto/);
+    expect(css).toMatch(/\.ws-frontend-trace-detail\{flex:1 1 auto;min-width:0;min-height:0;overflow:auto/);
+    expect(css).toMatch(/\.ws-frontend-trace-steps-h\{[^}]*position:sticky;top:0/);
+    expect(css).toMatch(
+      /@container \(max-width:640px\)\{\.ws-frontend-trace-body-grid\{flex-direction:column\}/,
+    );
+    expect(css).toMatch(
+      /\.ws-frontend-trace-legend summary:focus-visible,\.ws-frontend-trace-limits summary:focus-visible\{outline:2px solid/,
+    );
+    expect(css).toContain(
+      '.ws-frontend-trace-legend[open]>summary::before,.ws-frontend-trace-limits[open]>summary::before{transform:rotate(90deg)}',
+    );
+    expect(css).toContain('prefers-reduced-motion');
+  });
+});

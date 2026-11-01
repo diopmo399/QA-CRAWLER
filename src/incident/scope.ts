@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  MAX_MEMORY_MB,
+  MIN_MEMORY_MB,
   SCOPE_EXTENSION_KINDS,
   SCOPE_MODES,
   type CodeLayer,
@@ -30,6 +32,7 @@ export const DEFAULT_PERMISSIONS: Readonly<ScopePermissions> = Object.freeze({
   readLogs: false,
   openshift: 'NONE',
   sideEffects: false,
+  readGitHistory: false,
 });
 
 export const DEFAULT_LIMITS: Readonly<ResourceLimits> = Object.freeze({
@@ -41,13 +44,17 @@ export const DEFAULT_LIMITS: Readonly<ResourceLimits> = Object.freeze({
 });
 
 /** Plafonds : un périmètre ne peut pas demander davantage, même approuvé. */
-export const LIMIT_CAPS: Readonly<ResourceLimits> = Object.freeze({
+export const LIMIT_CAPS: Readonly<Required<ResourceLimits>> = Object.freeze({
   maxFiles: 100_000,
   maxFileBytes: 10 * 1024 * 1024,
   maxDurationMs: 2 * 60 * 60 * 1000,
   maxRequests: 10_000,
   maxExperiments: 500,
+  maxMemoryMb: MAX_MEMORY_MB,
 });
+
+/** Les limites toujours présentes (la mémoire est facultative : sans elle, aucune limite n'est écrite). */
+type RequiredLimit = Exclude<keyof ResourceLimits, 'maxMemoryMb'>;
 
 export const MIN_DEPTH = 1;
 export const MAX_DEPTH = 5;
@@ -286,13 +293,23 @@ export async function validateScope(
       issue(`allowedCommands[${index}]`, `Commande invalide « ${command} » (nom d'exécutable attendu).`);
     }
   }
-  for (const key of Object.keys(DEFAULT_LIMITS) as (keyof ResourceLimits)[]) {
+  for (const key of Object.keys(DEFAULT_LIMITS) as RequiredLimit[]) {
     const value = scope.limits[key];
     if (!positiveInteger(value)) {
       issue(`limits.${key}`, `La limite doit être un entier positif.`);
     } else if (value > LIMIT_CAPS[key]) {
       issue(`limits.${key}`, `La limite dépasse le plafond (${LIMIT_CAPS[key]}).`);
     }
+  }
+  const memory = scope.limits.maxMemoryMb;
+  if (
+    memory !== undefined &&
+    (!positiveInteger(memory) || memory < MIN_MEMORY_MB || memory > LIMIT_CAPS.maxMemoryMb)
+  ) {
+    issue(
+      'limits.maxMemoryMb',
+      `La mémoire maximale doit être un entier entre ${MIN_MEMORY_MB} et ${LIMIT_CAPS.maxMemoryMb} Mio.`,
+    );
   }
   const extensionIds = new Set<string>();
   for (const [index, extension] of scope.extensions.entries()) {

@@ -5,7 +5,10 @@ import { z } from 'zod';
 import { writeFileAtomic } from '../memory/atomic-write.js';
 import {
   EXECUTION_TARGETS,
+  INCIDENT_KINDS,
   INCIDENT_SEVERITIES,
+  MAX_INCIDENT_APPLICATION,
+  MIN_MEMORY_MB,
   INCIDENT_STATES,
   SCOPE_MODES,
   type Incident,
@@ -135,6 +138,7 @@ const scopeSchema = z.object({
       runTests: z.enum(['NONE', 'UNIT', 'INTEGRATION']),
       localCommands: z.boolean(),
       readLogs: z.boolean(),
+      readGitHistory: z.boolean().optional(),
       openshift: z.enum(['NONE', 'READ']),
       sideEffects: z.boolean(),
     })
@@ -147,6 +151,8 @@ const scopeSchema = z.object({
       maxDurationMs: limit(LIMIT_CAPS.maxDurationMs),
       maxRequests: limit(LIMIT_CAPS.maxRequests),
       maxExperiments: limit(LIMIT_CAPS.maxExperiments),
+      // null retire la limite de mémoire (aucune limite écrite dans le Job).
+      maxMemoryMb: z.number().int().min(MIN_MEMORY_MB).max(LIMIT_CAPS.maxMemoryMb).nullable(),
     })
     .partial()
     .optional(),
@@ -185,6 +191,8 @@ const inputSchema = z.object({
   observed: text(5000),
   expected: z.string().max(5000),
   severity: z.enum(INCIDENT_SEVERITIES),
+  application: text(MAX_INCIDENT_APPLICATION).optional(),
+  kind: z.enum(INCIDENT_KINDS).optional(),
   scenario: text(300).optional(),
   environmentId: text(200).optional(),
   execution: executionSchema.optional(),
@@ -219,9 +227,15 @@ function mergeScope(current: InvestigationScope, patch: Partial<InvestigationSco
     ...current,
     ...patch,
     permissions: { ...current.permissions, ...patch.permissions },
-    limits: { ...current.limits, ...patch.limits },
+    limits: withoutNullMemory({ ...current.limits, ...patch.limits }),
     extensions: current.extensions,
   };
+}
+
+/** `maxMemoryMb: null` (saisie) : la limite de mémoire est retirée. */
+function withoutNullMemory(limits: InvestigationScope['limits']): InvestigationScope['limits'] {
+  if ((limits as { maxMemoryMb?: number | null }).maxMemoryMb === null) delete limits.maxMemoryMb;
+  return limits;
 }
 
 /** Prêt pour la reproduction : au moins une application et un scénario. */
@@ -264,8 +278,11 @@ function summaryOf(incident: Incident): IncidentSummary {
     title: incident.title,
     severity: incident.severity,
     state: incident.state,
+    ...(incident.application !== undefined ? { application: incident.application } : {}),
+    ...(incident.kind !== undefined ? { kind: incident.kind } : {}),
     ...(incident.scenario !== undefined ? { scenario: incident.scenario } : {}),
     target: incident.execution.target,
+    createdAt: incident.createdAt,
     updatedAt: incident.updatedAt,
     ...(incident.investigation.diagnosis ? { diagnosis: incident.investigation.diagnosis.status } : {}),
   };
@@ -335,6 +352,7 @@ export class IncidentStore {
     const parsed = parse(inputSchema, input);
     const at = this.now().toISOString();
     const scope = defaultScope(scopePatch(parsed.scope));
+    withoutNullMemory(scope.limits);
     if (parsed.scenario !== undefined && !scope.scenarios.includes(parsed.scenario)) {
       scope.scenarios.unshift(parsed.scenario);
     }
@@ -349,6 +367,8 @@ export class IncidentStore {
       observed: parsed.observed,
       expected: parsed.expected,
       severity: parsed.severity,
+      ...(parsed.application !== undefined ? { application: parsed.application } : {}),
+      ...(parsed.kind !== undefined ? { kind: parsed.kind } : {}),
       ...(parsed.scenario !== undefined ? { scenario: parsed.scenario } : {}),
       ...(parsed.environmentId !== undefined ? { environmentId: parsed.environmentId } : {}),
       execution: parsed.execution ?? { target: 'LOCAL' },
@@ -394,6 +414,8 @@ export class IncidentStore {
         'observed',
         'expected',
         'severity',
+        'application',
+        'kind',
         'scenario',
         'environmentId',
       ] as const) {

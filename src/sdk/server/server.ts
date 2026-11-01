@@ -123,7 +123,9 @@ import {
   SDK_API_VERSION,
 } from '../core/contracts.js';
 import { isTerminal } from '../core/lifecycle.js';
-import { ExplorationManager, stepReason, type MissionRunner } from './explorations.js';
+import { ExplorationManager, stepLabel, stepReason, type MissionRunner } from './explorations.js';
+import type { ExplorationListener } from '../../explorer/flow-explorer.js';
+import { combineListeners } from '../../logging/engine-log.js';
 import {
   externalRunners,
   listTestRuns,
@@ -200,6 +202,10 @@ import {
 import { AccessError, AccessStore, actionOf, can, rightFor, roleIn, type Identity } from './access.js';
 import { handleIncidentRoutes } from './incidents.js';
 import { IncidentService, type HostReplay, type IncidentHost } from '../../incident/service.js';
+import type { IncidentAiRuntime } from '../../incident/ai/index.js';
+import type { AiConfig } from '../../config/config.js';
+import { MAX_ATTACHMENT_BYTES } from '../../incident/model.js';
+import type { ReplayProgressEvent } from '../../incident/live.js';
 import type { ExplorationResult } from '../../model/exploration-result.js';
 import { dashboardPage, flowStudioHtml, runComparePage, runMonitorPage, sdkStandalonePage } from './page.js';
 import {
@@ -274,6 +280,13 @@ export interface SdkServerOptions {
    */
   closeGraceMs?: number;
   onWarning?: (message: string) => void;
+  /**
+   * La section `ai` d'une configuration QA-Crawler : l'investigation IA des incidents s'assemble d'après
+   * `ai.incidents` (mode DETERMINISTIC par défaut : rien n'est chargé, aucun fournisseur n'est créé).
+   */
+  ai?: AiConfig;
+  /** Un runtime IA déjà assemblé (tests : client scripté) ; il prime sur `ai`. */
+  aiRuntime?: IncidentAiRuntime;
 }
 
 export interface RunningSdkServer {
@@ -289,6 +302,8 @@ export interface RunningSdkServer {
 
 const JSON_TYPE = 'application/json; charset=utf-8';
 const MAX_BODY_BYTES = 256 * 1024;
+/** Une pièce jointe d'incident : MAX_ATTACHMENT_BYTES en base64 (4/3), plus le nom et l'enveloppe JSON. */
+const MAX_ATTACHMENT_BODY_BYTES = Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4 + 64 * 1024;
 const ID_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
 
 class HttpError extends Error {
@@ -324,8 +339,17 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
   const workspace = path.resolve(options.workspace);
   const projects = new Map<string, StoredProject>();
   const tickets = new Map<string, ReportTicket>();
+  // Les rejeux d'une investigation écoutent aussi le moteur (progression en direct), par dossier de run.
+  const replayWatchers = new Map<string, ExplorationListener>();
+  const baseRun: MissionRunner = options.run ?? runMission;
   const explorations = new ExplorationManager({
-    run: options.run ?? runMission,
+    run: (config, runOptions) => {
+      const watcher = replayWatchers.get(path.resolve(config.output.reportsDir));
+      return baseRun(
+        config,
+        watcher ? { ...runOptions, listener: combineListeners(runOptions.listener, watcher) } : runOptions,
+      );
+    },
     env,
     ...(options.concurrency ? { concurrency: options.concurrency } : {}),
     ...(options.onWarning ? { onWarning: options.onWarning } : {}),
@@ -338,6 +362,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
   const testRuns = new TestRunManager();
   const engineVersion = await readCoreVersion();
   const sseClients = new Set<ServerResponse>();
+  const ai = await incidentAiRuntime(options, env);
 
   const context: Context = {
     token,
@@ -360,6 +385,8 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     access: new AccessStore(workspace),
     mode: options.access ?? 'single',
     incidents: new Map(),
+    ...(ai ? { ai } : {}),
+    replayWatchers,
   };
 
   const server = createServer((request, response) => {
@@ -396,6 +423,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
       }
       // Les investigations enregistrent la fin de leurs rejeux (annulés ci-dessus) avant l'arrêt.
       await Promise.allSettled([...context.incidents.values()].map((service) => service.settle()));
+      await ai?.close().catch(() => undefined);
       await new Promise<void>((resolve, reject) => {
         for (const client of sseClients) client.end();
         server.close((error) => {
@@ -433,6 +461,10 @@ interface Context {
   mode: 'single' | 'named';
   /** Les investigations d'incidents, une par projet. */
   incidents: Map<string, IncidentService>;
+  /** L'investigation IA, quand elle est configurée (sinon le module n'est pas chargé). */
+  ai?: IncidentAiRuntime;
+  /** Les écouteurs du moteur ajoutés à un rejeu (dossier du run → écouteur), retirés à sa fin. */
+  replayWatchers: Map<string, ExplorationListener>;
 }
 
 async function handle(ctx: Context, request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -483,7 +515,7 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
   if (method === 'OPTIONS') {
     if (!origin) throw new HttpError(403, 'ORIGIN_REFUSED', 'origin not allowed');
     response.writeHead(204, {
-      'access-control-allow-methods': 'GET, POST, OPTIONS',
+      'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
       'access-control-allow-headers': 'authorization, content-type, x-qa-crawler-sdk, last-event-id',
       'access-control-max-age': '600',
     });
@@ -772,7 +804,10 @@ async function environmentOf(project: StoredProject, raw: unknown): Promise<Envi
 }
 
 /** Un corps JSON facultatif : vide (ou sans type) vaut `{}`, comme avant l'ajout des options. */
-async function readOptionalJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readOptionalJson(
+  request: IncomingMessage,
+  maxBytes = MAX_BODY_BYTES,
+): Promise<Record<string, unknown>> {
   const length = Number(request.headers['content-length'] ?? '0');
   const type = request.headers['content-type'] ?? '';
   if (
@@ -780,7 +815,7 @@ async function readOptionalJson(request: IncomingMessage): Promise<Record<string
     (length === 0 && !request.headers['transfer-encoding'])
   )
     return {};
-  return readJson(request);
+  return readJson(request, maxBytes);
 }
 
 function reportLink(ctx: Context, request: IncomingMessage, directory: string, entry: string): ReportLink {
@@ -3176,7 +3211,14 @@ async function handlePlatform(
       method,
       url,
       actor: identity.name,
-      body: () => readOptionalJson(request),
+      // Seul l'envoi d'une pièce jointe dépasse la taille ordinaire d'un corps JSON.
+      body: () =>
+        readOptionalJson(
+          request,
+          method === 'POST' && incidentAction === 'attachments' && incidentPart === undefined
+            ? MAX_ATTACHMENT_BODY_BYTES
+            : MAX_BODY_BYTES,
+        ),
       json,
       canWrite: can(identity, 'RUN_WRITES', project.id),
       fail: (status, code, text) => new HttpError(status, code, text),
@@ -3265,6 +3307,8 @@ async function launchReplay(
     environment?: Environment;
     visible?: VisibleBrowser;
     configure?: (config: Awaited<ReturnType<typeof projectMission>>['config']) => void;
+    /** Un écouteur du moteur en plus (progression d'une investigation), retiré à la fin du run. */
+    watch?: (runDir: string) => ExplorationListener;
   },
 ): Promise<{ execution: ReturnType<ExplorationManager['start']>; runDir: string }> {
   const flowsDir = await flowsDirOf(project.dir);
@@ -3292,14 +3336,88 @@ async function launchReplay(
       : {}),
     scenarios: options.names,
   });
-  const execution = ctx.explorations.start({
-    projectId: project.id,
-    config: withVisibleBrowser(loaded.config, options.visible),
-    reportsDir: runDir,
-    kind: 'REPLAY',
-    env: missionEnv(ctx, options.environment),
-  });
+  const watchKey = path.resolve(runDir);
+  if (options.watch) ctx.replayWatchers.set(watchKey, options.watch(runDir));
+  let execution: ReturnType<ExplorationManager['start']>;
+  try {
+    execution = ctx.explorations.start({
+      projectId: project.id,
+      config: withVisibleBrowser(loaded.config, options.visible),
+      reportsDir: runDir,
+      kind: 'REPLAY',
+      env: missionEnv(ctx, options.environment),
+    });
+  } catch (error) {
+    ctx.replayWatchers.delete(watchKey);
+    throw error;
+  }
+  if (options.watch) {
+    const release = (): void => {
+      ctx.replayWatchers.delete(watchKey);
+    };
+    if (execution.terminal) release();
+    else {
+      const unsubscribe = execution.subscribe((event) => {
+        if (event.type === 'status' && isTerminal(event.status)) {
+          unsubscribe();
+          release();
+        }
+      });
+    }
+  }
   return { execution, runDir };
+}
+
+/**
+ * La progression d'un rejeu d'investigation, relayée depuis le moteur : début de flow (nombre d'étapes),
+ * début et fin d'étape (descriptions sans valeur saisie, captures relatives au run). Une erreur du relais
+ * n'atteint jamais le moteur.
+ */
+function progressListener(
+  runDir: string,
+  onProgress: (event: ReplayProgressEvent) => void,
+): ExplorationListener {
+  const send = (event: ReplayProgressEvent): void => {
+    try {
+      onProgress(event);
+    } catch {
+      // la progression est un confort : le rejeu continue
+    }
+  };
+  const now = (): string => new Date().toISOString();
+  return {
+    onFlowStart: (flow) => {
+      send({ type: 'flow-start', at: now(), flow: redactText(flow.name), total: flow.steps.length });
+    },
+    onFlowStepStart: (_flow, step) => {
+      send({
+        type: 'step-start',
+        at: now(),
+        index: step.index,
+        kind: step.kind,
+        description: stepLabel({ kind: step.kind, description: step.description }),
+      });
+    },
+    onFlowStep: (_flow, step) => {
+      const relative = step.screenshot ? path.relative(runDir, path.resolve(step.screenshot)) : '';
+      const screenshot =
+        relative && !relative.startsWith('..') && !path.isAbsolute(relative)
+          ? relative.split(path.sep).join('/')
+          : undefined;
+      const reason = stepReason(step);
+      send({
+        type: 'step-end',
+        at: now(),
+        index: step.index,
+        kind: step.kind,
+        description: stepLabel(step),
+        status: step.status,
+        durationMs: step.durationMs,
+        ...(reason ? { reason } : {}),
+        ...(screenshot ? { screenshot } : {}),
+      });
+    },
+  };
 }
 
 /** L'investigation d'un projet : son service, et l'hôte qui lui prête le moteur, la bibliothèque et les environnements. */
@@ -3320,6 +3438,18 @@ function incidentService(ctx: Context, project: StoredProject): IncidentService 
       return environment
         ? { id: environment.id, baseUrl: environment.baseUrl, kind: environment.kind }
         : { baseUrl: project.targetUrl };
+    },
+    listScenarios: async () => {
+      const root = await flowsDirOf(project.dir);
+      const out: { name: string; file: string; text?: string }[] = [];
+      for (const scenario of (await listScenarios(project.dir)).slice(0, 200)) {
+        const text =
+          scenario.format === 'yaml'
+            ? await readFile(path.join(root, scenario.file), 'utf8').catch(() => undefined)
+            : undefined;
+        out.push({ name: scenario.name, file: scenario.file, ...(text !== undefined ? { text } : {}) });
+      }
+      return out;
     },
     scenarioYaml: async (name) => {
       const scenario = (await listScenarios(project.dir)).find(
@@ -3359,6 +3489,7 @@ function incidentService(ctx: Context, project: StoredProject): IncidentService 
         ...(input.slowMoMs !== undefined ? { slowMoMs: input.slowMoMs } : {}),
       });
       const flowName = typeof input.flow?.name === 'string' ? input.flow.name : 'flow';
+      const onProgress = input.onProgress;
       const { execution, runDir } = await launchReplay(ctx, project, {
         ...(scenario ? { scenarios: [scenario] } : {}),
         ...(input.flow ? { flows: [input.flow] } : {}),
@@ -3370,6 +3501,7 @@ function incidentService(ctx: Context, project: StoredProject): IncidentService 
           Object.assign(config.network, { captureBodies: true });
           Object.assign(config.browser, { playwrightTrace: true });
         },
+        ...(onProgress ? { watch: (runDir: string) => progressListener(runDir, onProgress) } : {}),
       });
       const done = new Promise<Awaited<HostReplay['done']>>((resolve) => {
         const finish = (): void => {
@@ -3411,9 +3543,32 @@ function incidentService(ctx: Context, project: StoredProject): IncidentService 
       };
     },
   };
-  const service = new IncidentService(host, { env: ctx.env });
+  const service = new IncidentService(host, { env: ctx.env, ...(ctx.ai ? { ai: ctx.ai } : {}) });
   ctx.incidents.set(project.id, service);
   return service;
+}
+
+/**
+ * Le runtime IA des incidents : un runtime fourni (tests) ; sinon, assemblé d'après `ai.incidents` seulement quand le
+ * mode configuré n'est pas DETERMINISTIC — le module src/incident/ai n'est pas chargé autrement, et aucun
+ * fournisseur n'est créé.
+ */
+async function incidentAiRuntime(
+  options: SdkServerOptions,
+  env: NodeJS.ProcessEnv,
+): Promise<IncidentAiRuntime | undefined> {
+  if (options.aiRuntime) return options.aiRuntime;
+  const configured = options.ai;
+  if (!configured?.enabled || configured.incidents.mode === 'DETERMINISTIC') return undefined;
+  try {
+    const module = await import('../../incident/ai/index.js');
+    return module.createIncidentAiRuntime(configured, env);
+  } catch (error) {
+    options.onWarning?.(
+      `AI investigation unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
 }
 
 function publicProject(project: StoredProject): Project {
@@ -4057,7 +4212,10 @@ async function handleRequirements(
   throw new HttpError(404, 'NOT_FOUND', 'not found');
 }
 
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(
+  request: IncomingMessage,
+  maxBytes = MAX_BODY_BYTES,
+): Promise<Record<string, unknown>> {
   const type = request.headers['content-type'] ?? '';
   if (!type.toLowerCase().startsWith('application/json'))
     throw new HttpError(415, 'UNSUPPORTED_MEDIA_TYPE', 'expected application/json');
@@ -4065,7 +4223,7 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   let size = 0;
   for await (const chunk of request) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'TOO_LARGE', 'request body too large');
+    if (size > maxBytes) throw new HttpError(413, 'TOO_LARGE', 'request body too large');
     chunks.push(chunk as Buffer);
   }
   try {

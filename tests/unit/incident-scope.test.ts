@@ -80,6 +80,7 @@ describe('defaultScope', () => {
       readLogs: false,
       openshift: 'NONE',
       sideEffects: false,
+      readGitHistory: false,
     });
     expect(scope.limits).toEqual({
       maxFiles: 2000,
@@ -164,6 +165,21 @@ describe('validateScope', () => {
     expect(issues.find((issue) => issue.field === 'applications[1].repository.include[2]')?.message).toMatch(
       /hors de la racine/,
     );
+  });
+
+  it('validates the optional memory limit (64..16384 MiB) and ignores it when absent', async () => {
+    const scope = validScope();
+    expect((await validateScope(scope)).ok).toBe(true);
+    for (const value of [512, 64, 16_384]) {
+      scope.limits.maxMemoryMb = value;
+      expect((await validateScope(scope)).issues).toEqual([]);
+    }
+    for (const value of [0, 63, 16_385, 1.5, Number.NaN]) {
+      scope.limits.maxMemoryMb = value;
+      const { issues } = await validateScope(scope);
+      expect(issues.map((issue) => issue.field)).toEqual(['limits.maxMemoryMb']);
+      expect(issues[0]?.message).toMatch(/64 et 16384 Mio/);
+    }
   });
 
   it('refuses a root that does not exist and duplicate extension ids', async () => {

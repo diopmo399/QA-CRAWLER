@@ -10,10 +10,14 @@ import type {
   PolicyDecision,
   ProposedVerification,
   RegressionTestProposal,
+  RelationStatus,
+  ReportFormat,
+  ReportSection,
   SourceLocation,
 } from '../core/incident-contracts.js';
-import { EXPERIMENT_KINDS } from '../core/incident-contracts.js';
+import { EXPERIMENT_KINDS, REPORT_FORMATS, REPORT_SECTIONS } from '../core/incident-contracts.js';
 import { formatDate, icon } from './dashboard-parts.js';
+import { displayStatus } from './incident-graph.js';
 import { fileId, type SelectionKind } from './incident-links.js';
 import {
   demoBanner,
@@ -26,6 +30,7 @@ import {
   type Lang,
   type WorkspaceContext,
 } from './incident-parts.js';
+import { originPill } from './incident-ai.js';
 import { esc } from './view.js';
 
 /**
@@ -76,7 +81,19 @@ export interface DiagnosisUi {
   errors: Record<string, string>;
   /** L'opération en cours (`diagnosisBusyKey(action, ref)`) : une à la fois, les autres boutons attendent. */
   busy?: string;
+  /** Les vérifications cochées dans « Vérifications proposées » (ids d'expériences). */
+  checked: string[];
+  /** « Pourquoi cette hypothèse ? » déplié. */
+  why: boolean;
+  /** Les sections du rapport retenues : elles pilotent l'aperçu ET l'export (ordre de REPORT_SECTIONS). */
+  sections: ReportSection[];
+  /** « Voir le test complet » : le code du test de non-régression en entier. */
+  regFull: boolean;
+  /** Le code affiché du test généré : le flow YAML ou le test Playwright. */
+  regTab: RegressionTab;
 }
+
+export type RegressionTab = 'flow' | 'spec';
 
 export const emptyPlanDraft = (): PlanDraft => ({
   kind: 'REPLAY',
@@ -85,7 +102,18 @@ export const emptyPlanDraft = (): PlanDraft => ({
 });
 
 export function emptyDiagnosisUi(): DiagnosisUi {
-  return { expanded: [], sort: 'confidence', plan: emptyPlanDraft(), planProblems: [], errors: {} };
+  return {
+    expanded: [],
+    sort: 'confidence',
+    plan: emptyPlanDraft(),
+    planProblems: [],
+    errors: {},
+    checked: [],
+    why: false,
+    sections: [...REPORT_SECTIONS],
+    regFull: false,
+    regTab: 'flow',
+  };
 }
 
 /** La clé d'une opération en cours, pour `DiagnosisUi.busy`. */
@@ -97,6 +125,7 @@ export const DIAGNOSIS_OPERATIONS = [
   'ws-dx-plan',
   'ws-dx-plan-submit',
   'ws-dx-run',
+  'ws-dx-run-selected',
   'ws-dx-approve',
   'ws-dx-diagnose',
   'ws-dx-report',
@@ -800,7 +829,10 @@ const indexOf = (value: string | undefined): number | undefined => {
  * `dx.param.key` / `dx.param.value`, data-index, data-value), `ws-dx-plan-param-add`,
  * `ws-dx-plan-param-remove` (data-index), `ws-dx-plan-reset`, `ws-dx-dismiss` (data-key), et
  * `ws-dx-plan-submit` seulement quand le brouillon a des problèmes (sinon `undefined` : l'intégration
- * envoie `planInputOf(ui.plan)`). Toute autre action : `undefined`.
+ * envoie `planInputOf(ui.plan)`). Écrans de la maquette : `ws-dx-check` (data-experiment, data-checked
+ * `true|false` facultatif, sinon bascule), `ws-dx-why`, `ws-dx-section` (data-section, data-checked
+ * facultatif), `ws-dx-sections` (data-value `all|none`), `ws-dx-reg-full`, `ws-dx-reg-tab`
+ * (data-tab `flow|spec`). Toute autre action : `undefined`.
  */
 export function reduceDiagnosis(
   ui: DiagnosisUi,
@@ -873,6 +905,35 @@ export function reduceDiagnosis(
     case 'ws-dx-plan-submit': {
       const result = planInputOf(ui.plan);
       return result.ok ? undefined : { ...ui, planProblems: result.problems };
+    }
+    case 'ws-dx-check': {
+      const id = dataset.experiment;
+      if (!id) return undefined;
+      const on = dataset.checked === undefined ? !ui.checked.includes(id) : dataset.checked === 'true';
+      const rest = ui.checked.filter((entry) => entry !== id);
+      return { ...ui, checked: on ? [...rest, id] : rest };
+    }
+    case 'ws-dx-why':
+      return { ...ui, why: !ui.why };
+    case 'ws-dx-section': {
+      const section = REPORT_SECTIONS.find((entry) => entry === dataset.section);
+      if (!section) return undefined;
+      const on = dataset.checked === undefined ? !ui.sections.includes(section) : dataset.checked === 'true';
+      return {
+        ...ui,
+        sections: REPORT_SECTIONS.filter((entry) => (entry === section ? on : ui.sections.includes(entry))),
+      };
+    }
+    case 'ws-dx-sections':
+      if (dataset.value === 'all') return { ...ui, sections: [...REPORT_SECTIONS] };
+      if (dataset.value === 'none') return { ...ui, sections: [] };
+      return undefined;
+    case 'ws-dx-reg-full':
+      return { ...ui, regFull: !ui.regFull };
+    case 'ws-dx-reg-tab': {
+      const tab = dataset.tab;
+      if (tab !== 'flow' && tab !== 'spec') return undefined;
+      return { ...ui, regTab: tab };
     }
     case 'ws-dx-dismiss': {
       const key = dataset.key;
@@ -968,11 +1029,11 @@ const reasonNote = (id: string, reason: string | undefined): string =>
   reason ? `<small class="mu ws-dx-why" id="${esc(id)}">${esc(reason)}</small>` : '';
 
 /** La barre de confiance : `role="meter"`, valeur et libellé accessibles, pourcentage visible. */
-function confidenceBar(ctx: WorkspaceContext, value: number): string {
+function confidenceBar(ctx: WorkspaceContext, value: number, showPercent = true): string {
   const percent = percentOf(value);
   const label = confidenceLabel(value, ctx.lang);
   const level = clampUnit(value) < 0.34 ? 'low' : clampUnit(value) < 0.67 ? 'mid' : 'high';
-  return `<span class="ws-dx-conf"><span class="ws-dx-meter ws-dx-${level}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${String(percent)}" aria-valuetext="${esc(label)}" aria-label="${esc(label)}"><span class="ws-dx-fill" style="width:${String(percent)}%"></span></span><b aria-hidden="true">${String(percent)} %</b></span>`;
+  return `<span class="ws-dx-conf"><span class="ws-dx-meter ws-dx-${level}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${String(percent)}" aria-valuetext="${esc(label)}" aria-label="${esc(label)}"><span class="ws-dx-fill" style="width:${String(percent)}%"></span></span>${showPercent ? `<b aria-hidden="true">${String(percent)} %</b>` : ''}</span>`;
 }
 
 // ── Références (preuves, requêtes, symboles, vérifications) ──────────────────────────────────
@@ -1133,7 +1194,7 @@ function hypothesisCard(
   const bodyId = domId('ws-dx-hb', hypothesis.id);
   const titleId = domId('ws-dx-ht', hypothesis.id);
   const layer = partsText(ctx.lang).layers[hypothesis.layer];
-  return `<li class="card ws-dx-hyp ${selectionClass(ctx, 'hypothesis', hypothesis.id)}" data-hypothesis="${esc(hypothesis.id)}" aria-labelledby="${titleId}"><div class="ws-dx-head"><h3 id="${titleId}"><button type="button" class="lnk ws-dx-title" ${selectable(ctx, 'hypothesis', hypothesis.id)} aria-label="${esc(t.hyp.select(hypothesis.title))}">${esc(hypothesis.title)}</button></h3><span class="ws-dx-meta">${chip(hypothesis.status, t.hypothesisStatus[hypothesis.status])}<span class="ws-dx-layer"><small class="mu">${esc(t.layer)}</small> ${esc(layer)}</span>${confidenceBar(ctx, hypothesis.confidence)}</span></div><p class="ws-dx-cause"><b>${esc(t.hyp.cause)} :</b> ${esc(hypothesis.suspectedCause)}</p><button type="button" class="btn small ghost ws-dx-toggle" data-action="ws-dx-toggle" data-hypothesis="${esc(hypothesis.id)}" aria-expanded="${String(expanded)}" aria-controls="${bodyId}" aria-label="${esc(expanded ? t.hyp.collapse(hypothesis.title) : t.hyp.expand(hypothesis.title))}">${icon(expanded ? 'up' : 'down')}<span>${esc(expanded ? t.hyp.hide : t.hyp.details)}</span></button><div id="${bodyId}"${expanded ? '' : ' hidden'}>${expanded ? hypothesisBody(ctx, ui, index, hypothesis, 'ws-dx-h') : ''}</div></li>`;
+  return `<li class="card ws-dx-hyp ${selectionClass(ctx, 'hypothesis', hypothesis.id)}" data-hypothesis="${esc(hypothesis.id)}" aria-labelledby="${titleId}"><div class="ws-dx-head"><h3 id="${titleId}"><button type="button" class="lnk ws-dx-title" ${selectable(ctx, 'hypothesis', hypothesis.id)} aria-label="${esc(t.hyp.select(hypothesis.title))}">${esc(hypothesis.title)}</button></h3><span class="ws-dx-meta">${originPill(hypothesis, ctx.lang)}${chip(hypothesis.status, t.hypothesisStatus[hypothesis.status])}<span class="ws-dx-layer"><small class="mu">${esc(t.layer)}</small> ${esc(layer)}</span>${confidenceBar(ctx, hypothesis.confidence)}</span></div><p class="ws-dx-cause"><b>${esc(t.hyp.cause)} :</b> ${esc(hypothesis.suspectedCause)}</p><button type="button" class="btn small ghost ws-dx-toggle" data-action="ws-dx-toggle" data-hypothesis="${esc(hypothesis.id)}" aria-expanded="${String(expanded)}" aria-controls="${bodyId}" aria-label="${esc(expanded ? t.hyp.collapse(hypothesis.title) : t.hyp.expand(hypothesis.title))}">${icon(expanded ? 'up' : 'down')}<span>${esc(expanded ? t.hyp.hide : t.hyp.details)}</span></button><div id="${bodyId}"${expanded ? '' : ' hidden'}>${expanded ? hypothesisBody(ctx, ui, index, hypothesis, 'ws-dx-h') : ''}</div></li>`;
 }
 
 function ruleNote(ctx: WorkspaceContext): string {
@@ -1448,7 +1509,12 @@ export interface ReportViewState {
   loading?: boolean;
   error?: string;
   /** L'export en cours. */
-  exporting?: 'json' | 'markdown';
+  exporting?: ReportFormat;
+  /**
+   * L'export PDF est indisponible (le serveur a répondu 501 `PDF_UNAVAILABLE` : aucun navigateur sans
+   * interface sur le serveur) : la raison à afficher. Le bouton PDF est alors désactivé avec elle.
+   */
+  pdfUnavailable?: string;
 }
 
 function exportButtons(ctx: WorkspaceContext, state: ReportViewState): string {
@@ -1593,7 +1659,7 @@ export function renderHypothesisDetail(
           )
           .join('')}</ul>`;
   const titleId = domId('ws-dx-pt', hypothesis.id);
-  return `<article class="ws-dx-detail" aria-labelledby="${titleId}"><h3 id="${titleId}">${esc(hypothesis.title)}</h3><p class="ws-dx-meta">${chip(hypothesis.status, t.hypothesisStatus[hypothesis.status])}<span class="ws-dx-layer"><small class="mu">${esc(t.layer)}</small> ${esc(partsText(ctx.lang).layers[hypothesis.layer])}</span>${confidenceBar(ctx, hypothesis.confidence)}</p><p class="ws-dx-cause"><b>${esc(t.hyp.cause)} :</b> ${esc(hypothesis.suspectedCause)}</p>${hypothesisBody(ctx, ui, index, hypothesis, 'ws-dx-p')}<h4>${esc(t.hyp.experiments)}</h4>${linked}</article>`;
+  return `<article class="ws-dx-detail" aria-labelledby="${titleId}"><h3 id="${titleId}">${esc(hypothesis.title)}</h3><p class="ws-dx-meta">${originPill(hypothesis, ctx.lang)}${chip(hypothesis.status, t.hypothesisStatus[hypothesis.status])}<span class="ws-dx-layer"><small class="mu">${esc(t.layer)}</small> ${esc(partsText(ctx.lang).layers[hypothesis.layer])}</span>${confidenceBar(ctx, hypothesis.confidence)}</p><p class="ws-dx-cause"><b>${esc(t.hyp.cause)} :</b> ${esc(hypothesis.suspectedCause)}</p>${hypothesisBody(ctx, ui, index, hypothesis, 'ws-dx-p')}<h4>${esc(t.hyp.experiments)}</h4>${linked}</article>`;
 }
 
 /** Le détail d'une vérification dans le panneau latéral. */
@@ -1616,6 +1682,839 @@ export function renderExperimentDetail(
           )
           .join('')}</ul>`;
   return `<article class="ws-dx-detail" aria-labelledby="${titleId}"><h3 id="${titleId}">${esc(t.experimentKinds[experiment.kind])}</h3><p class="ws-dx-meta">${experimentHeadChips(ctx, experiment)}</p>${experimentBody(ctx, ui, experiment, 'ws-dx-q')}${details}</article>`;
+}
+
+// ── Écrans de la maquette : textes ────────────────────────────────────────────────────────────
+
+const SCREEN_TEXT = {
+  fr: {
+    board: {
+      title: 'Diagnostic et hypothèses',
+      hypotheses: (n: number) => `Hypothèses (${String(n)})`,
+      none: 'Aucune hypothèse pour l’instant : l’analyse du code les propose.',
+      rank: (n: number) => `n° ${String(n)}`,
+      selectLabel: (rank: number, title: string, pct: number, status: string) =>
+        `Hypothèse ${String(rank)} : ${title}, confiance ${String(pct)} %, ${status}`,
+      cause: 'Cause',
+      rootConfirmed: 'Cause racine confirmée',
+      rootProbable: 'Cause racine probable',
+      rootInconclusive: 'Piste la plus avancée, non établie',
+      noRoot: 'Aucune cause établie',
+      leading: 'Hypothèse en tête, sans diagnostic',
+      leadingInconclusive: 'Hypothèse en tête, non établie',
+      selected: 'Hypothèse sélectionnée',
+      noDiagnosis:
+        'Pas encore de diagnostic : cette hypothèse est la mieux classée, elle n’est pas une cause établie.',
+      selectedNote: 'Ce n’est pas la cause retenue par le diagnostic.',
+      confidence: (pct: number) => `Confiance : ${String(pct)} %`,
+      noConfidence: 'Confiance : non disponible (hypothèse absente de l’investigation)',
+      why: 'Pourquoi cette hypothèse ?',
+      whyHide: 'Masquer les preuves',
+      checks: 'Vérifications proposées',
+      checksNone: 'Aucune vérification planifiée ni proposée.',
+      checkLabel: (description: string) => `Sélectionner la vérification « ${description} »`,
+      detail: 'Détail',
+      detailLabel: (kind: string) => `Voir le détail de la vérification « ${kind} »`,
+      sideEffectsReason:
+        'Effets de bord possibles : approbation explicite exigée, une vérification à la fois.',
+      notRunnable: 'Déjà traitée : rien à exécuter.',
+      noRight: 'Votre rôle ne permet pas d’exécuter des vérifications.',
+      pickOne: 'Cochez au moins une vérification sans effet de bord.',
+      run: (n: number) => (n > 1 ? `Exécuter les vérifications (${String(n)})` : 'Exécuter la vérification'),
+      runHint:
+        'Les vérifications cochées s’exécutent l’une après l’autre, dans le périmètre ; un refus est affiché avec sa règle.',
+      proposed: 'Proposée, à planifier',
+      diagnose: 'Établir le diagnostic',
+      rediagnose: 'Rediagnostiquer',
+    },
+    rx: {
+      title: 'Rapport d’investigation',
+      preview: 'Aperçu du rapport',
+      export: 'Exporter',
+      sections: 'Sections',
+      all: 'Toutes',
+      none: 'Aucune',
+      formats: { pdf: 'PDF', html: 'HTML', markdown: 'Markdown', json: 'JSON' } as Record<
+        ReportFormat,
+        string
+      >,
+      exportLabel: (format: string, n: number) =>
+        `Exporter le rapport en ${format} (${String(n)} section(s))`,
+      noSection: 'Cochez au moins une section à exporter.',
+      exportNote:
+        'Le fichier est produit par le serveur à partir de l’investigation enregistrée, avec les sections cochées.',
+      pdfUnavailable: 'Export PDF indisponible sur ce serveur.',
+      emptyPreview: 'Aucune section cochée : l’aperçu est vide.',
+      labels: {
+        summary: 'Résumé',
+        environment: 'Environnement',
+        timeline: 'Chronologie',
+        requests: 'Requêtes HTTP',
+        graph: 'Graphe de traçabilité',
+        code: 'Code analysé',
+        hypotheses: 'Hypothèses',
+        experiments: 'Résultats des vérifications',
+        diagnosis: 'Diagnostic',
+        regression: 'Test de non-régression',
+        ai: 'Investigation IA',
+      } as Record<ReportSection, string>,
+      more: (n: number) => `… et ${String(n)} de plus (dans l’export).`,
+      method: 'Méthode',
+      path: 'Chemin',
+      status: 'Statut',
+      duration: 'Durée',
+      noResponse: 'sans réponse',
+      noGraph: 'Pas de graphe dans ce rapport.',
+      graphCounts: (nodes: number, edges: number) => `${String(nodes)} nœud(s), ${String(edges)} relation(s)`,
+      relations: {
+        OBSERVED: 'observée(s)',
+        STATICALLY_RESOLVED: 'lue(s) dans le code',
+        INFERRED: 'déduite(s)',
+        UNKNOWN: 'inconnue(s)',
+      } as Record<RelationStatus, string>,
+      staticNote: 'Seules les relations observées viennent de la reproduction.',
+      files: (n: number) => `${String(n)} fichier(s) retenu(s)`,
+      symbols: (n: number) => `${String(n)} symbole(s)`,
+      denied: (n: number) => `${String(n)} chemin(s) refusé(s) par le périmètre`,
+      truncated: (n: number) => `${String(n)} fichier(s) tronqué(s)`,
+      empty: 'Rien dans cette section.',
+      step: (n: number) => `étape ${String(n)}`,
+    },
+    rt: {
+      title: 'Test de non-régression',
+      generated: 'Test généré',
+      validated: 'Validé',
+      proposed: 'Proposé, non validé',
+      rejected: 'Refusé',
+      tabs: 'Code du test',
+      flow: 'Flow YAML',
+      spec: 'Playwright (TypeScript)',
+      specLoading: 'Génération du test Playwright…',
+      specMissing: 'Le test Playwright n’est pas encore chargé.',
+      specLoad: 'Charger le test Playwright',
+      full: 'Voir le test complet',
+      fullHide: 'Réduire le test',
+      hiddenLines: (n: number) => `${String(n)} ligne(s) de plus`,
+      lastRun: 'Dernière exécution',
+      neverRun: 'Jamais exécuté : aucun verdict tant que le test n’a pas tourné réellement.',
+      passed: 'Réussie',
+      failed: 'Échouée',
+      ranAt: (run: string, at: string) => `exécution ${run} du ${at}`,
+      run: 'Exécuter',
+      accept: 'Ajouter au catalogue',
+      reject: 'Refuser',
+      propose: 'Proposer un test',
+      proposeAgain: 'Proposer de nouveau',
+      runRight: 'Votre rôle ne permet pas d’exécuter ce test.',
+      acceptRight: 'Votre rôle ne permet pas d’ajouter un test au catalogue.',
+      rejectRight: 'Votre rôle ne permet pas de refuser ce test.',
+      rejectedRun: 'Test refusé : il ne s’exécute plus.',
+      decided: 'Décision déjà prise.',
+      catalogNote: 'Rien n’entre au catalogue de scénarios sans cette validation explicite.',
+      inCatalog: (file: string) => `Au catalogue : ${file}`,
+    },
+  },
+  en: {
+    board: {
+      title: 'Diagnosis and hypotheses',
+      hypotheses: (n: number) => `Hypotheses (${String(n)})`,
+      none: 'No hypothesis yet: the code analysis proposes them.',
+      rank: (n: number) => `#${String(n)}`,
+      selectLabel: (rank: number, title: string, pct: number, status: string) =>
+        `Hypothesis ${String(rank)}: ${title}, confidence ${String(pct)} %, ${status}`,
+      cause: 'Cause',
+      rootConfirmed: 'Confirmed root cause',
+      rootProbable: 'Probable root cause',
+      rootInconclusive: 'Most advanced lead, not established',
+      noRoot: 'No established cause',
+      leading: 'Leading hypothesis, no diagnosis',
+      leadingInconclusive: 'Leading hypothesis, not established',
+      selected: 'Selected hypothesis',
+      noDiagnosis: 'No diagnosis yet: this hypothesis ranks first, it is not an established cause.',
+      selectedNote: 'This is not the cause kept by the diagnosis.',
+      confidence: (pct: number) => `Confidence: ${String(pct)} %`,
+      noConfidence: 'Confidence: not available (hypothesis missing from the investigation)',
+      why: 'Why this hypothesis?',
+      whyHide: 'Hide the evidence',
+      checks: 'Proposed checks',
+      checksNone: 'No check planned or proposed.',
+      checkLabel: (description: string) => `Select the check “${description}”`,
+      detail: 'Details',
+      detailLabel: (kind: string) => `See the details of the check “${kind}”`,
+      sideEffectsReason: 'Possible side effects: explicit approval required, one check at a time.',
+      notRunnable: 'Already handled: nothing to run.',
+      noRight: 'Your role does not allow running checks.',
+      pickOne: 'Tick at least one check without side effects.',
+      run: (n: number) => (n > 1 ? `Run the checks (${String(n)})` : 'Run the check'),
+      runHint:
+        'The ticked checks run one after the other, within the scope; a refusal is shown with its rule.',
+      proposed: 'Proposed, to be planned',
+      diagnose: 'Establish the diagnosis',
+      rediagnose: 'Diagnose again',
+    },
+    rx: {
+      title: 'Investigation report',
+      preview: 'Report preview',
+      export: 'Export',
+      sections: 'Sections',
+      all: 'All',
+      none: 'None',
+      formats: { pdf: 'PDF', html: 'HTML', markdown: 'Markdown', json: 'JSON' } as Record<
+        ReportFormat,
+        string
+      >,
+      exportLabel: (format: string, n: number) => `Export the report as ${format} (${String(n)} section(s))`,
+      noSection: 'Tick at least one section to export.',
+      exportNote:
+        'The file is produced by the server from the saved investigation, with the ticked sections.',
+      pdfUnavailable: 'PDF export unavailable on this server.',
+      emptyPreview: 'No section ticked: the preview is empty.',
+      labels: {
+        summary: 'Summary',
+        environment: 'Environment',
+        timeline: 'Timeline',
+        requests: 'HTTP requests',
+        graph: 'Traceability graph',
+        code: 'Analysed code',
+        hypotheses: 'Hypotheses',
+        experiments: 'Check results',
+        diagnosis: 'Diagnosis',
+        regression: 'Non-regression test',
+        ai: 'AI investigation',
+      } as Record<ReportSection, string>,
+      more: (n: number) => `… and ${String(n)} more (in the export).`,
+      method: 'Method',
+      path: 'Path',
+      status: 'Status',
+      duration: 'Duration',
+      noResponse: 'no response',
+      noGraph: 'No graph in this report.',
+      graphCounts: (nodes: number, edges: number) => `${String(nodes)} node(s), ${String(edges)} relation(s)`,
+      relations: {
+        OBSERVED: 'observed',
+        STATICALLY_RESOLVED: 'read in the code',
+        INFERRED: 'inferred',
+        UNKNOWN: 'unknown',
+      } as Record<RelationStatus, string>,
+      staticNote: 'Only observed relations come from the reproduction.',
+      files: (n: number) => `${String(n)} file(s) kept`,
+      symbols: (n: number) => `${String(n)} symbol(s)`,
+      denied: (n: number) => `${String(n)} path(s) refused by the scope`,
+      truncated: (n: number) => `${String(n)} truncated file(s)`,
+      empty: 'Nothing in this section.',
+      step: (n: number) => `step ${String(n)}`,
+    },
+    rt: {
+      title: 'Non-regression test',
+      generated: 'Generated test',
+      validated: 'Validated',
+      proposed: 'Proposed, not validated',
+      rejected: 'Rejected',
+      tabs: 'Test code',
+      flow: 'YAML flow',
+      spec: 'Playwright (TypeScript)',
+      specLoading: 'Generating the Playwright test…',
+      specMissing: 'The Playwright test is not loaded yet.',
+      specLoad: 'Load the Playwright test',
+      full: 'See the full test',
+      fullHide: 'Collapse the test',
+      hiddenLines: (n: number) => `${String(n)} more line(s)`,
+      lastRun: 'Last run',
+      neverRun: 'Never run: no verdict until the test has really run.',
+      passed: 'Passed',
+      failed: 'Failed',
+      ranAt: (run: string, at: string) => `run ${run} on ${at}`,
+      run: 'Run',
+      accept: 'Add to the catalogue',
+      reject: 'Reject',
+      propose: 'Propose a test',
+      proposeAgain: 'Propose again',
+      runRight: 'Your role does not allow running this test.',
+      acceptRight: 'Your role does not allow adding a test to the catalogue.',
+      rejectRight: 'Your role does not allow rejecting this test.',
+      rejectedRun: 'Rejected test: it no longer runs.',
+      decided: 'Decision already taken.',
+      catalogNote: 'Nothing enters the scenario catalogue without this explicit validation.',
+      inCatalog: (file: string) => `In the catalogue: ${file}`,
+    },
+  },
+} satisfies Record<Lang, unknown>;
+
+type ScreenText = (typeof SCREEN_TEXT)['fr'];
+const screen = (lang: Lang): ScreenText => SCREEN_TEXT[lang];
+
+const levelOf = (value: number): 'low' | 'mid' | 'high' =>
+  clampUnit(value) < 0.34 ? 'low' : clampUnit(value) < 0.67 ? 'mid' : 'high';
+
+/** Une pastille de confiance en pour cent (la valeur de `Hypothesis.confidence`, rien d'autre). */
+const pctPill = (value: number): string =>
+  `<span class="ws-dx-pct ws-dx-pct-${levelOf(value)}">${String(percentOf(value))} %</span>`;
+
+// ── Écran 9 : Diagnostic et hypothèses ────────────────────────────────────────────────────────
+
+/** Une vérification exécutable : planifiée (ou en attente d'approbation), pas encore lancée. */
+export const isRunnableExperiment = (experiment: Pick<Experiment, 'status'>): boolean =>
+  experiment.status === 'PROPOSED' || experiment.status === 'APPROVAL_REQUIRED';
+
+/**
+ * Les vérifications cochées que « Exécuter la vérification » lance : exécutables, sans effet de bord
+ * (celles qui en ont passent par l'approbation dans la page, une à la fois), dans l'ordre de l'investigation.
+ */
+export function selectedRunnable(incident: Incident, ui: Pick<DiagnosisUi, 'checked'>): string[] {
+  return incident.investigation.experiments
+    .filter(
+      (experiment) =>
+        ui.checked.includes(experiment.id) && isRunnableExperiment(experiment) && !needsApproval(experiment),
+    )
+    .map((experiment) => experiment.id);
+}
+
+interface Featured {
+  hypothesis?: Hypothesis;
+  /** Le titre de la carte, selon Diagnosis.status (jamais « confirmée » sans CONFIRMED). */
+  title: string;
+  tone: 'ok' | 'warn' | 'mu';
+  statement?: string;
+  note?: string;
+  isRoot: boolean;
+}
+
+/**
+ * L'hypothèse mise en avant au centre : la sélection (si c'est une hypothèse), sinon la cause du
+ * diagnostic, sinon la mieux classée. Le titre dit ce qu'elle est réellement.
+ */
+function featuredOf(ctx: WorkspaceContext, ui: DiagnosisUi): Featured | undefined {
+  const b = screen(ctx.lang).board;
+  const investigation = ctx.incident.investigation;
+  const diagnosis = investigation.diagnosis;
+  const root = diagnosis?.rootCause;
+  const byId = (id: string | undefined): Hypothesis | undefined =>
+    investigation.hypotheses.find((entry) => entry.id === id);
+  const selected = ctx.selection?.kind === 'hypothesis' ? byId(ctx.selection.id) : undefined;
+  const top = sortHypotheses(investigation.hypotheses, ui.sort)[0];
+  if (diagnosis && root && (!selected || selected.id === root.hypothesisId)) {
+    const hypothesis = byId(root.hypothesisId);
+    const title =
+      diagnosis.status === 'CONFIRMED'
+        ? b.rootConfirmed
+        : diagnosis.status === 'PROBABLE'
+          ? b.rootProbable
+          : b.rootInconclusive;
+    return {
+      ...(hypothesis ? { hypothesis } : {}),
+      title,
+      tone: diagnosis.status === 'CONFIRMED' ? 'ok' : diagnosis.status === 'PROBABLE' ? 'warn' : 'mu',
+      statement: root.statement,
+      isRoot: true,
+    };
+  }
+  if (selected)
+    return {
+      hypothesis: selected,
+      title: b.selected,
+      tone: 'mu',
+      statement: selected.suspectedCause,
+      ...(root ? { note: b.selectedNote } : {}),
+      isRoot: false,
+    };
+  if (!top) return undefined;
+  return {
+    hypothesis: top,
+    title: diagnosis ? b.leadingInconclusive : b.leading,
+    tone: 'mu',
+    statement: top.suspectedCause,
+    note: diagnosis ? text(ctx.lang).diag.noRoot : b.noDiagnosis,
+    isRoot: false,
+  };
+}
+
+function boardHypotheses(ctx: WorkspaceContext, ui: DiagnosisUi): string {
+  const t = text(ctx.lang);
+  const b = screen(ctx.lang).board;
+  const list = sortHypotheses(ctx.incident.investigation.hypotheses, ui.sort);
+  const head = `<h3 id="ws-dx-b-hyps" class="ws-dx-coltitle">${esc(b.hypotheses(list.length))}</h3>`;
+  if (list.length === 0) {
+    const reason = planReason(ctx);
+    const analyze = ctx.can('RUN')
+      ? `${opButton(ctx, ui, {
+          action: 'ws-dx-analyze',
+          label: t.hyp.analyze,
+          primary: true,
+          small: true,
+          ...(reason ? { reason, reasonId: 'ws-dx-b-analyze-why' } : {}),
+        })}${reasonNote('ws-dx-b-analyze-why', reason)}`
+      : '';
+    return `${head}<p class="mu">${esc(b.none)}</p>${analyze}${errorBox(ctx, ui, 'analyze')}`;
+  }
+  const items = list
+    .map((hypothesis, index) => {
+      const rank = index + 1;
+      const status = t.hypothesisStatus[hypothesis.status];
+      return `<li class="ws-dx-hrow ${selectionClass(ctx, 'hypothesis', hypothesis.id)}"><button type="button" class="ws-dx-hbtn" ${selectable(ctx, 'hypothesis', hypothesis.id)} aria-label="${esc(b.selectLabel(rank, hypothesis.title, percentOf(hypothesis.confidence), status))}" title="${esc(hypothesis.title)}"><span class="ws-dx-rank" aria-hidden="true">${String(rank)}</span><span class="ws-dx-htitle">${esc(hypothesis.title)}</span>${pctPill(hypothesis.confidence)}${chip(hypothesis.status, status)}</button></li>`;
+    })
+    .join('');
+  return `${head}<ol class="plain ws-dx-hlist" aria-labelledby="ws-dx-b-hyps">${items}</ol>`;
+}
+
+function boardCause(ctx: WorkspaceContext, ui: DiagnosisUi): string {
+  const t = text(ctx.lang);
+  const b = screen(ctx.lang).board;
+  const featured = featuredOf(ctx, ui);
+  const diagnosis = ctx.incident.investigation.diagnosis;
+  if (!featured) {
+    const title = diagnosis ? b.noRoot : b.leading;
+    return `<article class="ws-dx-cause-card ws-dx-root-mu" aria-labelledby="ws-dx-b-cause"><h3 id="ws-dx-b-cause" class="ws-dx-coltitle">${icon('alert')}<span>${esc(title)}</span></h3><p class="mu">${esc(diagnosis ? t.diag.noRoot : t.diag.needHypotheses)}</p></article>`;
+  }
+  const hypothesis = featured.hypothesis;
+  const index = refIndex(ctx.incident);
+  const confidence = hypothesis
+    ? `<p class="ws-dx-confline"><b>${esc(b.confidence(percentOf(hypothesis.confidence)))}</b>${confidenceBar(ctx, hypothesis.confidence, false)}</p>`
+    : `<p class="mu ws-dx-confline">${esc(b.noConfidence)}</p>`;
+  const status =
+    featured.isRoot && diagnosis
+      ? `<p class="ws-dx-status">${chip(diagnosis.status, t.diag.statuses[diagnosis.status])}<small class="mu">${esc(t.diag.sentences[diagnosis.status])}</small></p>`
+      : hypothesis
+        ? `<p class="ws-dx-status">${chip(hypothesis.status, t.hypothesisStatus[hypothesis.status])}</p>`
+        : '';
+  const files = featured.isRoot ? (diagnosis?.rootCause?.files ?? []) : (hypothesis?.files ?? []);
+  const why = hypothesis
+    ? `<button type="button" class="btn small ws-dx-whybtn" data-action="ws-dx-why" aria-expanded="${String(ui.why)}" aria-controls="ws-dx-b-why">${icon(ui.why ? 'up' : 'down')}<span>${esc(ui.why ? b.whyHide : b.why)}</span></button><div id="ws-dx-b-why" class="ws-dx-whybody"${ui.why ? '' : ' hidden'}>${
+        ui.why
+          ? `<div class="ws-dx-evidence"><section class="ws-dx-side ws-dx-side-pro"><h4>${icon('check')}<span>${esc(t.hyp.supporting(hypothesis.supporting.length))}</span></h4>${factsList(ctx, index, hypothesis.supporting, 'pro')}</section><section class="ws-dx-side ws-dx-side-con"><h4>${icon('cross')}<span>${esc(t.hyp.contradicting(hypothesis.contradicting.length))}</span></h4>${factsList(ctx, index, hypothesis.contradicting, 'con')}</section></div><h4>${esc(t.hyp.progress)}</h4>${progressList(ctx, hypothesis)}`
+          : ''
+      }</div>`
+    : '';
+  const titleLink = hypothesis
+    ? `<p class="ws-dx-hyplink"><small class="mu">${esc(t.diag.hypothesis)} :</small> ${hypothesisLink(ctx, hypothesis.id)} <small class="mu">· ${esc(partsText(ctx.lang).layers[hypothesis.layer])}</small></p>`
+    : '';
+  return `<article class="ws-dx-cause-card ws-dx-root-${featured.tone}" aria-labelledby="ws-dx-b-cause" data-root="${String(featured.isRoot)}"><h3 id="ws-dx-b-cause" class="ws-dx-coltitle">${icon(featured.tone === 'ok' ? 'check' : 'alert')}<span>${esc(featured.title)}</span></h3>${confidence}${featured.statement ? `<p class="ws-dx-statement"><b>${esc(featured.statement)}</b></p>` : ''}${hypothesis?.description ? `<p class="ws-dx-explain">${esc(hypothesis.description)}</p>` : ''}${featured.note ? `<p class="note ws-dx-cardnote">${esc(featured.note)}</p>` : ''}${status}${titleLink}${files.length > 0 ? fileLinks(ctx, files) : ''}${why}</article>`;
+}
+
+function boardChecks(ctx: WorkspaceContext, ui: DiagnosisUi): string {
+  const t = text(ctx.lang);
+  const b = screen(ctx.lang).board;
+  const investigation = ctx.incident.investigation;
+  const runner = ctx.can('RUN');
+  const featured = featuredOf(ctx, ui)?.hypothesis;
+  const experiments = [...investigation.experiments].sort(
+    (a, c) => Number(isRunnableExperiment(c)) - Number(isRunnableExperiment(a)),
+  );
+  const items = experiments.map((experiment) => {
+    const kind = t.experimentKinds[experiment.kind];
+    const runnable = isRunnableExperiment(experiment);
+    const approval = needsApproval(experiment);
+    const id = domId('ws-dx-ck', experiment.id);
+    const whyId = domId('ws-dx-ckw', experiment.id);
+    const reason = !runnable ? undefined : !runner ? b.noRight : approval ? b.sideEffectsReason : undefined;
+    const box = runnable
+      ? `<input type="checkbox" id="${id}" class="ws-dx-cbox" data-action="ws-dx-check" data-experiment="${esc(experiment.id)}"${ui.checked.includes(experiment.id) && !reason ? ' checked' : ''}${reason ? ` disabled aria-describedby="${whyId}"` : ''}>`
+      : `<span class="ws-dx-cicon ws-dx-cicon-${experiment.status.toLowerCase()}" aria-hidden="true">${icon(experiment.status === 'DONE' ? 'check' : experiment.status === 'RUNNING' ? 'history' : 'cross')}</span>`;
+    const label = runnable
+      ? `<label for="${id}" class="ws-dx-clabel" title="${esc(b.checkLabel(experiment.description))}">${esc(experiment.description)}</label>`
+      : `<span class="ws-dx-clabel">${esc(experiment.description)}</span>`;
+    const control =
+      runner && runnable && approval
+        ? ui.approving === experiment.id
+          ? approvalPanel(ctx, ui, experiment, 'ws-dx-b')
+          : `<div class="row-acts">${opButton(ctx, ui, {
+              action: 'ws-dx-run',
+              label: t.exp.review,
+              aria: t.exp.reviewLabel(kind),
+              ref: experiment.id,
+              data: { experiment: experiment.id, approval: 'required' },
+              small: true,
+              ...(planReason(ctx) ? { reason: planReason(ctx) ?? '' } : {}),
+            })}</div>`
+        : '';
+    return `<li class="ws-dx-checkrow ${selectionClass(ctx, 'experiment', experiment.id)}" data-experiment="${esc(experiment.id)}">${box}<div class="ws-dx-cbody">${label}<span class="ws-dx-cmeta"><small class="mu">${esc(kind)}</small>${chip(experiment.status, t.experimentStatus[experiment.status])}${experiment.sideEffects ? chip('APPROVAL_REQUIRED', t.exp.sideEffects) : ''}${experiment.outcome ? chip(experiment.outcome, t.outcomes[experiment.outcome]) : ''}<button type="button" class="lnk ws-dx-cdetail" ${selectable(ctx, 'experiment', experiment.id)} aria-label="${esc(b.detailLabel(kind))}">${esc(b.detail)}</button></span>${reason ? `<small class="mu ws-dx-why" id="${whyId}">${esc(reason)}</small>` : ''}${errorBox(ctx, ui, `experiment:${experiment.id}`)}${control}</div></li>`;
+  });
+  // Les vérifications proposées par l'hypothèse mise en avant, pas encore planifiées.
+  const planned = new Set(
+    investigation.experiments
+      .filter((experiment) => experiment.hypothesisId === featured?.id)
+      .map((experiment) => experiment.kind),
+  );
+  const reason = planReason(ctx);
+  const proposals = (featured?.verifications ?? []).flatMap((verification, index) => {
+    if (planned.has(verification.kind) || !featured) return [];
+    const kind = t.experimentKinds[verification.kind];
+    const plan = runner
+      ? opButton(ctx, ui, {
+          action: 'ws-dx-plan',
+          label: t.hyp.plan,
+          aria: t.hyp.planLabel(kind, featured.title),
+          ref: `${featured.id}#${String(index)}`,
+          data: { hypothesis: featured.id, index: String(index) },
+          small: true,
+          ...(reason ? { reason } : {}),
+        })
+      : '';
+    return [
+      `<li class="ws-dx-checkrow ws-dx-checkplan"><span class="ws-dx-cicon" aria-hidden="true">${icon('plus')}</span><div class="ws-dx-cbody"><span class="ws-dx-clabel">${esc(verification.description)}</span><span class="ws-dx-cmeta"><small class="mu">${esc(kind)}</small>${chip('PROPOSED', b.proposed)}${plan}</span></div></li>`,
+    ];
+  });
+  const all = [...items, ...proposals];
+  const picked = selectedRunnable(ctx.incident, ui);
+  const runReason = !runner
+    ? b.noRight
+    : !investigable(ctx.incident)
+      ? t.notReady
+      : picked.length === 0
+        ? b.pickOne
+        : undefined;
+  const run = opButton(ctx, ui, {
+    action: 'ws-dx-run-selected',
+    label: b.run(picked.length),
+    data: { experiments: picked.join(',') },
+    primary: true,
+    ...(runReason ? { reason: runReason, reasonId: 'ws-dx-b-run-why' } : {}),
+  });
+  return `<h3 id="ws-dx-b-checks" class="ws-dx-coltitle">${esc(b.checks)}</h3>${
+    all.length === 0
+      ? `<p class="mu">${esc(b.checksNone)}</p>`
+      : `<ul class="plain ws-dx-checks" aria-labelledby="ws-dx-b-checks">${all.join('')}</ul>`
+  }${errorBox(ctx, ui, 'run-selected')}<div class="ws-dx-runbar">${run}${reasonNote('ws-dx-b-run-why', runReason)}<small class="mu">${esc(b.runHint)}</small></div>`;
+}
+
+/**
+ * ÉCRAN 9 — « Diagnostic et hypothèses » : trois colonnes sur un grand écran (une seule en dessous de
+ * 900 px de panneau) : la liste des hypothèses (rang, titre, confiance en %, statut ; un clic les
+ * sélectionne partout), la carte de la cause (titre selon `Diagnosis.status` — « confirmée » seulement pour
+ * CONFIRMED —, confiance = `Hypothesis.confidence`, explication, « Pourquoi cette hypothèse ? » qui déplie les
+ * preuves favorables et contraires) et la liste « Vérifications proposées » (cases à cocher pour les
+ * vérifications sans effet de bord, approbation dans la page pour les autres, « Exécuter la vérification »).
+ */
+export function renderDiagnosisBoard(ctx: WorkspaceContext, ui: DiagnosisUi): string {
+  const t = text(ctx.lang);
+  const b = screen(ctx.lang).board;
+  const diagnosis = ctx.incident.investigation.diagnosis;
+  const hypotheses = ctx.incident.investigation.hypotheses;
+  const reason = !investigable(ctx.incident)
+    ? t.notReady
+    : hypotheses.length === 0
+      ? t.diag.needHypotheses
+      : undefined;
+  const action = ctx.can('RUN')
+    ? `<div class="row-acts">${opButton(ctx, ui, {
+        action: 'ws-dx-diagnose',
+        label: diagnosis ? b.rediagnose : b.diagnose,
+        small: true,
+        primary: !diagnosis && hypotheses.length > 0,
+        ...(reason ? { reason, reasonId: 'ws-dx-b-diag-why' } : {}),
+      })}${reasonNote('ws-dx-b-diag-why', reason)}</div>`
+    : '';
+  return `${demoBanner(ctx)}<section class="ws-dx-board" aria-labelledby="ws-dx-b-title"><div class="ws-dx-boardhead"><h2 id="ws-dx-b-title">${esc(b.title)}</h2>${diagnosis ? chip(diagnosis.status, t.diag.statuses[diagnosis.status]) : ''}${action}</div>${errorBox(ctx, ui, 'diagnose')}<div class="ws-dx-cols"><section class="ws-dx-col ws-dx-col-hyps" aria-labelledby="ws-dx-b-hyps">${boardHypotheses(ctx, ui)}</section><section class="ws-dx-col ws-dx-col-cause" aria-labelledby="ws-dx-b-cause">${boardCause(ctx, ui)}</section><section class="ws-dx-col ws-dx-col-checks" aria-labelledby="ws-dx-b-checks">${boardChecks(ctx, ui)}</section></div></section>`;
+}
+
+// ── Écran 10 : Rapport d'investigation (aperçu par sections et exports) ───────────────────────
+
+/** Un format d'export valable (lu sur `data-format`). */
+export const isReportFormat = (value: unknown): value is ReportFormat =>
+  typeof value === 'string' && (REPORT_FORMATS as readonly string[]).includes(value);
+
+/**
+ * Les sections lues sur `data-sections` (liste séparée par des virgules) : seulement des sections connues,
+ * sans doublon, dans l'ordre du rapport.
+ */
+export function parseReportSections(value: string | undefined): ReportSection[] {
+  const asked = new Set((value ?? '').split(',').map((entry) => entry.trim()));
+  return REPORT_SECTIONS.filter((section) => asked.has(section));
+}
+
+/** Les sections retenues, dans l'ordre du rapport, pour `?sections=` (vide : aucune). */
+export function reportSectionsParam(ui: Pick<DiagnosisUi, 'sections'>): string {
+  return REPORT_SECTIONS.filter((section) => ui.sections.includes(section)).join(',');
+}
+
+const PREVIEW_MAX = 8;
+/** L'ordre des boutons « Exporter » (celui de la maquette ; JSON en dernier). */
+const EXPORT_ORDER: readonly ReportFormat[] = ['pdf', 'html', 'markdown', 'json'];
+
+function moreLine(ctx: WorkspaceContext, total: number): string {
+  return total > PREVIEW_MAX
+    ? `<p class="mu ws-dx-rx-more">${esc(screen(ctx.lang).rx.more(total - PREVIEW_MAX))}</p>`
+    : '';
+}
+
+function previewSection(ctx: WorkspaceContext, report: InvestigationReport, section: ReportSection): string {
+  const t = text(ctx.lang);
+  const x = screen(ctx.lang).rx;
+  const none = `<span class="mu">${esc(t.report.none)}</span>`;
+  const body = ((): string => {
+    switch (section) {
+      case 'summary': {
+        const incident = report.incident;
+        const tone = incident.severity === 'LOW' ? 'mu' : incident.severity === 'MEDIUM' ? 'warn' : 'ko';
+        return `<p class="ws-dx-rx-id"><code>${esc(incident.id)}</code> <span class="pill ${tone} ws-dx-chip" data-severity="${esc(incident.severity)}">${esc(t.severities[incident.severity] ?? incident.severity)}</span> <small class="mu">${esc(t.states[incident.state] ?? incident.state)}</small></p><p class="ws-dx-rx-title"><b>${esc(incident.title)}</b></p>${incident.description ? `<p>${esc(incident.description)}</p>` : ''}<dl class="ws-dx-dl">${dlRow(t.report.observed, esc(incident.observed))}${dlRow(t.report.expected, esc(incident.expected))}${dlRow(t.report.scenario, report.scenario ? esc(report.scenario) : none)}</dl>`;
+      }
+      case 'environment': {
+        const environment = report.environment;
+        const scope = report.scope;
+        return `<dl class="ws-dx-dl">${dlRow(t.report.target, esc(t.targets[environment.execution.target] ?? environment.execution.target))}${dlRow(t.report.environmentId, environment.environmentId ? `<code>${esc(environment.environmentId)}</code>` : none)}${dlRow(t.report.baseUrl, environment.baseUrl ? `<code>${esc(environment.baseUrl)}</code>` : none)}${dlRow(t.report.mode, esc(t.modes[scope.mode] ?? scope.mode))}${dlRow(
+          t.report.applications,
+          scope.applications.length > 0
+            ? scope.applications
+                .map(
+                  (application) =>
+                    `${esc(application.name)} <small class="mu">${esc(partsText(ctx.lang).layers[application.layer])}</small>`,
+                )
+                .join(', ')
+            : none,
+        )}${dlRow(t.report.depth, String(scope.depth))}</dl>`;
+      }
+      case 'timeline':
+        return report.timeline.length === 0
+          ? `<p class="mu">${esc(x.empty)}</p>`
+          : `<ol class="ws-dx-rx-list">${report.timeline
+              .slice(0, PREVIEW_MAX)
+              .map(
+                (entry) =>
+                  `<li><small class="mu">${esc(entry.kind)}${entry.step !== undefined ? ` · ${esc(x.step(entry.step))}` : ''}</small> ${esc(entry.summary)}</li>`,
+              )
+              .join('')}</ol>${moreLine(ctx, report.timeline.length)}`;
+      case 'requests':
+        return report.requests.length === 0
+          ? `<p class="mu">${esc(x.empty)}</p>`
+          : `<div class="tw"><table class="tbl ws-dx-rx-tbl"><thead><tr><th scope="col">${esc(x.method)}</th><th scope="col">${esc(x.path)}</th><th scope="col">${esc(x.status)}</th><th scope="col">${esc(x.duration)}</th></tr></thead><tbody>${report.requests
+              .slice(0, PREVIEW_MAX)
+              .map((request) => {
+                const failing = (request.status ?? 0) >= 400 || request.failure !== undefined;
+                return `<tr${failing ? ' class="ws-dx-rx-ko"' : ''}><td><code>${esc(request.method.toUpperCase())}</code></td><td><code>${esc(request.path)}</code></td><td>${request.status !== undefined ? String(request.status) : esc(request.failure ?? x.noResponse)}</td><td>${request.durationMs !== undefined ? `${String(Math.round(request.durationMs))} ms` : '—'}</td></tr>`;
+              })
+              .join('')}</tbody></table></div>${moreLine(ctx, report.requests.length)}`;
+      case 'graph': {
+        const graph = report.graph;
+        if (!graph) return `<p class="mu">${esc(x.noGraph)}</p>`;
+        const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+        const counts = (['OBSERVED', 'STATICALLY_RESOLVED', 'INFERRED', 'UNKNOWN'] as const).map(
+          (status) =>
+            `${String(graph.edges.filter((edge) => displayStatus(edge, nodes) === status).length)} ${x.relations[status]}`,
+        );
+        return `<p>${esc(x.graphCounts(graph.nodes.length, graph.edges.length))} : ${esc(counts.join(', '))}.</p><p class="mu"><small>${esc(x.staticNote)}</small></p>`;
+      }
+      case 'code': {
+        const code = report.code;
+        return `<p>${esc([x.files(code.files.length), x.symbols(code.symbols.length), x.denied(code.denied.length), ...(code.truncated.length > 0 ? [x.truncated(code.truncated.length)] : [])].join(' · '))}</p>${
+          code.files.length > 0
+            ? `<ul class="plain tight ws-dx-rx-files">${code.files
+                .slice(0, PREVIEW_MAX)
+                .map((file) => `<li><code>${esc(file)}</code></li>`)
+                .join('')}</ul>${moreLine(ctx, code.files.length)}`
+            : ''
+        }`;
+      }
+      case 'hypotheses':
+        return report.hypotheses.length === 0
+          ? `<p class="mu">${esc(x.empty)}</p>`
+          : `<ol class="ws-dx-rx-list">${sortHypotheses(report.hypotheses, 'confidence')
+              .slice(0, PREVIEW_MAX)
+              .map(
+                (hypothesis) =>
+                  `<li><span>${esc(hypothesis.title)}</span> ${pctPill(hypothesis.confidence)} ${chip(hypothesis.status, t.hypothesisStatus[hypothesis.status])}</li>`,
+              )
+              .join('')}</ol>${moreLine(ctx, report.hypotheses.length)}`;
+      case 'experiments':
+        return report.experiments.length === 0
+          ? `<p class="mu">${esc(x.empty)}</p>`
+          : `<ul class="plain ws-dx-rx-list">${report.experiments
+              .slice(0, PREVIEW_MAX)
+              .map(
+                (experiment) =>
+                  `<li><span>${esc(t.experimentKinds[experiment.kind])}</span> ${chip(experiment.status, t.experimentStatus[experiment.status])}${experiment.outcome ? ` ${chip(experiment.outcome, t.outcomes[experiment.outcome])}` : ''}${experiment.summary ? ` <small class="mu">${esc(experiment.summary)}</small>` : ''}</li>`,
+              )
+              .join('')}</ul>${moreLine(ctx, report.experiments.length)}`;
+      case 'diagnosis': {
+        const diagnosis = report.diagnosis;
+        if (!diagnosis) return `<p class="mu">${esc(t.diag.none)}</p>`;
+        return `<p class="ws-dx-status">${chip(diagnosis.status, t.diag.statuses[diagnosis.status])}<span>${esc(t.diag.sentences[diagnosis.status])}</span></p>${
+          diagnosis.rootCause
+            ? `<p><b>${esc(rootTitle(t, diagnosis))} :</b> ${esc(diagnosis.rootCause.statement)}</p>`
+            : ''
+        }${diagnosis.missing.length > 0 ? `<p class="mu"><small>${esc(t.diag.missing)} : ${esc(diagnosis.missing.join(' · '))}</small></p>` : ''}`;
+      }
+      case 'regression': {
+        const regression = report.regression;
+        if (!regression) return `<p class="mu">${esc(t.reg.none)}</p>`;
+        return `<p>${esc(regression.name)} ${regressionStatusChip(ctx, regression)} ${verdictChip(t, regressionVerdict(regression))}</p>`;
+      }
+      case 'ai': {
+        // Le résumé du dernier run IA, s'il y en a un : jamais présenté comme un diagnostic.
+        const run = report.ai?.runs.at(-1);
+        return run?.synthesis ? `<p>${esc(run.synthesis.summary)}</p>` : `<p class="mu">${esc(x.empty)}</p>`;
+      }
+    }
+  })();
+  return `<section class="ws-dx-rx-sec" data-section="${section}" aria-labelledby="ws-dx-rx-${section}"><h4 id="ws-dx-rx-${section}">${esc(x.labels[section])}</h4>${body}</section>`;
+}
+
+/**
+ * ÉCRAN 10 — « Rapport d'investigation » : l'aperçu du rapport par sections (celles qui sont cochées),
+ * « Exporter » en PDF, HTML, Markdown ou JSON (chaque bouton porte `data-format` et `data-sections`, la
+ * liste des sections cochées), « Sections » (cases à cocher qui pilotent l'aperçu ET l'export). Le PDF est
+ * désactivé, avec sa raison, quand `state.pdfUnavailable` le dit (réponse 501 du serveur).
+ */
+export function renderReportExport(
+  ctx: WorkspaceContext,
+  ui: DiagnosisUi,
+  report: InvestigationReport | undefined,
+  state: ReportViewState = {},
+): string {
+  const t = text(ctx.lang);
+  const x = screen(ctx.lang).rx;
+  const sections = REPORT_SECTIONS.filter((section) => ui.sections.includes(section));
+  const param = sections.join(',');
+  const blocked = ui.busy !== undefined || state.exporting !== undefined;
+  const noneId = 'ws-dx-rx-why-none';
+  const pdfId = 'ws-dx-rx-why-pdf';
+  const pdfReason =
+    state.pdfUnavailable !== undefined ? `${x.pdfUnavailable} ${state.pdfUnavailable}`.trim() : undefined;
+  const exportButtons = EXPORT_ORDER.map((format) => {
+    const reason =
+      format === 'pdf' && pdfReason ? pdfReason : sections.length === 0 ? x.noSection : undefined;
+    const reasonId = format === 'pdf' && pdfReason ? pdfId : noneId;
+    const busy = state.exporting === format;
+    return `<li><button type="button" class="btn ws-dx-rx-btn" data-action="ws-dx-export" data-format="${format}" data-sections="${esc(param)}" aria-label="${esc(x.exportLabel(x.formats[format], sections.length))}"${reason || blocked ? ' disabled' : ''}${reason ? ` aria-describedby="${reasonId}" title="${esc(reason)}"` : ''} aria-busy="${String(busy)}">${busy ? '<span class="spin sm" aria-hidden="true"></span>' : icon('download')}<span>${esc(x.formats[format])}</span></button>${format === 'pdf' && pdfReason ? `<small class="mu ws-dx-why" id="${pdfId}">${esc(pdfReason)}</small>` : ''}</li>`;
+  }).join('');
+  const checks = REPORT_SECTIONS.map(
+    (section) =>
+      `<li><label class="ws-dx-rx-check"><input type="checkbox" data-action="ws-dx-section" data-section="${section}"${ui.sections.includes(section) ? ' checked' : ''}><span>${esc(x.labels[section])}</span></label></li>`,
+  ).join('');
+  const preview = !report
+    ? state.error
+      ? panelState(ctx.lang, 'error', state.error, 'ws-dx-report')
+      : state.loading
+        ? panelState(ctx.lang, 'loading', t.report.loading)
+        : panelState(ctx.lang, 'empty', t.report.missing)
+    : `${state.error ? `<p class="err" role="alert">${esc(state.error)}</p>` : ''}<p class="mu ws-dx-rx-gen"><small>${esc(t.report.generated(formatDate(report.generatedAt, ctx.lang)))}</small></p>${
+        sections.length === 0
+          ? `<p class="mu">${esc(x.emptyPreview)}</p>`
+          : sections.map((section) => previewSection(ctx, report, section)).join('')
+      }<section class="ws-dx-rx-sec ws-dx-rx-limits" aria-labelledby="ws-dx-rx-limits"><h4 id="ws-dx-rx-limits">${esc(t.report.limitations)}</h4>${listOrNone(
+        report.limitations.map((entry) => esc(entry)),
+        t.report.noLimitation,
+      )}</section>`;
+  return `${demoBanner(ctx)}<section class="ws-dx-rx" aria-labelledby="ws-dx-rx-title"><div class="ws-dx-boardhead"><h2 id="ws-dx-rx-title">${esc(x.title)}</h2><div class="row-acts"><button type="button" class="btn small ghost" data-action="ws-dx-report"${state.loading ? ' disabled' : ''} aria-busy="${String(state.loading === true)}">${icon('refresh')}<span>${esc(t.report.reread)}</span></button></div></div>${errorBox(ctx, ui, 'export')}<div class="ws-dx-rx-cols"><section class="ws-dx-rx-preview" aria-labelledby="ws-dx-rx-pt"><h3 id="ws-dx-rx-pt" class="ws-dx-coltitle">${esc(x.preview)}</h3><div class="ws-dx-rx-doc" tabindex="0" role="region" aria-labelledby="ws-dx-rx-pt">${preview}</div></section><section class="ws-dx-rx-export" aria-labelledby="ws-dx-rx-et"><h3 id="ws-dx-rx-et" class="ws-dx-coltitle">${esc(x.export)}</h3><ul class="plain ws-dx-rx-btns">${exportButtons}</ul>${sections.length === 0 ? `<p class="ws-dx-why warn" id="${noneId}">${esc(x.noSection)}</p>` : ''}<p class="mu"><small>${esc(x.exportNote)}</small></p></section><fieldset class="ws-dx-rx-sections"><legend class="ws-dx-coltitle">${esc(x.sections)}</legend><ul class="plain ws-dx-rx-checks">${checks}</ul><div class="row-acts"><button type="button" class="btn small ghost" data-action="ws-dx-sections" data-value="all"${sections.length === REPORT_SECTIONS.length ? ' disabled' : ''}>${esc(x.all)}</button><button type="button" class="btn small ghost" data-action="ws-dx-sections" data-value="none"${sections.length === 0 ? ' disabled' : ''}>${esc(x.none)}</button></div></fieldset></div></section>`;
+}
+
+// ── Écran 11 : Test de non-régression ─────────────────────────────────────────────────────────
+
+/** Le test Playwright généré (`GET …/regression/spec`) et l'état de son chargement (fournis par l'intégration). */
+export interface RegressionSpecView {
+  language?: 'typescript';
+  code?: string;
+  loading?: boolean;
+  error?: string;
+  /** Le serveur ne sait pas le produire : la raison. */
+  unavailable?: string;
+}
+
+/** La pastille du statut : « Validé » seulement pour ACCEPTED. */
+function regressionStatusChip(
+  ctx: WorkspaceContext,
+  proposal: Pick<RegressionTestProposal, 'status'>,
+): string {
+  const r = screen(ctx.lang).rt;
+  return chip(
+    proposal.status,
+    proposal.status === 'ACCEPTED' ? r.validated : proposal.status === 'REJECTED' ? r.rejected : r.proposed,
+  );
+}
+
+const CODE_PREVIEW_LINES = 14;
+
+function codeBlock(ctx: WorkspaceContext, ui: DiagnosisUi, code: string, id: string, label: string): string {
+  const r = screen(ctx.lang).rt;
+  const lines = code.replace(/\n$/, '').split('\n');
+  const hidden = ui.regFull ? 0 : Math.max(0, lines.length - CODE_PREVIEW_LINES);
+  const shown = hidden > 0 ? lines.slice(0, CODE_PREVIEW_LINES) : lines;
+  const gutter = shown.map((_line, index) => `<span>${String(index + 1)}</span>`).join('');
+  return `<div class="ws-dx-rt-code${ui.regFull ? ' ws-dx-rt-full' : ''}"><pre class="ws-dx-rt-gutter" aria-hidden="true">${gutter}</pre><pre class="ws-dx-rt-pre" id="${id}" tabindex="0" aria-label="${esc(label)}" aria-readonly="true"><code>${esc(shown.join('\n'))}</code></pre></div>${
+    hidden > 0 || ui.regFull
+      ? `<div class="row-acts ws-dx-rt-more"><button type="button" class="btn small ghost" data-action="ws-dx-reg-full" aria-expanded="${String(ui.regFull)}" aria-controls="${id}">${icon(ui.regFull ? 'minimize' : 'maximize')}<span>${esc(ui.regFull ? r.fullHide : r.full)}</span></button>${hidden > 0 ? `<small class="mu">${esc(r.hiddenLines(hidden))}</small>` : ''}</div>`
+      : ''
+  }`;
+}
+
+/**
+ * ÉCRAN 11 — « Test de non-régression » : le test généré (flow YAML, et le test Playwright TypeScript quand
+ * le serveur sait le produire), « Validé » seulement si la proposition est ACCEPTED, le verdict de la
+ * dernière exécution réelle (« Réussie » seulement si `execution.passed === true`), « Voir le test
+ * complet », et les actions selon les droits : « Exécuter » (RUN), « Ajouter au catalogue » (PUBLISH),
+ * « Refuser » (DECIDE) — désactivées avec leur raison quand le rôle ne le permet pas.
+ */
+export function renderRegressionTest(
+  ctx: WorkspaceContext,
+  ui: DiagnosisUi,
+  spec?: RegressionSpecView,
+): string {
+  const t = text(ctx.lang);
+  const r = screen(ctx.lang).rt;
+  const incident = ctx.incident;
+  const proposal = incident.investigation.regression;
+  const ready = investigable(incident);
+  const proposeReason = !ready ? t.notReady : !incident.scenario ? t.reg.noScenario : undefined;
+  const regButton = (op: string, label: string, options: Partial<OpButton> = {}): string =>
+    opButton(ctx, ui, { action: 'ws-dx-regression', label, ref: op, data: { op }, small: true, ...options });
+  const propose = ctx.can('RUN')
+    ? regButton('propose', proposal ? r.proposeAgain : r.propose, {
+        primary: !proposal,
+        ...(proposeReason ? { reason: proposeReason, reasonId: 'ws-dx-rt-propose-why' } : {}),
+      })
+    : '';
+  const head = (pill: string): string =>
+    `<div class="ws-dx-boardhead"><h2 id="ws-dx-rt-title">${esc(r.title)}</h2>${pill}</div>`;
+  if (!proposal)
+    return `<section class="ws-dx-rt" aria-labelledby="ws-dx-rt-title">${head('')}${errorBox(ctx, ui, 'regression')}<p class="mu">${esc(incident.scenario ? t.reg.none : t.reg.noScenario)}</p><div class="row-acts">${propose}${reasonNote('ws-dx-rt-propose-why', ctx.can('RUN') ? proposeReason : undefined)}</div></section>`;
+  const verdict = regressionVerdict(proposal);
+  const execution = proposal.execution;
+  const tab = ui.regTab;
+  const tabs = `<div class="ws-dx-rt-tabs" role="tablist" aria-label="${esc(r.tabs)}">${(
+    ['flow', 'spec'] as const
+  )
+    .map(
+      (key) =>
+        `<button type="button" role="tab" id="ws-dx-rt-tab-${key}" class="ws-dx-rt-tab" data-action="ws-dx-reg-tab" data-tab="${key}" aria-selected="${String(tab === key)}" aria-controls="ws-dx-rt-panel" tabindex="${tab === key ? '0' : '-1'}">${esc(key === 'flow' ? r.flow : r.spec)}</button>`,
+    )
+    .join('')}</div>`;
+  const panel =
+    tab === 'flow'
+      ? codeBlock(ctx, ui, proposal.flowYaml, 'ws-dx-rt-src', r.flow)
+      : spec?.code !== undefined
+        ? codeBlock(ctx, ui, spec.code, 'ws-dx-rt-src', r.spec)
+        : spec?.unavailable !== undefined
+          ? panelState(ctx.lang, 'empty', spec.unavailable)
+          : spec?.error !== undefined
+            ? panelState(ctx.lang, 'error', spec.error, 'ws-dx-reg-spec')
+            : spec?.loading
+              ? panelState(ctx.lang, 'loading', r.specLoading)
+              : `${panelState(ctx.lang, 'empty', r.specMissing)}<div class="row-acts"><button type="button" class="btn small" data-action="ws-dx-reg-spec">${esc(r.specLoad)}</button></div>`;
+  const runReason = !ctx.can('RUN')
+    ? r.runRight
+    : proposal.status === 'REJECTED'
+      ? r.rejectedRun
+      : !ready
+        ? t.notReady
+        : undefined;
+  const decided = proposal.status !== 'PROPOSED';
+  const acceptReason = !ctx.can('PUBLISH') ? r.acceptRight : decided ? r.decided : undefined;
+  const rejectReason = !ctx.can('DECIDE') ? r.rejectRight : decided ? r.decided : undefined;
+  const reasons = [
+    ...new Set([runReason, acceptReason, rejectReason].filter((entry): entry is string => !!entry)),
+  ];
+  const actions = `<div class="row-acts ws-dx-rt-acts">${regButton('run', r.run, {
+    ...(runReason ? { reason: runReason, reasonId: 'ws-dx-rt-why' } : {}),
+  })}${regButton('accept', r.accept, {
+    primary: !decided,
+    ...(acceptReason ? { reason: acceptReason, reasonId: 'ws-dx-rt-why' } : {}),
+  })}${regButton('reject', r.reject, {
+    ...(rejectReason ? { reason: rejectReason, reasonId: 'ws-dx-rt-why' } : {}),
+  })}${propose}</div>${reasons.length > 0 ? `<small class="mu ws-dx-why" id="ws-dx-rt-why">${esc(reasons.join(' '))}</small>` : ''}${reasonNote('ws-dx-rt-propose-why', ctx.can('RUN') ? proposeReason : undefined)}`;
+  const last = `<p class="ws-dx-verdict" data-verdict="${verdict}"><b>${esc(r.lastRun)} :</b> ${
+    verdict === 'NOT_RUN' || !execution
+      ? `${verdictChip(t, 'NOT_RUN')}<small class="mu">${esc(r.neverRun)}</small>`
+      : `${chip(verdict, verdict === 'PASSED' ? r.passed : r.failed)}<small class="mu">${esc(r.ranAt(execution.run, formatDate(execution.at, ctx.lang)))}</small>`
+  }</p>`;
+  return `<section class="ws-dx-rt" aria-labelledby="ws-dx-rt-title">${head(regressionStatusChip(ctx, proposal))}${errorBox(ctx, ui, 'regression')}<dl class="ws-dx-dl">${dlRow(t.reg.name, esc(proposal.name))}${dlRow(t.reg.basedOn, esc(proposal.basedOn))}${dlRow(t.reg.expected, esc(proposal.expected))}${proposal.file ? dlRow(t.reg.file, `<code>${esc(proposal.file)}</code>`) : ''}</dl><h3 class="ws-dx-coltitle">${esc(r.generated)}</h3>${tabs}<div id="ws-dx-rt-panel" role="tabpanel" aria-labelledby="ws-dx-rt-tab-${tab}">${panel}</div>${last}${!decided ? `<p class="note">${icon('info')}<span>${esc(r.catalogNote)}</span></p>` : proposal.status === 'ACCEPTED' && proposal.file ? `<p class="mu">${esc(r.inCatalog(proposal.file))}</p>` : ''}${actions}</section>`;
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────────────────────
@@ -1695,6 +2594,101 @@ export const INCIDENT_DIAGNOSIS_CSS = `
 .ws-dx-detail{display:flex;flex-direction:column;gap:6px;min-width:0}
 .ws-dx-detail h3{margin:0;overflow-wrap:anywhere}
 .ws-dx-linked,.ws-dx-evlist{display:flex;flex-direction:column;gap:6px;margin:0;padding:0}
+.ws-dx-board,.ws-dx-rx,.ws-dx-rt{container-type:inline-size;display:flex;flex-direction:column;gap:12px;min-width:0}
+.ws-dx-boardhead{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.ws-dx-boardhead h2{margin:0;font-size:18px}
+.ws-dx-boardhead .row-acts{margin-left:auto;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ws-dx-coltitle{display:flex;align-items:center;gap:6px;margin:0 0 8px;font-size:14px;font-weight:700}
+.ws-dx-cols{display:grid;grid-template-columns:minmax(220px,1fr) minmax(280px,1.25fr) minmax(260px,1.1fr);gap:12px;align-items:start}
+.ws-dx-col{min-width:0;padding:12px 14px;border:1px solid var(--qa-color-border);border-radius:12px;background:var(--qa-color-surface)}
+.ws-dx-hlist{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none}
+.ws-dx-hrow{border-radius:8px}
+.ws-dx-hbtn{display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"rank title pct" "rank status status";gap:4px 8px;align-items:center;width:100%;min-height:44px;padding:8px 10px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface);color:var(--qa-color-text);font:inherit;text-align:left;cursor:pointer}
+.ws-dx-hbtn:hover{border-color:var(--qa-color-border-strong)}
+.ws-dx-hbtn:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px}
+.ws-dx-hbtn[aria-pressed="true"]{border-color:var(--qa-color-primary);background:color-mix(in srgb,var(--qa-color-primary) 8%,var(--qa-color-surface))}
+.ws-dx-rank{grid-area:rank;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--qa-color-surface-2);font-size:12px;font-weight:700;color:var(--qa-color-muted)}
+.ws-dx-htitle{grid-area:title;font-weight:600;overflow-wrap:anywhere}
+.ws-dx-hbtn .ws-dx-pct{grid-area:pct}
+.ws-dx-hbtn .ws-dx-chip{grid-area:status;justify-self:start}
+.ws-dx-pct{display:inline-block;padding:1px 8px;border-radius:999px;font:600 12px var(--qa-font-family-mono);white-space:nowrap}
+.ws-dx-pct-high{background:color-mix(in srgb,var(--qa-color-success) 16%,transparent);color:color-mix(in srgb,var(--qa-color-success) 52%,var(--qa-color-text))}
+.ws-dx-pct-mid{background:color-mix(in srgb,var(--qa-color-warning) 18%,transparent);color:color-mix(in srgb,var(--qa-color-warning) 55%,var(--qa-color-text))}
+.ws-dx-pct-low{background:color-mix(in srgb,var(--qa-color-danger) 14%,transparent);color:color-mix(in srgb,var(--qa-color-danger) 60%,var(--qa-color-text))}
+.ws-dx-col-cause{padding:0;border:0;background:none}
+.ws-dx-cause-card{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--qa-color-border);border-radius:12px;background:var(--qa-color-surface);min-width:0}
+.ws-dx-cause-card.ws-dx-root-warn{border-left:4px dashed var(--qa-color-warning)}
+.ws-dx-cause-card.ws-dx-root-ok{border-left:4px solid var(--qa-color-success)}
+.ws-dx-cause-card.ws-dx-root-mu{border-left:4px dotted var(--qa-color-muted)}
+.ws-dx-root-warn>.ws-dx-coltitle{color:color-mix(in srgb,var(--qa-color-warning) 60%,var(--qa-color-text))}
+.ws-dx-root-ok>.ws-dx-coltitle{color:color-mix(in srgb,var(--qa-color-success) 55%,var(--qa-color-text))}
+.ws-dx-cause-card p{margin:0}
+.ws-dx-confline{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;font-size:13px}
+.ws-dx-explain{overflow-wrap:anywhere}
+.ws-dx-cardnote{font-size:13px}
+.ws-dx-hyplink{font-size:13px}
+.ws-dx-whybtn{align-self:flex-start;display:inline-flex;align-items:center;gap:6px}
+.ws-dx-whybody{display:flex;flex-direction:column;gap:6px}
+.ws-dx-whybody h4{margin:6px 0 2px;font-size:13px;display:flex;gap:6px;align-items:center}
+.ws-dx-checks{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none}
+.ws-dx-checkrow{display:grid;grid-template-columns:24px minmax(0,1fr);gap:8px;align-items:start;padding:6px 4px;border-radius:8px}
+.ws-dx-cbox{width:18px;height:18px;margin:2px 0 0;accent-color:var(--qa-color-primary);cursor:pointer}
+.ws-dx-cbox:disabled{cursor:not-allowed}
+.ws-dx-cbox:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px}
+.ws-dx-cicon{display:inline-grid;place-items:center;width:20px;height:20px;color:var(--qa-color-muted)}
+.ws-dx-cicon-done{color:var(--qa-color-success)}
+.ws-dx-cicon-refused,.ws-dx-cicon-error{color:var(--qa-color-danger)}
+.ws-dx-cbody{display:flex;flex-direction:column;gap:4px;min-width:0}
+.ws-dx-clabel{overflow-wrap:anywhere;cursor:default}
+label.ws-dx-clabel{cursor:pointer}
+.ws-dx-cmeta{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center}
+.ws-dx-cdetail{font-size:12px;padding:0;min-height:24px}
+.ws-dx-runbar{display:flex;flex-direction:column;align-items:stretch;gap:6px;margin-top:10px}
+.ws-dx-runbar>small{font-size:12px}
+.ws-dx-rx-cols{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(170px,.8fr) minmax(200px,.9fr);gap:12px;align-items:start}
+.ws-dx-rx-preview,.ws-dx-rx-export,.ws-dx-rx-sections{min-width:0;margin:0;padding:12px 14px;border:1px solid var(--qa-color-border);border-radius:12px;background:var(--qa-color-surface)}
+.ws-dx-rx-doc{display:flex;flex-direction:column;gap:10px;max-height:min(70vh,640px);overflow:auto;padding:12px 14px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-background)}
+.ws-dx-rx-doc:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px}
+.ws-dx-rx-gen{margin:0}
+.ws-dx-rx-sec{display:flex;flex-direction:column;gap:4px;padding-bottom:8px;border-bottom:1px solid var(--qa-color-border)}
+.ws-dx-rx-sec:last-child{border-bottom:0}
+.ws-dx-rx-sec h4{margin:0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--qa-color-muted)}
+.ws-dx-rx-sec p{margin:0;overflow-wrap:anywhere}
+.ws-dx-rx-id{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.ws-dx-rx-title{font-size:16px}
+.ws-dx-rx-list{display:flex;flex-direction:column;gap:4px;margin:0;padding-left:20px;font-size:13px}
+.ws-dx-rx-list li{overflow-wrap:anywhere}
+.ws-dx-rx-tbl{font-size:13px;min-width:360px}
+.ws-dx-rx-ko{background:color-mix(in srgb,var(--qa-color-danger) 9%,transparent)}
+.ws-dx-rx-files{font-size:12px}
+.ws-dx-rx-more{font-size:12px}
+.ws-dx-rx-btns{display:flex;flex-direction:column;gap:6px;margin:0 0 8px;padding:0;list-style:none}
+.ws-dx-rx-btn{width:100%;justify-content:flex-start;display:inline-flex;align-items:center;gap:8px}
+.ws-dx-rx-sections legend{float:left;width:100%;padding:0}
+.ws-dx-rx-checks{clear:both;display:flex;flex-direction:column;gap:2px;margin:0 0 8px;padding:0;list-style:none}
+.ws-dx-rx-check{display:flex;align-items:center;gap:8px;min-height:30px;cursor:pointer}
+.ws-dx-rx-check input{width:18px;height:18px;margin:0;accent-color:var(--qa-color-primary)}
+.ws-dx-rx-check input:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px}
+.ws-dx-rt-tabs{display:flex;gap:2px;border-bottom:1px solid var(--qa-color-border)}
+.ws-dx-rt-tab{min-height:32px;padding:4px 12px;border:0;border-bottom:2px solid transparent;background:none;color:var(--qa-color-muted);font:600 13px var(--qa-font-family);cursor:pointer}
+.ws-dx-rt-tab[aria-selected="true"]{color:var(--qa-color-primary);border-bottom-color:var(--qa-color-primary)}
+.ws-dx-rt-tab:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:-2px}
+.ws-dx-rt-code{display:grid;grid-template-columns:auto minmax(0,1fr);max-height:360px;overflow:auto;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-background)}
+.ws-dx-rt-code.ws-dx-rt-full{max-height:none}
+.ws-dx-rt-gutter{display:flex;flex-direction:column;margin:0;padding:10px 8px;text-align:right;font:12px/1.55 var(--qa-font-family-mono);color:var(--qa-color-muted);border-right:1px solid var(--qa-color-border);user-select:none}
+.ws-dx-rt-pre{margin:0;padding:10px 12px;font:12px/1.55 var(--qa-font-family-mono);white-space:pre;overflow:visible}
+.ws-dx-rt-pre code{display:block;padding:0;border:0;border-radius:0;background:none;font:inherit;overflow-wrap:normal}
+.ws-dx-rt-pre:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:-2px}
+.ws-dx-rt-more{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ws-dx-rt-acts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+@container (max-width:900px){
+  .ws-dx-cols{grid-template-columns:minmax(0,1fr)}
+  .ws-dx-rx-cols{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .ws-dx-rx-preview{grid-column:1/-1}
+}
+@container (max-width:560px){
+  .ws-dx-rx-cols{grid-template-columns:minmax(0,1fr)}
+}
 @container (max-width:600px){
   .ws-dx-evidence{grid-template-columns:1fr}
   .ws-dx-param{grid-template-columns:minmax(0,1fr) auto}

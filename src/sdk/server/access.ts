@@ -240,11 +240,15 @@ export class AccessStore {
 export function rightFor(segments: readonly string[], method: string): Right {
   const [, resource, id, sub, item, action] = segments;
   if (resource === 'access') return id === 'me' && method === 'GET' ? 'VIEW' : 'MANAGE_ACCESS';
-  // Lire le code des dépôts du périmètre d'une investigation : investiguer (RUN), pas seulement voir.
+  // Lire le code des dépôts du périmètre d'une investigation, ses dossiers (arborescence du périmètre)
+  // ou le contenu de ses pièces jointes : investiguer (RUN), pas seulement voir.
   if (
     resource === 'projects' &&
     sub === 'incidents' &&
-    (segments[5] === 'source' || segments[5] === 'sources')
+    (segments[5] === 'source' ||
+      segments[5] === 'sources' ||
+      segments[5] === 'attachments' ||
+      (segments[5] === 'scope' && segments[6] === 'tree'))
   )
     return 'RUN';
   if (method === 'GET' || method === 'HEAD') return 'VIEW';
@@ -306,6 +310,12 @@ const LIVE_CONTROLS = new Set<string>(RECORDING_CONTROLS);
 function incidentRight(segments: readonly string[]): Right {
   const [, , , , , action, part, decision] = segments;
   if (action === 'scope' && part === 'extensions' && decision !== undefined) return 'DECIDE';
+  // L'investigation IA : trancher une vérification proposée et prolonger un budget sont des décisions.
+  if (action === 'ai' && part === 'extend-budget') return 'DECIDE';
+  if (action === 'ai' && part === 'experiments' && decision !== undefined) return 'DECIDE';
+  // La découverte des déclencheurs : mêmes décisions (vérification proposée, budget).
+  if (action === 'trigger' && part === 'extend-budget') return 'DECIDE';
+  if (action === 'trigger' && part === 'experiments' && decision !== undefined) return 'DECIDE';
   if (action === 'regression' && part === 'accept') return 'PUBLISH';
   if (action === 'regression' && part === 'reject') return 'DECIDE';
   return 'RUN';
@@ -374,6 +384,16 @@ const KEYWORDS = new Set([
   'decisions',
   'publish',
   'incidents',
+  'ai',
+  'trigger',
+  'describe',
+  'start',
+  'report',
+  'investigate',
+  'pause',
+  'ask',
+  'memory',
+  'extend-budget',
   'update',
   'scope',
   'extensions',
@@ -390,6 +410,9 @@ const KEYWORDS = new Set([
   'sources',
   'source',
   'screenshot',
+  'attachments',
+  'tree',
+  'spec',
 ]);
 
 /** L'action d'une requête, d'après les mots de sa route (les identifiants sont omis). */

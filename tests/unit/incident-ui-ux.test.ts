@@ -7,10 +7,16 @@ import type {
 } from '../../src/sdk/core/incident-contracts.js';
 import { workspaceLinks } from '../../src/sdk/ui/incident-links.js';
 import { workspaceContext, type WorkspaceContext } from '../../src/sdk/ui/incident-parts.js';
+import type { EnvironmentCheck } from '../../src/sdk/core/contracts.js';
 import {
+  connectivityFailure,
+  connectivityInput,
+  connectivityOf,
+  connectivityTargets,
   emptyUxUi,
   environmentDirty,
   executionOf,
+  INCIDENT_FLOW_CSS,
   INCIDENT_UX_CSS,
   reduceUx,
   renderEnvironmentSelector,
@@ -20,8 +26,10 @@ import {
   renderTabs,
   renderWorkspaceHeader,
   rovingTarget,
+  withConnectivity,
   workspaceProgress,
   workspaceTabs,
+  type EnvironmentRef,
   type UxUi,
   type WorkspaceStage,
 } from '../../src/sdk/ui/incident-ux.js';
@@ -340,16 +348,57 @@ describe('workspaceProgress', () => {
 });
 
 describe('renderStepper', () => {
-  it('an ordered list of stage buttons, aria-current="step" on the current one only', () => {
+  it('unfolded: an ordered list of the ten stages with their written status, aria-current="step" once', () => {
     const html = renderStepper(contextOf(reproduced()));
-    expect(html).toContain('<nav class="ws-ux-stepper" aria-label="Progression de l’investigation">');
-    expect(html).toContain('<ol>');
+    expect(html).toContain(
+      '<nav class="ws-ux-stepper ws-ux-stepper-open" aria-label="Progression de l’investigation">',
+    );
+    expect(html).toContain('<ol id="ws-ux-steps">');
+    expect(html.match(/<li class="ws-ux-stage/g)).toHaveLength(10);
     expect(html.match(/data-action="ws-ux-stage"/g)).toHaveLength(10);
     expect(html.match(/aria-current="step"/g)).toHaveLength(1);
-    expect(html).toMatch(/data-stage="code" aria-current="step"/);
+    expect(html).toMatch(
+      /<li[^>]*><button type="button" data-action="ws-ux-stage" data-stage="code" aria-current="step"/,
+    );
     expect(html).toContain('5 étape(s) terminée(s) sur 10');
     expect(html).toContain('Analyse du code');
     expect(html).toContain('ws-ux-s-done');
+    expect(html).toContain('data-action="ws-ux-stepper" aria-expanded="true" aria-controls="ws-ux-steps"');
+    expect(html).not.toContain('ws-ux-steps-row');
+  });
+
+  it('folded (default of the workspace): ONE row of the ten numbered stages, each a button, then n/10', () => {
+    const html = renderStepper(contextOf(reproduced()), { open: false });
+    expect(html).toContain(
+      '<nav class="ws-ux-stepper ws-ux-stepper-row" aria-label="Progression de l’investigation">',
+    );
+    expect(html).not.toContain('id="ws-ux-steps"');
+    expect(html).toContain('<ol class="ws-ux-steps-row">');
+    expect(html.match(/<li class="ws-ux-sr /g)).toHaveLength(10);
+    expect(html.match(/data-action="ws-ux-stage" data-stage="[a-z]+"/g)).toHaveLength(10);
+    expect(html.match(/aria-current="step"/g)).toHaveLength(1);
+    expect(html).toContain(
+      'data-action="ws-ux-stepper" aria-expanded="false" title="Afficher les dix étapes"',
+    );
+    // Numéro, libellé court ; une étape terminée porte une coche, son statut est écrit pour les lecteurs d'écran.
+    expect(html).toMatch(
+      /data-stage="code" aria-current="step" title="6\. Analyse du code — Étape actuelle"><span class="ws-ux-sn" aria-hidden="true"><span>6<\/span><\/span><span class="sr">6\. <\/span><span class="ws-ux-sl">Analyse<\/span><span class="sr"> \(Étape actuelle\)<\/span>/,
+    );
+    expect(html).toMatch(
+      /<li class="ws-ux-sr ws-ux-s-done"><button[^>]*data-stage="description"[^>]*><span class="ws-ux-sn" aria-hidden="true"><svg/,
+    );
+    expect(html).toContain('<span class="sr"> (Terminée)</span>');
+    expect(html).toContain('<span class="ws-ux-sl">Non-régression</span>');
+    expect(html).toContain('<span class="ws-ux-step-n" aria-label="étape 6 sur 10">6/10</span>');
+    const blocked = renderStepper(contextOf({ ...reproduced(), state: 'CANCELLED' }), { open: false });
+    expect(blocked).toContain('<li class="ws-ux-sr ws-ux-s-blocked">');
+    expect(blocked).toContain('(Bloquée)');
+    const running = renderStepper(contextOf(draft({ scope: scope(true), state: 'REPRODUCING' })), {
+      open: false,
+    });
+    expect(running).toContain('ws-ux-run');
+    expect(running).toContain('ws-ux-s-running');
+    expect(running).toContain('<span class="sr"> (En cours)</span>');
   });
 
   it('a blocked stage says so in text, not only in colour', () => {
@@ -369,13 +418,18 @@ describe('renderStepper', () => {
       execution: { run: 'run-1', passed: true, at },
     };
     expect(renderStepper(contextOf(incident))).not.toContain('aria-current');
+    expect(renderStepper(contextOf(incident), { open: false })).not.toContain('aria-current');
+    expect(renderStepper(contextOf(incident), { open: false })).toContain('10/10');
   });
 });
 
 describe('renderWorkspaceHeader', () => {
   it('title, severity, state, environment, scenario, update and the actions slot', () => {
-    const html = renderWorkspaceHeader(contextOf(reproduced()), '<button data-action="x">Agir</button>');
-    expect(html).toContain('<h1 id="ws-ux-title">Erreur 500 après Enregistrer</h1>');
+    const ctx = contextOf(reproduced());
+    const html = renderWorkspaceHeader(ctx, '<button data-action="x">Agir</button>', { open: true });
+    expect(html).toContain(
+      '<h1 id="ws-ux-title" title="Erreur 500 après Enregistrer">Erreur 500 après Enregistrer</h1>',
+    );
     expect(html).toContain('<span class="sr">Gravité : </span>Haute');
     expect(html).toContain('Reproduit');
     expect(html).toContain('<b>Local</b>');
@@ -384,11 +438,47 @@ describe('renderWorkspaceHeader', () => {
     expect(html).toContain(`datetime="${at}"`);
     expect(html).toContain('<button data-action="x">Agir</button>');
     expect(html).not.toContain('ws-demo');
+    expect(html).toContain(
+      'data-action="ws-ux-details" aria-expanded="true" aria-controls="ws-ux-head-more"',
+    );
+  });
+
+  it('compact by default: one row (back, title, pills, environment chip, actions), the rest behind « Détails »', () => {
+    const ctx = contextOf(reproduced());
+    const html = renderWorkspaceHeader(ctx, '<button data-action="x">Agir</button>', {
+      back: '<button class="back" data-action="back">Incidents</button>',
+    });
+    expect(html).toMatch(
+      /<div class="ws-ux-head-top"><button class="back" data-action="back">Incidents<\/button><div class="ws-ux-head-t"><h1/,
+    );
+    expect(html).toContain('<span class="ws-ux-env" title="environnement du projet env_test">');
+    expect(html).toContain('data-action="ws-ux-details" aria-expanded="false" title=');
+    expect(html).toContain('<span>Détails</span>');
+    expect(html).not.toContain('id="ws-ux-head-more"');
+    expect(html).not.toContain(`datetime="${at}"`);
+    expect(html).toContain('<button data-action="x">Agir</button>');
   });
 
   it('shows the demo banner, the cancelled origin and the running reproduction', () => {
     const demo = renderWorkspaceHeader(contextOf(reproduced(), { demo: true }), '');
     expect(demo).toContain('Données de démonstration');
+    // Une seule ligne, même quand les vues ne répètent pas le bandeau (`demoInShell`) ; le motif des
+    // actions indisponibles est la note `#ws-demo-why`, lue par les lecteurs d'écran et en infobulle.
+    const shell = renderWorkspaceHeader(
+      { ...contextOf(reproduced(), { demo: true }), demoInShell: true },
+      '',
+      {
+        demoNote: 'Données de démonstration : action indisponible.',
+      },
+    );
+    expect(shell.match(/class="ws-demo"/g)).toHaveLength(1);
+    expect(shell).toContain('<div class="ws-ux-demo" title="Un incident fictif');
+    expect(shell).toContain(
+      '<p class="sr" id="ws-demo-why">Données de démonstration : action indisponible.</p>',
+    );
+    expect(renderWorkspaceHeader(contextOf(reproduced()), '', { demoNote: 'x' })).not.toContain(
+      'ws-demo-why',
+    );
     const cancelled = renderWorkspaceHeader(
       contextOf({ ...reproduced(), state: 'CANCELLED', cancelledFrom: 'REPRODUCED' }),
       '',
@@ -422,6 +512,24 @@ describe('renderTabs', () => {
     expect(html).toContain('<span class="sr">2 élément(s)</span>');
     expect(renderTabPanel('hypotheses', '<p>x</p>')).toContain(
       'role="tabpanel" aria-labelledby="ws-ux-tab-hypotheses"',
+    );
+    // Les sous-onglets : leur action, leur identifiant ; le panneau est relié au sous-onglet choisi.
+    const subs = renderTabs(ctx, [{ key: 'http', label: 'HTTP', count: 2 }], 'http', {
+      kind: 'sub',
+      label: 'Vues de « Traçabilité »',
+    });
+    expect(subs).toContain(
+      'class="tabs ws-ux-tabs ws-ux-subtabs" role="tablist" aria-label="Vues de « Traçabilité »"',
+    );
+    expect(subs).toContain(
+      'id="ws-ux-sub-http" data-action="ws-ux-sub" data-sub="http" aria-selected="true"',
+    );
+    expect(renderTabPanel('requests', '<p>x</p>', 'ws-ux-sub-http', 'ws-body')).toBe(
+      '<div id="ws-ux-panel" class="ws-ux-panel ws-body" role="tabpanel" aria-labelledby="ws-ux-sub-http"><p>x</p></div>',
+    );
+    // Des outils à droite de la barre (disposition, mode compact).
+    expect(renderTabs(ctx, tabs, 'overview', { tools: '<button>t</button>' })).toMatch(
+      /^<div class="ws-ux-tabbar"><div class="tabs ws-ux-tabs"[^]*<div class="ws-ux-tabtools"><button>t<\/button><\/div><\/div>$/,
     );
   });
 
@@ -511,19 +619,191 @@ describe('renderEnvironmentSelector', () => {
 
   it('three cards in a radio group, the saved one checked, LOCAL marked as default', () => {
     const html = renderEnvironmentSelector(contextOf(reproduced()), emptyUxUi(), capabilities);
+    expect(html).toContain('<h2 id="ws-ux-env-t" class="fl">Sélection de l’environnement</h2>');
     expect(html).toContain('role="radiogroup"');
     expect(html.match(/role="radio"/g)).toHaveLength(3);
     expect(html).toMatch(/data-target="LOCAL" aria-checked="true" tabindex="0"/);
     expect(html).toMatch(/data-target="REMOTE" aria-checked="false" tabindex="-1"/);
     expect(html).toMatch(/data-target="ARO" aria-checked="false" tabindex="-1"/);
+    // Nom court (titre de la carte), description (les capacités) : la carte se lit sans tout répéter.
+    expect(html).toContain('aria-labelledby="ws-ux-tg-LOCAL-t" aria-describedby="ws-ux-tg-LOCAL-d"');
+    expect(html).toContain('<b id="ws-ux-tg-ARO-t" class="ws-ux-tg-t">ARO (OpenShift)');
     expect(html).toContain('Par défaut');
     expect(html).toContain('Capacités mesurées');
     expect(html).toContain('Programme local');
-    expect(html).toContain('Indisponibles');
+    // Mesuré : une coche pour ce qui est disponible, une croix pour ce qui ne l'est pas.
+    expect(html).toMatch(/ws-ux-cap-ko[^]*Tests : <\/span>Indisponibles/);
     expect(html).toContain('mvn introuvable dans le PATH');
+    // Les cibles non mesurées : le cas général, dit comme tel.
     expect(html).toContain('Conteneur dans le cluster');
-    expect(html).toMatch(/data-action="ws-ux-target-save"[^>]*disabled/);
+    expect(html.match(/Cas général \(non mesuré\)/g)).toHaveLength(2);
+    // Rien à enregistrer : pas de bouton d'enregistrement, « Étape suivante » mène à la reproduction.
+    expect(html).not.toContain('ws-ux-target-save');
+    expect(html).toMatch(/data-action="ws-ux-stage" data-stage="reproduction"(?![^>]*disabled)/);
     expect(html).not.toContain('data-ws-field');
+  });
+
+  it('the selected configuration: real URLs and repositories only, tested from the server', () => {
+    const incident = reproduced();
+    incident.scope.applications = [
+      {
+        id: 'bff',
+        name: 'BFF livres',
+        layer: 'BFF',
+        repository: { root: '/repos/bff', include: [] },
+        baseUrl: 'http://bff.test',
+      },
+      { id: 'api', name: 'Catalogue', layer: 'BACKEND', repository: { root: '/repos/api', include: [] } },
+    ];
+    const environment: EnvironmentRef = {
+      id: 'env_test',
+      name: 'Recette',
+      kind: 'TEST',
+      baseUrl: 'http://books.test/',
+    };
+    const ctx = contextOf(incident);
+    const html = renderEnvironmentSelector(ctx, emptyUxUi(), undefined, { environment });
+    expect(html).toContain('<h3 id="ws-ux-config-t">Configuration sélectionnée : LOCAL</h3>');
+    expect(html).toContain(
+      '<dt>URL Frontend</dt><dd><ul class="plain ws-ux-urls"><li><code title="Recette">http://books.test/</code>',
+    );
+    expect(html).toContain('<code title="BFF livres">http://bff.test</code>');
+    // Le backend n'a pas d'URL : rien n'est inventé.
+    expect(html).toContain('<dt>URL Backend</dt><dd><span class="mu">non indiquée</span>');
+    expect(html).toContain('<li><code>/repos/bff</code></li><li><code>/repos/api</code></li>');
+    expect(html).toMatch(/data-action="ws-ux-check" aria-busy="false" aria-describedby="ws-ux-check-h">/);
+    expect(html).toContain('Chaque URL est jointe depuis le serveur QA-CRAWLER');
+
+    const checking = renderEnvironmentSelector(
+      ctx,
+      reduceUx(emptyUxUi(), 'ws-ux-check', {}) ?? emptyUxUi(),
+      undefined,
+      {
+        environment,
+      },
+    );
+    expect(checking).toMatch(/data-action="ws-ux-check" aria-busy="true"[^>]*disabled/);
+    expect(checking.match(/Vérification…/g)).toHaveLength(2);
+
+    const done = withConnectivity(emptyUxUi(), {
+      environment: {
+        url: 'http://books.test/',
+        formatOk: true,
+        reachable: true,
+        status: 200,
+        durationMs: 34,
+      },
+      'app:bff': {
+        url: 'http://bff.test',
+        formatOk: true,
+        reachable: false,
+        durationMs: 5001,
+        message: 'délai dépassé',
+      },
+    });
+    const shown = renderEnvironmentSelector(ctx, done, undefined, { environment });
+    expect(shown).toContain('Joignable · HTTP 200 · 34 ms');
+    expect(shown).toContain('Injoignable : délai dépassé (5001 ms)');
+    const failed = renderEnvironmentSelector(
+      ctx,
+      reduceUx(emptyUxUi(), 'ws-ux-check-error', { message: 'refusé' }) ?? emptyUxUi(),
+      undefined,
+      {
+        environment,
+      },
+    );
+    expect(failed).toContain('<p class="err" role="alert">Test de connectivité impossible : refusé</p>');
+
+    // Aucune URL connue : le test est désactivé, la raison est dite.
+    const none = renderEnvironmentSelector(contextOf(reproduced()), emptyUxUi());
+    expect(none).toMatch(/data-action="ws-ux-check"[^>]*disabled/);
+    expect(none).toContain('Aucune URL connue');
+    // ARO : le montage des dépôts et le namespace saisis apparaissent dans l'encadré.
+    const aro = renderEnvironmentSelector(ctx, {
+      ...emptyUxUi(),
+      target: 'ARO',
+      fields: { 'aro.repositoriesMount': '/mnt/repos', 'aro.namespace': 'books-qa' },
+    });
+    expect(aro).toContain('Configuration sélectionnée : ARO (OpenShift)');
+    expect(aro).toContain('<dt>Montage des dépôts</dt><dd><code>/mnt/repos</code>');
+    expect(aro).toContain('<dt>Namespace</dt><dd><code>books-qa</code>');
+    // Un choix non enregistré : « Étape suivante » attend l'enregistrement, et le dit.
+    expect(aro).toMatch(/data-action="ws-ux-stage" data-stage="reproduction"[^>]*disabled/);
+    expect(aro).toContain('Enregistrer l’environnement choisi avant de passer à l’étape suivante.');
+  });
+
+  it('connectivity helpers: targets from real URLs, the check input, the measured result', () => {
+    const incident = reproduced();
+    incident.scope.applications = [
+      {
+        id: 'front',
+        name: 'Front',
+        layer: 'FRONTEND',
+        repository: { root: '/r/f', include: [] },
+        baseUrl: 'http://books.test/',
+      },
+      {
+        id: 'bff',
+        name: 'BFF',
+        layer: 'BFF',
+        repository: { root: '/r/b', include: [] },
+        baseUrl: ' http://bff.test ',
+      },
+    ];
+    const environment: EnvironmentRef = {
+      id: 'env_test',
+      name: 'Recette',
+      kind: 'TEST',
+      baseUrl: 'http://books.test/',
+    };
+    const targets = connectivityTargets(incident, environment);
+    // La même URL pour la même couche n'est testée qu'une fois.
+    expect(targets).toEqual([
+      { key: 'environment', role: 'FRONTEND', label: 'Recette', url: 'http://books.test/' },
+      { key: 'app:bff', role: 'BFF', label: 'BFF', url: 'http://bff.test' },
+    ]);
+    expect(connectivityTargets(incident)).toHaveLength(2);
+    // Une autre couche à la même URL : gardée, son URL n'est jamais cachée.
+    expect(
+      connectivityTargets(incident, { ...environment, baseUrl: 'http://bff.test' }).map(
+        (target) => target.key,
+      ),
+    ).toEqual(['environment', 'app:front', 'app:bff']);
+    const bff = targets[1];
+    if (!bff) throw new Error('BFF target expected');
+    expect(connectivityInput(bff, environment)).toEqual({
+      input: { name: 'Recette', kind: 'TEST', baseUrl: 'http://bff.test' },
+      options: { reach: true, selfId: 'env_test' },
+    });
+    expect(connectivityInput(bff).options).toEqual({ reach: true });
+    const check = (url: EnvironmentCheck['url']): EnvironmentCheck => ({
+      ok: true,
+      issues: [],
+      secrets: {},
+      ...(url ? { url } : {}),
+    });
+    expect(
+      connectivityOf(
+        'u',
+        check({ format: { ok: true }, reachable: { ok: true, status: 204, durationMs: 12 } }),
+      ),
+    ).toEqual({
+      url: 'u',
+      formatOk: true,
+      reachable: true,
+      status: 204,
+      durationMs: 12,
+    });
+    expect(connectivityOf('u', check({ format: { ok: false, message: 'URL absolue attendue' } }))).toEqual({
+      url: 'u',
+      formatOk: false,
+      message: 'URL absolue attendue',
+    });
+    expect(connectivityOf('u', check({ format: { ok: true } }))).toEqual({ url: 'u', formatOk: true });
+    expect(connectivityFailure('u', '403')).toEqual({ url: 'u', formatOk: true, message: '403' });
+    const ui = withConnectivity({ ...emptyUxUi(), checking: true, checkError: 'x' }, {});
+    expect(ui.checking).toBe(false);
+    expect(ui.checkError).toBeUndefined();
   });
 
   it('ARO shows its four required fields; REMOTE its optional OpenShift fields', () => {
@@ -538,7 +818,7 @@ describe('renderEnvironmentSelector', () => {
     expect(aro).toContain('Capacités mesurées pour la cible enregistrée (Local)');
     expect(aro).toContain('Modifications non enregistrées.');
     expect(aro).toContain('data-action="ws-ux-target-reset"');
-    expect(aro).not.toMatch(/data-action="ws-ux-target-save"[^>]*disabled/);
+    expect(aro).toMatch(/class="btn primary" data-action="ws-ux-target-save" aria-busy="false">/);
     const remote = renderEnvironmentSelector(ctx, { ...emptyUxUi(), target: 'REMOTE' });
     expect(remote).toContain('data-ws-field="remote.namespace"');
     expect(remote).not.toMatch(/data-ws-field="remote\.namespace"[^>]*required/);
@@ -624,6 +904,13 @@ describe('reduceUx', () => {
     expect(ui.error).toBe('Conflit de révision');
     expect(reduceUx(ui, 'ws-ux-saved', {})).toEqual(emptyUxUi());
     expect(reduceUx(ui, 'ws-ux-target-reset', {})).toEqual(emptyUxUi());
+    const checking = reduceUx(ui, 'ws-ux-check', {});
+    expect(checking?.checking).toBe(true);
+    expect(checking?.connectivity).toBeUndefined();
+    expect(reduceUx(checking ?? ui, 'ws-ux-check-error', { message: 'refusé' })).toMatchObject({
+      checking: false,
+      checkError: 'refusé',
+    });
   });
 
   it('leaves navigation and foreign actions to the integration', () => {
@@ -635,24 +922,34 @@ describe('reduceUx', () => {
 });
 
 describe('layout rules (QA review)', () => {
-  it('positioned tab bar and stepper (no screen-reader count escapes), tabs wrap, stage labels never cut mid-word', () => {
-    expect(INCIDENT_UX_CSS).toMatch(/\.ws-ux-tabs\{position:relative;flex-wrap:wrap/);
-    expect(INCIDENT_UX_CSS).toMatch(/\.ws-ux-stepper ol\{position:relative;/);
-    expect(INCIDENT_UX_CSS).not.toMatch(/\.ws-ux-tabs\{[^}]*overflow-x:auto/);
+  it('the folded stepper is one row that scrolls instead of cutting a label', () => {
+    expect(INCIDENT_UX_CSS).toMatch(/\.ws-ux-steps-row\{[^}]*display:flex[^}]*overflow-x:auto/);
+    expect(INCIDENT_UX_CSS).toMatch(/\.ws-ux-sr button\{[^}]*white-space:nowrap/);
+    expect(INCIDENT_UX_CSS).toMatch(/\.ws-ux-stepper-row \.ws-ux-step-row\{flex-wrap:nowrap/);
+    // Les styles des écrans de liste, de création et du périmètre sont livrés avec ceux de la structure.
+    expect(INCIDENT_UX_CSS).toContain(INCIDENT_FLOW_CSS);
+    expect(INCIDENT_UX_CSS).toContain('.inc-sc-grid{');
+    // Les nombres lus par les lecteurs d'écran (.sr, absolu) restent dans leur onglet : pas de défilement de page.
+    expect(INCIDENT_FLOW_CSS).toMatch(/\.inc-l-tabs button\{position:relative;/);
+  });
+
+  it('positioned tab bar and stepper (no screen-reader count escapes), tabs on one row, stage labels never cut mid-word', () => {
+    expect(INCIDENT_UX_CSS).toMatch(/\.ws-ux-tabs\{position:relative;flex-wrap:nowrap;overflow-x:auto/);
+    expect(INCIDENT_UX_CSS).toMatch(/\.ws-ux-stepper #ws-ux-steps\{position:relative;/);
+    // Ces règles de la liste dépliée ne touchent pas la ligne repliée.
+    expect(INCIDENT_UX_CSS).not.toContain('.ws-ux-stepper ol');
     expect(INCIDENT_UX_CSS).toContain('.ws-ux-stage-t b{font-size:13px;font-weight:600;overflow-wrap:normal');
-    // La progression mesure sa propre largeur : 5 colonnes puis 10, défilement (avec ombre) en dessous.
+    // La progression dépliée mesure sa propre largeur : 5 colonnes puis 10, défilement (avec ombre) en dessous.
     expect(INCIDENT_UX_CSS).toContain('container:ws-ux-steps / inline-size');
     expect(INCIDENT_UX_CSS).toMatch(/@container ws-ux-steps \(min-width:600px\)\{[^@]*repeat\(5,/);
     expect(INCIDENT_UX_CSS).toMatch(/@container ws-ux-steps \(min-width:1040px\)\{[^@]*repeat\(10,/);
   });
 
-  it('wide screens: the graph is a full-width band above the content and a 340 px panel', () => {
+  it('compact header: the title stays on one line (ellipsis, full title in its tooltip)', () => {
     expect(INCIDENT_UX_CSS).toMatch(
-      /@container \(min-width:960px\)\{\s*\.ws-ux-shell\{grid-template-areas:"graph" "main" "aside"\}/,
+      /\.ws-ux-head h1\{[^}]*white-space:nowrap;overflow:hidden;text-overflow:ellipsis/,
     );
-    expect(INCIDENT_UX_CSS).toMatch(
-      /@container \(min-width:1280px\)\{\s*\.ws-ux-shell\{grid-template-columns:minmax\(0,1fr\) 340px;grid-template-areas:"graph graph" "main aside"\}/,
-    );
+    expect(INCIDENT_UX_CSS).not.toContain('.ws-ux-shell');
   });
 });
 

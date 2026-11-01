@@ -5,7 +5,14 @@ import { workspaceLinks, type WorkspaceSelection } from '../../src/sdk/ui/incide
 import { workspaceContext, type Lang, type WorkspaceContext } from '../../src/sdk/ui/incident-parts.js';
 import {
   emptyTimelineUi,
+  formatDuration,
   INCIDENT_TIMELINE_CSS,
+  isDataImage,
+  isFailing,
+  isSensitiveHeader,
+  maskJson,
+  maskText,
+  statusPill,
   prettyBody,
   reduceTimeline,
   renderLogs,
@@ -515,7 +522,9 @@ describe('renderRequests', () => {
   it('lists the reference reproduction requests with status, duration, step and correlation', () => {
     const html = renderRequests(ctxOf(incident()), ui());
     expect(html).toContain('Requêtes HTTP');
-    expect(html).toContain('<div class="tw"><table');
+    expect(html).toContain(
+      '<div class="tw ws-timeline-scroll"><table class="tbl ws-timeline-tbl ws-timeline-dense">',
+    );
     expect(html).toContain('data-kind="request" data-ref="rep_1:req-2-1"');
     expect(html).toContain('<span class="pill ko">500</span>');
     expect(html).toContain('<span class="pill warn">404</span>');
@@ -667,5 +676,167 @@ describe('renderScreenshot and styles', () => {
     expect(rule('.ws-timeline-est')).toContain(mixed('warning', 70));
     // Aucun texte coloré avec un jeton de statut brut (3,0 à 3,6:1 en thème clair).
     expect(INCIDENT_TIMELINE_CSS).not.toMatch(/[;{]color:var\(--qa-color-(danger|success|warning|faint)\)/);
+  });
+});
+
+describe('workspace panes: request detail drawers', () => {
+  it('folds headers and bodies: headers closed, request body closed, failing response body open', () => {
+    const html = renderRequestDetail(
+      ctxOf(incident(), { selection: { kind: 'request', id: 'rep_1:req-2-1' } }),
+      'rep_1:req-2-1',
+    );
+    expect(html).toContain(
+      '<details class="ws-timeline-hd"><summary>En-têtes de la requête <small class="mu">2 gardé(s)</small></summary>',
+    );
+    expect(html).toContain(
+      '<details class="ws-timeline-hd"><summary>En-têtes de la réponse <small class="mu">2 gardé(s)</small></summary>',
+    );
+    expect(html).toMatch(/<details class="ws-timeline-pl"><summary>Corps de la requête \(masqué\)/);
+    expect(html).toMatch(/<details class="ws-timeline-pl" open><summary>Corps de la réponse \(masqué\)/);
+    expect(html.match(/<details[^>]* open/g)).toHaveLength(1);
+    // Rien n'est retiré : les en-têtes et les corps restent dans le document, repliés.
+    expect(html).toContain('<code>content-type</code>');
+    expect(html).toContain('&quot;publisher&quot;: null');
+    // Ordre : en-têtes et corps de la requête, puis ceux de la réponse.
+    const order = [
+      'En-têtes de la requête',
+      'Corps de la requête',
+      'En-têtes de la réponse',
+      'Corps de la réponse',
+    ].map((label) => html.indexOf(label));
+    expect([...order].sort((left, right) => left - right)).toEqual(order);
+  });
+
+  it('keeps a successful response body closed and says what was not captured', () => {
+    const ctx = ctxOf(incident());
+    const created = renderRequestDetail(ctx, 'rep_2:req-1-1');
+    expect(created).not.toMatch(/<details[^>]* open/);
+    const list = renderRequestDetail(ctx, 'rep_1:req-1-1');
+    expect(list).toContain(
+      '<details class="ws-timeline-hd"><summary>En-têtes de la requête <small class="mu">0 gardé(s)</small></summary><p class="mu">Aucun en-tête gardé',
+    );
+    expect(list).toContain('Corps de la requête (masqué) <small class="mu">non capturé</small>');
+    expect(list).toContain('Corps de la réponse (masqué) <small class="mu">non capturé</small>');
+    // Un 404 dont le corps est capturé : la réponse en erreur est ouverte.
+    expect(renderRequestDetail(ctx, 'rep_1:req-x-1')).toMatch(
+      /<details class="ws-timeline-pl" open><summary>Corps de la réponse/,
+    );
+    const en = renderRequestDetail(ctxOf(incident(), { lang: 'en' }), 'rep_1:req-1-1');
+    expect(en).toContain('Request headers <small class="mu">0 kept</small>');
+    expect(en).toContain('<small class="mu">not captured</small>');
+  });
+
+  it('shows the timing as a compact grid and draws a disclosure marker on every drawer', () => {
+    const html = renderRequestDetail(ctxOf(incident()), 'rep_1:req-2-1');
+    expect(html).toContain('<dl class="ws-timeline-dl ws-timeline-facts">');
+    expect(INCIDENT_TIMELINE_CSS).toContain(
+      '.ws-timeline-facts{grid-template-columns:repeat(auto-fill,minmax(96px,1fr))}',
+    );
+    expect(INCIDENT_TIMELINE_CSS).toContain(
+      '.ws-timeline-pl summary::before,.ws-timeline-hd summary::before,.ws-timeline-ctl summary::before{content:"";',
+    );
+    expect(INCIDENT_TIMELINE_CSS).toContain(
+      '.ws-timeline-pl[open]>summary::before,.ws-timeline-hd[open]>summary::before,.ws-timeline-ctl[open]>summary::before{transform:rotate(90deg)}',
+    );
+    expect(INCIDENT_TIMELINE_CSS).toMatch(
+      /\.ws-timeline-hd summary:focus-visible[^{]*\{outline:2px solid var\(--qa-color-primary\)/,
+    );
+    expect(INCIDENT_TIMELINE_CSS).toContain('prefers-reduced-motion');
+  });
+});
+
+describe('workspace panes: lists that fit their pane', () => {
+  it('renders the requests as a dense table with a sticky header, scrolling inside the pane', () => {
+    const html = renderRequests(ctxOf(incident()), ui());
+    expect(html).toMatch(/^<section class="ws-timeline ws-timeline-pane">/);
+    expect(html).toContain('<div class="ws-timeline-row ws-timeline-bar">');
+    expect(html).toContain('class="tw ws-timeline-scroll"');
+    expect(INCIDENT_TIMELINE_CSS).toContain('.ws-timeline-pane{height:100%;min-height:0;gap:8px}');
+    expect(INCIDENT_TIMELINE_CSS).toContain(
+      '.ws-timeline-pane>.ws-timeline-scroll{flex:1 1 auto;min-height:0;overflow:auto}',
+    );
+    expect(INCIDENT_TIMELINE_CSS).toContain('.ws-timeline-dense thead th{position:sticky;top:0;z-index:1;');
+    expect(INCIDENT_TIMELINE_CSS).toContain('.ws-timeline-dense td{padding:3px 8px}');
+    // L'état vide des échanges en erreur défile aussi dans le panneau.
+    const noError = incident();
+    const run = noError.investigation.reproductions[0];
+    if (!run) throw new Error('no reference reproduction');
+    run.requests = run.requests.filter(
+      (request) => (request.status ?? 0) < 400 && request.failure === undefined,
+    );
+    expect(renderRequests(ctxOf(noError), ui({ requestErrorsOnly: true }))).toContain(
+      '<div class="ws-timeline-scroll"><div class="ws-state"',
+    );
+  });
+
+  it('keeps the timeline criteria and counters above a list that scrolls by itself', () => {
+    const html = renderTimeline(ctxOf(incident()), ui());
+    expect(html).toMatch(/^<section class="ws-timeline ws-timeline-pane">/);
+    const top = html.slice(
+      html.indexOf('<div class="ws-timeline-top">'),
+      html.indexOf('<div class="ws-timeline-scroll">'),
+    );
+    expect(top).toContain('<p class="ws-timeline-count mu">');
+    expect(top).toContain('data-action="ws-timeline-reset"');
+    // Les compteurs et « Tout afficher » d'abord, puis les critères, repliés tant qu'aucun ne restreint.
+    expect(top.indexOf('ws-timeline-count')).toBeLessThan(top.indexOf('<details'));
+    expect(top).toContain(
+      '<details class="ws-timeline-ctl" data-ws-details="timeline-criteria"><summary><span class="ws-timeline-show">Afficher :</span> Critères d’affichage <small class="mu">couches, étapes, statuts, reproduction, période</small></summary>',
+    );
+    expect(html.slice(html.indexOf('<div class="ws-timeline-scroll">'))).toContain(
+      '<ol class="ws-timeline-groups">',
+    );
+    for (const active of [
+      ui({ layers: ['NETWORK'] }),
+      ui({ steps: [2] }),
+      ui({ statuses: ['ERROR'] }),
+      ui({ origin: 'REFERENCE' }),
+      ui({ period: 'ERROR' }),
+    ])
+      expect(renderTimeline(ctxOf(incident()), active)).toContain(
+        'data-ws-details="timeline-criteria" open>',
+      );
+    expect(renderTimeline(ctxOf(incident()), ui({ onlyRelated: true }))).not.toContain(
+      'timeline-criteria" open',
+    );
+    expect(INCIDENT_TIMELINE_CSS).toContain(
+      '.ws-timeline-top{display:flex;flex-direction:column;gap:6px;position:sticky;top:0;',
+    );
+    expect(renderTimeline(ctxOf(incident(), { lang: 'en' }), ui())).toContain('Display criteria');
+  });
+
+  it('scrolls the log lines inside the pane, with the verifications above', () => {
+    const html = renderLogs(ctxOf(incident({ logs: true })));
+    expect(html).toMatch(/^<section class="ws-timeline ws-timeline-pane">/);
+    expect(html).toContain(
+      '<div class="tw ws-timeline-scroll"><table class="tbl ws-timeline-tbl ws-timeline-dense">',
+    );
+    expect(html.indexOf('ws-timeline-exps')).toBeLessThan(html.indexOf('ws-timeline-scroll'));
+    expect(INCIDENT_TIMELINE_CSS).toContain(
+      '.ws-timeline-pane>.ws-timeline-exps{max-height:30%;overflow:auto}',
+    );
+  });
+});
+
+describe('helpers shared with the reproduction and evidence screens', () => {
+  it('status pill, failing exchange, duration, data images, sensitive headers, masking', () => {
+    expect(statusPill('fr', { status: 500 })).toBe('<span class="pill ko">500</span>');
+    expect(statusPill('fr', { status: 404 })).toBe('<span class="pill warn">404</span>');
+    expect(statusPill('fr', { status: 201 })).toBe('<span class="pill ok">201</span>');
+    expect(statusPill('en', { failure: 'net::ERR' })).toContain('Network failure');
+    expect(isFailing({ status: 400 })).toBe(true);
+    expect(isFailing({ status: 302 })).toBe(false);
+    expect(isFailing({ failure: 'x' })).toBe(true);
+    expect(formatDuration('fr', 76)).toBe('76 ms');
+    expect(formatDuration('fr', 1200)).toBe('1,2 s');
+    expect(isDataImage('data:image/png;base64,iVBORw0KGgo=')).toBe(true);
+    expect(isDataImage('data:text/html;base64,PGI+')).toBe(false);
+    expect(isSensitiveHeader('Authorization')).toBe(true);
+    expect(isSensitiveHeader('x-api-key')).toBe(true);
+    expect(isSensitiveHeader('content-type')).toBe(false);
+    expect(maskJson({ user: { password: 'p', name: 'n' } })).toEqual({
+      user: { password: '[REDACTED]', name: 'n' },
+    });
+    expect(maskText('Authorization: Bearer abcdefghijkl')).toBe('Authorization: Bearer [REDACTED]');
   });
 });

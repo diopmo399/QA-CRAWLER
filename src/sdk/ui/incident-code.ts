@@ -2,6 +2,7 @@ import type {
   CodeLayer,
   CodeSymbol,
   CodeSymbolKind,
+  Evidence,
   Experiment,
   GraphNode,
   HttpExchange,
@@ -33,8 +34,13 @@ import { esc, icon } from './view.js';
  * (erreur, chemin analysé, hypothèse, symbole), la ligne sélectionnée, les symboles du fichier et ce qui
  * pointe sur la ligne (nœuds du graphe, hypothèses, événements, requêtes). Aucun contrôle d'édition.
  *
- * Le contrôleur (intégration) lit le fichier à afficher par `codeTarget()` puis le passe aux rendus ;
- * ce module ne lit rien lui-même.
+ * L'onglet Code de l'espace d'investigation est rendu comme un éditeur (`renderCodeWorkspace`) : trois
+ * corps de panneaux — arborescence, éditeur à onglets (recherche dans le fichier, « Aller à la ligne »),
+ * preuves — que la mise en page place dans ses panneaux. Le contrôleur lit les fichiers des onglets
+ * (`openCodeFiles()`, l'actif d'abord) et montre dans l'éditeur l'endroit du code de chaque nouvelle
+ * sélection (`revealInCode()`). Les anciens rendus (`renderLayerCode`, `renderSourceView`,
+ * `renderCodeExcerpt` pour le panneau contextuel) restent, avec `codeTarget()`. Ce module ne lit rien
+ * lui-même.
  */
 
 // ── Analyse lexicale ─────────────────────────────────────────────────────────────────────────
@@ -782,20 +788,55 @@ export interface CodeCursor {
   anchor: string;
 }
 
+/** Un onglet de l'éditeur : le fichier, la ligne visée et la sélection d'alors (même règle que `CodeCursor`). */
+export interface CodeTab {
+  applicationId: string;
+  file: string;
+  line?: number;
+  anchor?: string;
+}
+
 export interface CodeUi {
   /** Les fichiers ouverts, le plus récent d'abord, au plus un par application (donc un par couche affichée). */
   open: CodeCursor[];
-  /** Dossiers repliés (false) ou dépliés (true) explicitement : `applicationId:chemin`. */
+  /** Dossiers repliés (false) ou dépliés (true) explicitement : `applicationId:chemin` (`applicationId:` pour l'application). */
   folders: Record<string, boolean>;
   /** La recherche de fichiers par nom. */
   search: string;
+  /** Les onglets de l'éditeur (au plus 8, dans l'ordre d'ouverture). */
+  tabs: CodeTab[];
+  /** L'onglet actif (indice dans `tabs`) : le dernier ouvert ou choisi. */
+  active?: number;
+  /** L'arborescence réduite à un rail (bouton pour la rouvrir). */
+  treeCollapsed: boolean;
+  /** L'arborescence restreinte à une couche (onglets « Frontend / BFF (Java) / Backend ») ; absente : toutes. */
+  layer?: CodeLayer;
+  /** La recherche dans le fichier affiché. */
+  find: string;
+  /** Le résultat courant de la recherche (compté modulo le nombre de résultats au rendu). */
+  findAt?: number;
+  /**
+   * La recherche mène la vue (le résultat courant est la ligne visée) : vrai après une saisie ou
+   * « suivant / précédent », faux après « Aller à la ligne » ou l'ouverture d'un endroit du code.
+   */
+  findLeads?: boolean;
+  /** Le champ « Aller à la ligne » est ouvert. */
+  gotoOpen: boolean;
+  /** La saisie du champ « Aller à la ligne ». */
+  gotoDraft?: string;
+  /** La dernière validation du champ a échoué (message d'erreur affiché). */
+  gotoInvalid?: boolean;
 }
 
 export function emptyCodeUi(): CodeUi {
-  return { open: [], folders: {}, search: '' };
+  return { open: [], folders: {}, search: '', tabs: [], treeCollapsed: false, find: '', gotoOpen: false };
 }
 
 const MAX_CURSORS = 8;
+/** Les couches de code (onglets au-dessus de l'arborescence). */
+const CODE_LAYERS: readonly CodeLayer[] = ['FRONTEND', 'BFF', 'BACKEND'];
+/** Au plus autant d'onglets ouverts (le plus ancien est fermé au-delà). */
+export const MAX_CODE_TABS = 8;
 const MAX_LINE = 10_000_000;
 
 function lineOf(value: string | undefined): number | undefined {
@@ -804,12 +845,144 @@ function lineOf(value: string | undefined): number | undefined {
   return line >= 1 && line <= MAX_LINE ? line : undefined;
 }
 
+/** Un indice d'onglet (`data-index`), ou undefined. */
+function tabIndexOf(value: string | undefined): number | undefined {
+  return value !== undefined && /^\d{1,3}$/.test(value.trim()) ? Number.parseInt(value, 10) : undefined;
+}
+
+const sameFile = (
+  a: { applicationId: string; file: string } | undefined,
+  applicationId: string,
+  file: string,
+): boolean => a?.applicationId === applicationId && a.file === file;
+
+/** L'onglet actif, s'il y en a un. */
+export function activeTab(ui: CodeUi): CodeTab | undefined {
+  return ui.active === undefined ? undefined : ui.tabs[ui.active];
+}
+
+/** Le curseur d'un fichier : son onglet (l'actif d'abord), sinon son entrée dans `open`. */
+function cursorOf(
+  ui: CodeUi,
+  applicationId: string,
+  file: string,
+): { line?: number; anchor?: string } | undefined {
+  const active = activeTab(ui);
+  if (sameFile(active, applicationId, file)) return active;
+  return (
+    ui.tabs.find((tab) => sameFile(tab, applicationId, file)) ??
+    ui.open.find((cursor) => sameFile(cursor, applicationId, file))
+  );
+}
+
+/** Ce qui se remet à zéro quand le fichier affiché change. */
+const FILE_RESET = { findAt: 0, gotoDraft: '', gotoInvalid: false } as const;
+
+/** Ouvre un fichier : curseur en tête de `open`, onglet créé (ou repris) et activé. */
+function openFile(ui: CodeUi, cursor: CodeCursor): CodeUi {
+  const tab: CodeTab = { applicationId: cursor.applicationId, file: cursor.file, anchor: cursor.anchor };
+  if (cursor.line !== undefined) tab.line = cursor.line;
+  const at = ui.tabs.findIndex((entry) => sameFile(entry, cursor.applicationId, cursor.file));
+  let tabs: CodeTab[];
+  let active: number;
+  if (at >= 0) {
+    tabs = ui.tabs.map((entry, index) => (index === at ? tab : entry));
+    active = at;
+  } else {
+    tabs = [...ui.tabs, tab].slice(-MAX_CODE_TABS);
+    active = tabs.length - 1;
+  }
+  const moved = at < 0 || active !== ui.active;
+  return {
+    ...ui,
+    open: [cursor, ...ui.open.filter((entry) => entry.applicationId !== cursor.applicationId)].slice(
+      0,
+      MAX_CURSORS,
+    ),
+    tabs,
+    active,
+    ...(moved ? FILE_RESET : {}),
+  };
+}
+
+/** Active un onglet (son curseur repasse en tête de `open`, sa ligne et sa sélection d'alors sont gardées). */
+function activate(ui: CodeUi, index: number): CodeUi {
+  const tab = ui.tabs[index];
+  if (!tab || index === ui.active) return ui;
+  const cursor: CodeCursor = { applicationId: tab.applicationId, file: tab.file, anchor: tab.anchor ?? '' };
+  if (tab.line !== undefined) cursor.line = tab.line;
+  return {
+    ...ui,
+    open: [cursor, ...ui.open.filter((entry) => entry.applicationId !== tab.applicationId)].slice(
+      0,
+      MAX_CURSORS,
+    ),
+    active: index,
+    ...FILE_RESET,
+  };
+}
+
+/** Ferme un onglet : l'actif passe au voisin de droite (sinon de gauche) ; plus d'onglet, plus d'actif. */
+function closeTab(ui: CodeUi, index: number): CodeUi {
+  const tab = ui.tabs[index];
+  if (!tab) return ui;
+  const tabs = ui.tabs.filter((_, at) => at !== index);
+  const open = ui.open.filter((cursor) => !sameFile(cursor, tab.applicationId, tab.file));
+  const { active: _active, ...rest } = ui;
+  if (tabs.length === 0) return { ...rest, open, tabs, ...FILE_RESET };
+  const current = ui.active ?? 0;
+  const active =
+    index < current ? current - 1 : index === current ? Math.min(index, tabs.length - 1) : current;
+  return { ...rest, open, tabs, active, ...(index === current ? FILE_RESET : {}) };
+}
+
+/**
+ * Montre un endroit du code dans l'éditeur (appelé par le contrôleur quand la sélection change et que
+ * `sourceOf` donne un endroit) : l'onglet du fichier est ouvert ou repris, activé, sur la ligne. `sel` est
+ * la clé de la sélection. Rendu inchangé (même objet) si l'onglet actif y est déjà.
+ */
+export function revealInCode(ui: CodeUi, source: SourceLocation, sel: string): CodeUi {
+  const active = activeTab(ui);
+  if (
+    sameFile(active, source.applicationId, source.file) &&
+    active?.line === source.line &&
+    active.anchor === sel
+  )
+    return ui;
+  return {
+    ...openFile(ui, {
+      applicationId: source.applicationId,
+      file: source.file,
+      line: source.line,
+      anchor: sel,
+    }),
+    findLeads: false,
+  };
+}
+
+/** Les fichiers à lire pour l'éditeur : l'onglet actif d'abord (le seul affiché), puis les autres onglets. */
+export function openCodeFiles(ui: CodeUi): { applicationId: string; file: string }[] {
+  const active = activeTab(ui);
+  const ordered = active ? [active, ...ui.tabs.filter((tab) => tab !== active)] : ui.tabs;
+  return ordered.map((tab) => ({ applicationId: tab.applicationId, file: tab.file }));
+}
+
 /**
  * Le réducteur de l'explorateur (pur). Actions :
- * - `ws-code-open` (et `ws-code`, le lien de `sourceLink`) : `app`, `file`, `line?`, `sel?` — ouvre le fichier ;
- * - `ws-code-goto` : `line`, `app?`, `file?`, `sel?` — va à la ligne (du fichier ouvert le plus récent sinon) ;
+ * - `ws-code-open` (et `ws-code`, le lien de `sourceLink`) : `app`, `file`, `line?`, `sel?` — ouvre le fichier
+ *   (onglet créé ou repris, activé) ;
+ * - `ws-code-goto` : `line`, `app?`, `file?`, `sel?` — va à la ligne (de l'onglet actif sinon) ;
  * - `ws-code-folder` : `folder`, `open` (l'état affiché) — replie ou déplie ;
- * - `ws-code-search` : `value` — le champ `data-ws-field="code-search"` ; `ws-code-search-clear`.
+ * - `ws-code-search` : `value` — le champ `data-ws-field="code-search"` ; `ws-code-search-clear` ;
+ * - `ws-code-tab` : `index` — active un onglet ; `ws-code-tab-close` : `index?` (l'actif sinon) — le ferme ;
+ * - `ws-code-tab-key` : `key` (ArrowLeft, ArrowRight, Home, End, Delete) — le clavier sur la barre d'onglets ;
+ * - `ws-code-tree-toggle` : `collapsed?` — réduit l'arborescence à un rail, ou la rouvre ;
+ * - `ws-code-layer` : `layer` (FRONTEND, BFF, BACKEND ou ALL) — restreint l'arborescence à une couche ;
+ * - `ws-code-find` : `value` — le champ `data-ws-field="code-find"` ; `ws-code-find-next` / `-prev` ;
+ *   `ws-code-find-clear` ;
+ * - `ws-code-goto-open` : `open?` — ouvre ou ferme « Aller à la ligne » ; `ws-code-goto-field` : `value` — le
+ *   champ `data-ws-field="code-goto"` ; `ws-code-goto-submit` : `max`, `app?`, `file?`, `sel?` — valide la
+ *   saisie (1 à `max`) et va à la ligne, sinon garde le champ ouvert avec son message d'erreur.
  * Le contrôleur peut ajouter `sel` (la clé de la sélection courante) au dataset des liens d'autres vues.
  * `ws-code-reload` (réessayer la lecture) n'est pas une transition d'état : rendu `undefined`.
  */
@@ -827,19 +1000,15 @@ export function reduceCode(
       const line = lineOf(dataset.line);
       const cursor: CodeCursor = { applicationId, file, anchor: dataset.sel ?? '' };
       if (line !== undefined) cursor.line = line;
-      return {
-        ...ui,
-        open: [cursor, ...ui.open.filter((entry) => entry.applicationId !== applicationId)].slice(
-          0,
-          MAX_CURSORS,
-        ),
-      };
+      return { ...openFile(ui, cursor), findLeads: false };
     }
     case 'ws-code-goto': {
       const line = lineOf(dataset.line);
       if (line === undefined) return ui;
       const current =
-        dataset.app && dataset.file ? { applicationId: dataset.app, file: dataset.file } : ui.open[0];
+        dataset.app && dataset.file
+          ? { applicationId: dataset.app, file: dataset.file }
+          : (activeTab(ui) ?? ui.open[0]);
       if (!current) return ui;
       return reduceCode(ui, 'ws-code-open', {
         app: current.applicationId,
@@ -857,6 +1026,73 @@ export function reduceCode(
       return { ...ui, search: (dataset.value ?? '').slice(0, 200) };
     case 'ws-code-search-clear':
       return { ...ui, search: '' };
+    case 'ws-code-tab': {
+      const index = tabIndexOf(dataset.index);
+      return index === undefined ? ui : activate(ui, index);
+    }
+    case 'ws-code-tab-close': {
+      const index = tabIndexOf(dataset.index) ?? ui.active;
+      return index === undefined ? ui : closeTab(ui, index);
+    }
+    case 'ws-code-tab-key': {
+      const count = ui.tabs.length;
+      if (count === 0) return ui;
+      const current = ui.active ?? 0;
+      switch (dataset.key) {
+        case 'ArrowRight':
+          return activate(ui, (current + 1) % count);
+        case 'ArrowLeft':
+          return activate(ui, (current - 1 + count) % count);
+        case 'Home':
+          return activate(ui, 0);
+        case 'End':
+          return activate(ui, count - 1);
+        case 'Delete':
+          return closeTab(ui, current);
+        default:
+          return ui;
+      }
+    }
+    case 'ws-code-layer': {
+      const value = dataset.layer;
+      if (value === 'ALL' || value === undefined || value === '') {
+        if (ui.layer === undefined) return ui;
+        const { layer: _layer, ...rest } = ui;
+        return rest;
+      }
+      if (!(CODE_LAYERS as readonly string[]).includes(value) || ui.layer === value) return ui;
+      return { ...ui, layer: value as CodeLayer };
+    }
+    case 'ws-code-tree-toggle': {
+      const collapsed = dataset.collapsed === undefined ? !ui.treeCollapsed : dataset.collapsed === 'true';
+      return collapsed === ui.treeCollapsed ? ui : { ...ui, treeCollapsed: collapsed };
+    }
+    case 'ws-code-find':
+      return { ...ui, find: (dataset.value ?? '').slice(0, 200), findAt: 0, findLeads: true };
+    case 'ws-code-find-clear':
+      return { ...ui, find: '', findAt: 0, findLeads: true };
+    case 'ws-code-find-next':
+    case 'ws-code-find-prev':
+      if (ui.find === '') return ui;
+      return {
+        ...ui,
+        findAt: (ui.findAt ?? 0) + (action === 'ws-code-find-next' ? 1 : -1),
+        findLeads: true,
+      };
+    case 'ws-code-goto-open': {
+      const open = dataset.open === undefined ? !ui.gotoOpen : dataset.open === 'true';
+      return { ...ui, gotoOpen: open, gotoDraft: '', gotoInvalid: false };
+    }
+    case 'ws-code-goto-field':
+      return { ...ui, gotoDraft: (dataset.value ?? '').slice(0, 12), gotoInvalid: false };
+    case 'ws-code-goto-submit': {
+      const max = lineOf(dataset.max);
+      const line = lineOf(ui.gotoDraft);
+      if (line === undefined || (max !== undefined && line > max))
+        return { ...ui, gotoOpen: true, gotoInvalid: true };
+      const moved = reduceCode(ui, 'ws-code-goto', { ...dataset, line: String(line) }) ?? ui;
+      return { ...moved, gotoOpen: false, gotoDraft: '', gotoInvalid: false };
+    }
     default:
       return undefined;
   }
@@ -978,6 +1214,45 @@ const TEXT = {
     start: 'Point de départ',
     openInExplorer: 'Ouvrir dans l’explorateur',
     excerpt: (file: string, line: number) => `Extrait de ${file} autour de la ligne ${String(line)}`,
+    editor: 'Éditeur de code (lecture seule)',
+    openFiles: 'Fichiers ouverts',
+    tabTitle: (app: string, file: string) => `${app} — ${file}`,
+    closeTab: (name: string) => `Fermer ${name}`,
+    treeCollapse: 'Replier l’arborescence',
+    treeExpand: 'Afficher l’arborescence',
+    rail: 'Fichiers',
+    appToggle: (name: string, open: boolean) => `${open ? 'Replier' : 'Déplier'} l’application ${name}`,
+    find: 'Rechercher dans le fichier',
+    findPlaceholder: 'Rechercher…',
+    findCount: (at: number, total: string) => `Résultat ${String(at)} sur ${total}`,
+    findNone: 'Aucun résultat',
+    findNext: 'Résultat suivant (Entrée)',
+    findPrev: 'Résultat précédent (Maj+Entrée)',
+    goto: 'Aller à la ligne',
+    gotoHint: 'Aller à la ligne (Ctrl+G)',
+    gotoField: (max: number) => `Ligne (1 à ${String(max)})`,
+    gotoSubmit: 'Aller',
+    gotoClose: 'Fermer « Aller à la ligne »',
+    gotoError: (max: number) => `Saisissez un numéro de ligne entre 1 et ${String(max)}.`,
+    masked: 'Valeur masquée par le serveur',
+    evidencePane: 'Lignes signalées et liens avec l’investigation',
+    noMarks: 'Aucune ligne signalée dans ce fichier.',
+    noActive: 'Ouvrez un fichier pour voir ses lignes signalées, ce qui y mène et ses symboles.',
+    noInvolvedAll: 'Aucun élément du code n’est encore relié à l’investigation.',
+    layerTabs: 'Afficher : couche',
+    layerAll: 'Tous',
+    layerNames: { FRONTEND: 'Frontend', BFF: 'BFF (Java)', BACKEND: 'Backend' } as Record<CodeLayer, string>,
+    layerHint: (name: string, count: number) => `${name} : ${String(count)} fichier(s)`,
+    lineDetails: 'Détails de la ligne',
+    lineHint:
+      'Cliquez un numéro de ligne, une ligne signalée ou un symbole pour voir le détail de cette ligne.',
+    lineExcerpt: (file: string, line: number) => `Ligne ${String(line)} de ${file}`,
+    lineHypotheses: 'Hypothèses qui touchent cette ligne',
+    noLineHypotheses: 'Aucune hypothèse ne cite cette ligne.',
+    confidence: (percent: number) => `Confiance : ${String(percent)} %`,
+    showEvidence: 'Voir les preuves associées',
+    showEvidenceHint: (label: string) => `Ouvre Reproduction › Preuves sur ${label}`,
+    noLineEvidence: 'Aucune preuve observée (requête, console, capture) n’est reliée à cette ligne.',
   },
   en: {
     readOnly: 'Read only',
@@ -1091,6 +1366,44 @@ const TEXT = {
     start: 'Starting point',
     openInExplorer: 'Open in the explorer',
     excerpt: (file: string, line: number) => `Excerpt of ${file} around line ${String(line)}`,
+    editor: 'Code editor (read only)',
+    openFiles: 'Open files',
+    tabTitle: (app: string, file: string) => `${app} — ${file}`,
+    closeTab: (name: string) => `Close ${name}`,
+    treeCollapse: 'Collapse the tree',
+    treeExpand: 'Show the tree',
+    rail: 'Files',
+    appToggle: (name: string, open: boolean) => `${open ? 'Collapse' : 'Expand'} the application ${name}`,
+    find: 'Find in the file',
+    findPlaceholder: 'Find…',
+    findCount: (at: number, total: string) => `Match ${String(at)} of ${total}`,
+    findNone: 'No result',
+    findNext: 'Next match (Enter)',
+    findPrev: 'Previous match (Shift+Enter)',
+    goto: 'Go to line',
+    gotoHint: 'Go to line (Ctrl+G)',
+    gotoField: (max: number) => `Line (1 to ${String(max)})`,
+    gotoSubmit: 'Go',
+    gotoClose: 'Close “Go to line”',
+    gotoError: (max: number) => `Enter a line number between 1 and ${String(max)}.`,
+    masked: 'Value masked by the server',
+    evidencePane: 'Flagged lines and links with the investigation',
+    noMarks: 'No flagged line in this file.',
+    noActive: 'Open a file to see its flagged lines, what leads there and its symbols.',
+    noInvolvedAll: 'No code item is linked to the investigation yet.',
+    layerTabs: 'Show: layer',
+    layerAll: 'All',
+    layerNames: { FRONTEND: 'Frontend', BFF: 'BFF (Java)', BACKEND: 'Backend' } as Record<CodeLayer, string>,
+    layerHint: (name: string, count: number) => `${name}: ${String(count)} file(s)`,
+    lineDetails: 'Line details',
+    lineHint: 'Click a line number, a flagged line or a symbol to see the details of that line.',
+    lineExcerpt: (file: string, line: number) => `Line ${String(line)} of ${file}`,
+    lineHypotheses: 'Hypotheses touching this line',
+    noLineHypotheses: 'No hypothesis cites this line.',
+    confidence: (percent: number) => `Confidence: ${String(percent)} %`,
+    showEvidence: 'Show related evidence',
+    showEvidenceHint: (label: string) => `Opens Reproduction › Evidence on ${label}`,
+    noLineEvidence: 'No observed evidence (request, console, screenshot) is linked to this line.',
   },
 };
 
@@ -1168,16 +1481,12 @@ function errorPath(graph: InvestigationGraph | undefined): Map<string, number> {
   return result;
 }
 
-/**
- * Le fichier par lequel ouvrir une couche : le nœud le plus profond de cette couche sur le chemin de
- * l'erreur, sinon le premier nœud de cette couche ; pour le frontend, à défaut, le handler de la
- * traçabilité frontend.
- */
-export function defaultFileFor(ctx: WorkspaceContext, layer: CodeLayer): SourceLocation | undefined {
+/** Le point de départ d'une couche (ou de tout le code si `layer` est absent). */
+function startOf(ctx: WorkspaceContext, layer: CodeLayer | undefined): SourceLocation | undefined {
   const graph = ctx.incident.investigation.graph;
   const candidates = (graph?.nodes ?? []).flatMap((node) => {
     const source = nodeSource(ctx, node);
-    return source?.layer === layer ? [{ node, source }] : [];
+    return source && (layer === undefined || source.layer === layer) ? [{ node, source }] : [];
   });
   if (candidates.length > 0) {
     const path = errorPath(graph);
@@ -1188,12 +1497,29 @@ export function defaultFileFor(ctx: WorkspaceContext, layer: CodeLayer): SourceL
     }
     return best?.source ?? candidates[0]?.source;
   }
-  if (layer !== 'FRONTEND') return undefined;
+  if (layer !== undefined && layer !== 'FRONTEND') return undefined;
   const steps = ctx.incident.investigation.frontendTrace?.steps ?? [];
   for (const step of [...steps].reverse())
     for (const link of [step.handler, step.component, ...step.services, ...step.httpClients])
       if (link?.source?.layer === 'FRONTEND') return link.source;
   return undefined;
+}
+
+/**
+ * Le fichier par lequel ouvrir une couche : le nœud le plus profond de cette couche sur le chemin de
+ * l'erreur, sinon le premier nœud de cette couche ; pour le frontend, à défaut, le handler de la
+ * traçabilité frontend.
+ */
+export function defaultFileFor(ctx: WorkspaceContext, layer: CodeLayer): SourceLocation | undefined {
+  return startOf(ctx, layer);
+}
+
+/**
+ * Le point de départ de l'éditeur quand aucun onglet n'est ouvert : le nœud du code le plus profond sur le
+ * chemin de l'erreur (toutes couches), sinon le premier nœud du code, sinon le handler frontend.
+ */
+export function codeStartOf(ctx: WorkspaceContext): SourceLocation | undefined {
+  return startOf(ctx, undefined);
 }
 
 /** Le fichier ouvert le plus récent d'une couche. */
@@ -1237,10 +1563,11 @@ export function codeTarget(
 export function selectedLineOf(ctx: WorkspaceContext, ui: CodeUi, view: SourceFileView): number | undefined {
   const same = (source: { applicationId: string; file: string } | undefined): boolean =>
     source?.applicationId === view.applicationId && source.file === view.file;
-  const cursor = ui.open.find((entry) => same(entry));
+  const cursor = cursorOf(ui, view.applicationId, view.file);
   const selected = sourceOf(ctx.links, ctx.selection);
   const here = same(selected) ? selected : undefined;
-  if (cursor?.line !== undefined && (cursor.anchor === selectionKeyOf(ctx) || !here)) return cursor.line;
+  if (cursor?.line !== undefined && ((cursor.anchor ?? '') === selectionKeyOf(ctx) || !here))
+    return cursor.line;
   if (here) return here.line;
   const fallback = defaultFileFor(ctx, view.layer);
   return same(fallback) ? fallback?.line : undefined;
@@ -1391,20 +1718,74 @@ export function lineWindow(
   return { from, to };
 }
 
-function lineHtml(lang: Lang, tokens: readonly CodeToken[]): string {
+/** Une décoration d'une ligne (colonnes `[start, end)`) : résultat de recherche ou valeur masquée. */
+interface Decoration {
+  start: number;
+  end: number;
+  kind: 'find' | 'current' | 'masked';
+}
+
+/** Ce que le serveur met à la place d'une valeur sensible (le masquage est fait côté serveur). */
+const MASKED = '[REDACTED]';
+
+/** Les valeurs masquées d'une ligne. */
+function maskedIn(text: string): Decoration[] {
+  const found: Decoration[] = [];
+  let at = text.indexOf(MASKED);
+  while (at >= 0 && found.length < 200) {
+    found.push({ start: at, end: at + MASKED.length, kind: 'masked' });
+    at = text.indexOf(MASKED, at + MASKED.length);
+  }
+  return found;
+}
+
+function lineHtml(lang: Lang, tokens: readonly CodeToken[], extra: readonly Decoration[] = []): string {
+  const text = tokens.map((token) => token.text).join('');
+  const decorations = [...extra, ...(text.includes(MASKED) ? maskedIn(text) : [])];
   let html = '';
   let used = 0;
-  for (const token of tokens) {
-    const room = MAX_LINE_CHARS - used;
-    const text = token.text.length > room ? token.text.slice(0, room) : token.text;
-    const cls = TOKEN_CLASS[token.type];
-    html += cls ? `<span class="${cls}">${esc(text)}</span>` : esc(text);
-    used += text.length;
-    if (used >= MAX_LINE_CHARS) {
-      html += `<span class="ws-code-cut" title="${esc(codeText(lang).lineCut)}">…</span>`;
-      break;
+  if (decorations.length === 0) {
+    for (const token of tokens) {
+      const room = MAX_LINE_CHARS - used;
+      const piece = token.text.length > room ? token.text.slice(0, room) : token.text;
+      const cls = TOKEN_CLASS[token.type];
+      html += cls ? `<span class="${cls}">${esc(piece)}</span>` : esc(piece);
+      used += piece.length;
+      if (used >= MAX_LINE_CHARS) break;
+    }
+  } else {
+    const t = codeText(lang);
+    const cuts = new Set<number>();
+    for (const entry of decorations) {
+      cuts.add(entry.start);
+      cuts.add(entry.end);
+    }
+    let offset = 0;
+    for (const token of tokens) {
+      const end = Math.min(offset + token.text.length, MAX_LINE_CHARS);
+      let from = offset;
+      while (from < end) {
+        let to = end;
+        for (const cut of cuts) if (cut > from && cut < to) to = cut;
+        const piece = token.text.slice(from - offset, to - offset);
+        const covering = decorations.filter((entry) => entry.start <= from && entry.end >= to);
+        const masked = covering.some((entry) => entry.kind === 'masked');
+        const current = covering.some((entry) => entry.kind === 'current');
+        const hit = current || covering.some((entry) => entry.kind === 'find');
+        const cls = [TOKEN_CLASS[token.type], masked ? 'ws-code-mask' : ''].filter(Boolean).join(' ');
+        const title = masked ? ` title="${esc(t.masked)}"` : '';
+        if (hit)
+          html += `<mark class="ws-code-f${current ? ' ws-code-fcur' : ''}${cls ? ` ${cls}` : ''}"${title}>${esc(piece)}</mark>`;
+        else html += cls ? `<span class="${cls}"${title}>${esc(piece)}</span>` : esc(piece);
+        from = to;
+      }
+      offset += token.text.length;
+      used = offset;
+      if (offset >= MAX_LINE_CHARS) break;
     }
   }
+  if (used >= MAX_LINE_CHARS && text.length > MAX_LINE_CHARS)
+    html += `<span class="ws-code-cut" title="${esc(codeText(lang).lineCut)}">…</span>`;
   return html;
 }
 
@@ -1419,12 +1800,22 @@ function marksIn(highlights: readonly Highlight[], from: number, to: number): Ma
   return marks;
 }
 
+interface RowOptions {
+  /** La ligne que le contrôleur fait défiler en vue (`ws-code-target`, `data-ws-line`). */
+  target?: number;
+  /** Les résultats de la recherche dans le fichier, par ligne. */
+  found?: Map<number, Decoration[]>;
+  /** Un clic sur le numéro de ligne la sélectionne (`ws-code-goto`, fichier actif de l'éditeur). */
+  gutter?: boolean;
+}
+
 function rowsHtml(
   lang: Lang,
   lines: readonly CodeToken[][],
   range: { from: number; to: number },
   marks: Map<number, Highlight[]>,
   selected: number | undefined,
+  options: RowOptions = {},
 ): string {
   const t = codeText(lang);
   let html = '';
@@ -1432,10 +1823,12 @@ function rowsHtml(
     const found = marks.get(line) ?? [];
     const kinds = HIGHLIGHT_ORDER.filter((kind) => found.some((entry) => entry.kind === kind));
     const isSelected = line === selected;
+    const isTarget = line === options.target;
     const cls = [
       'ws-code-row',
       ...kinds.map((kind) => `ws-code-hl-${kind.toLowerCase()}`),
       isSelected ? 'ws-code-sel' : '',
+      isTarget ? 'ws-code-target' : '',
     ]
       .filter(Boolean)
       .join(' ');
@@ -1445,21 +1838,34 @@ function rowsHtml(
         ? `<span class="ws-code-sr">${esc(t.line(line))}${isSelected ? `, ${esc(t.selectedLine)}` : ''}${reasons ? ` — ${esc(reasons)}` : ''}. </span>`
         : '';
     const marker = kinds[0] ? `<span class="ws-code-m">${MARKER[kinds[0]]}</span>` : '';
-    html += `<tr class="${cls}" data-code-line="${String(line)}"${reasons ? ` title="${esc(reasons)}"` : ''}><td class="ws-code-num" aria-hidden="true">${String(line)}</td><td class="ws-code-mark" aria-hidden="true">${marker}</td><td class="ws-code-src"><pre>${spoken}${lineHtml(lang, lines[line - 1] ?? [])}</pre></td></tr>`;
+    html += `<tr class="${cls}" data-code-line="${String(line)}"${isTarget ? ` data-ws-line="${String(line)}"` : ''}${reasons ? ` title="${esc(reasons)}"` : ''}><td class="ws-code-num" aria-hidden="true"${options.gutter ? ` data-action="ws-code-goto" data-line="${String(line)}"` : ''}>${String(line)}</td><td class="ws-code-mark" aria-hidden="true">${marker}</td><td class="ws-code-src"><pre>${spoken}${lineHtml(lang, lines[line - 1] ?? [], options.found?.get(line))}</pre></td></tr>`;
   }
   return html;
 }
 
 function readOnlyBadge(lang: Lang): string {
   const t = codeText(lang);
-  return `<span class="ws-code-ro" title="${esc(t.readOnlyHint)}">${icon('lock')}${esc(t.readOnly)}</span>`;
+  return `<span class="ws-code-ro" title="${esc(t.readOnlyHint)}">${icon('lock')}<span class="ws-code-rot">${esc(t.readOnly)}</span></span>`;
 }
 
-function breadcrumb(ctx: WorkspaceContext, view: SourceFileView, tree?: SourceTree): string {
+function breadcrumb(
+  ctx: WorkspaceContext,
+  view: { applicationId: string; file: string; layer?: CodeLayer | undefined },
+  tree?: SourceTree,
+  compact = false,
+): string {
   const t = codeText(ctx.lang);
   const parts = view.file.split('/').filter(Boolean);
   const last = parts.pop() ?? view.file;
-  return `<nav class="ws-code-crumbs" aria-label="${esc(t.crumbs)}"><ol><li><b class="ws-code-appname">${esc(appName(ctx, view.applicationId, tree))}</b></li><li><span class="ws-code-layer">${esc(partsText(ctx.lang).layers[view.layer])}</span></li>${parts.map((part) => `<li>${esc(part)}</li>`).join('')}<li aria-current="page"><b>${esc(last)}</b></li></ol></nav>`;
+  const name = appName(ctx, view.applicationId, tree);
+  // Compact (barre d'outils de l'éditeur) : les dossiers en un seul segment, abrégé par la fin.
+  const folders = compact
+    ? parts.length > 0
+      ? `<li class="ws-code-dir">${esc(parts.join('/'))}</li>`
+      : ''
+    : parts.map((part) => `<li>${esc(part)}</li>`).join('');
+  const title = compact ? ` title="${esc(t.tabTitle(name, view.file))}"` : '';
+  return `<nav class="ws-code-crumbs${compact ? ' ws-code-crumbs-1' : ''}" aria-label="${esc(t.crumbs)}"${title}><ol><li><b class="ws-code-appname">${esc(name)}</b></li>${view.layer ? `<li><span class="ws-code-layer">${esc(partsText(ctx.lang).layers[view.layer])}</span></li>` : ''}${folders}<li aria-current="page"><b>${esc(last)}</b></li></ol></nav>`;
 }
 
 /** Un bouton « aller à la ligne » du fichier affiché. */
@@ -1475,9 +1881,17 @@ function gotoButton(
   return `<button type="button" class="ws-code-btn${cls ? ` ${cls}` : ''}" data-action="ws-code-goto" data-app="${esc(view.applicationId)}" data-file="${esc(view.file)}" data-line="${String(line)}" data-sel="${esc(selectionKeyOf(ctx))}" title="${label}"${named ? ` aria-label="${label}"` : ''}>${content}</button>`;
 }
 
-function marksList(ctx: WorkspaceContext, view: SourceFileView, selected: number | undefined): string {
-  if (view.highlights.length === 0) return '';
+function marksList(
+  ctx: WorkspaceContext,
+  view: SourceFileView,
+  selected: number | undefined,
+  always = false,
+): string {
   const t = codeText(ctx.lang);
+  if (view.highlights.length === 0)
+    return always
+      ? `<section class="ws-code-box" aria-label="${esc(t.marks)}"><h4>${esc(t.marks)}</h4><p class="mu ws-code-small">${esc(t.noMarks)}</p></section>`
+      : '';
   const sorted = [...view.highlights].sort((a, b) => a.line - b.line).slice(0, 60);
   return `<section class="ws-code-box" aria-label="${esc(t.marks)}"><h4>${esc(t.marks)}</h4><ul class="ws-code-list">${sorted
     .map(
@@ -1694,42 +2108,37 @@ function matchesSearch(file: string, search: string): boolean {
   return (query.includes('/') ? file : baseName(file)).toLowerCase().includes(query);
 }
 
-/**
- * L'ARBORESCENCE DU PÉRIMÈTRE : par application (nom, couche), dossiers repliables (`ws-code-folder`),
- * fichiers (`ws-code-open`, état de sélection `file`, fichier affiché en `aria-current`), fichiers cités
- * par l'investigation marqués « concerné », recherche par nom (`data-ws-field="code-search"`), chemins
- * refusés par le périmètre (« Hors périmètre ») avec leur raison, listes partielles signalées.
- * `layer` restreint l'arborescence à une couche (onglets Frontend, BFF, Backend).
- */
-export function renderSourceTree(
+interface TreeOptions {
+  /** Restreint l'arborescence à une couche (onglets Frontend, BFF, Backend). */
+  layer?: CodeLayer;
+  /** Le fichier affiché d'une application (marqué `aria-current`, ses dossiers dépliés). */
+  currentOf: (applicationId: string, layer: CodeLayer) => string | undefined;
+  /** Les applications rangées par couche (Frontend, BFF, Backend). */
+  byLayer?: boolean;
+}
+
+const LAYER_ORDER: readonly CodeLayer[] = ['FRONTEND', 'BFF', 'BACKEND'];
+
+/** Les morceaux de l'arborescence : recherche (et son compte), applications, chemins refusés. */
+function treeParts(
   ctx: WorkspaceContext,
   ui: CodeUi,
-  tree: SourceTree | undefined,
-  state?: CodeLoadState,
-  layer?: CodeLayer,
-): string {
+  tree: SourceTree,
+  options: TreeOptions,
+): { search: string; count: string; body: string; denied: string } {
   const t = codeText(ctx.lang);
-  if (!ctx.can('RUN')) return panelState(ctx.lang, 'denied', t.deniedCode);
-  if (state === 'loading' || (!tree && state === undefined))
-    return panelState(ctx.lang, 'loading', t.loadingTree);
-  if (state !== undefined) return panelState(ctx.lang, 'error', state.error, 'ws-code-reload');
-  if (!tree) return panelState(ctx.lang, 'empty', t.noTree);
-
+  const layer = options.layer;
   const applications = tree.applications.filter((entry) => !layer || entry.layer === layer);
+  if (options.byLayer)
+    applications.sort((a, b) => LAYER_ORDER.indexOf(a.layer) - LAYER_ORDER.indexOf(b.layer));
   const concerned = concernedFiles(ctx);
   const searching = ui.search.trim() !== '';
-  const targets = new Map<CodeLayer, SourceLocation | undefined>();
-  const targetOf = (codeLayer: CodeLayer): SourceLocation | undefined => {
-    if (!targets.has(codeLayer)) targets.set(codeLayer, codeTarget(ctx, ui, codeLayer, tree));
-    return targets.get(codeLayer);
-  };
   let matched = 0;
 
   const appHtml = applications
     .map((application) => {
       const appId = application.applicationId;
-      const target = targetOf(application.layer);
-      const current = target?.applicationId === appId ? target.file : undefined;
+      const current = options.currentOf(appId, application.layer);
       const files = application.files.filter((file) => matchesSearch(file, ui.search));
       matched += files.length;
       const shown = files.slice(0, MAX_TREE_FILES);
@@ -1778,8 +2187,13 @@ export function renderSourceTree(
           ? `<p class="ws-code-note" role="note">${esc(t.shownFirst(shown.length, files.length))}</p>`
           : '',
       ].join('');
-      return `<section class="ws-code-app" aria-label="${esc(application.name)}"><h4 class="ws-code-app-h"><span>${esc(application.name)}</span><span class="ws-code-layer">${esc(partsText(ctx.lang).layers[application.layer])}</span><small class="mu">${esc(t.files(application.files.length))}</small></h4>${notes}${
-        shown.length > 0 ? `<ul class="ws-code-nodes ws-code-root">${folderHtml(folderTree(shown))}</ul>` : ''
+      // L'application elle-même se replie (clé `applicationId:`), dépliée par défaut.
+      const appKey = `${appId}:`;
+      const appOpen = searching || (ui.folders[appKey] ?? true);
+      return `<section class="ws-code-app" aria-label="${esc(application.name)}"><h4 class="ws-code-app-h"><button type="button" class="ws-code-folder ws-code-app-t" data-action="ws-code-folder" data-folder="${esc(appKey)}" data-open="${String(appOpen)}" aria-expanded="${String(appOpen)}" aria-label="${esc(t.appToggle(application.name, appOpen))}" title="${esc(application.name)}">${icon(appOpen ? 'arrowD' : 'arrowR')}<span class="ws-code-fname">${esc(application.name)}</span></button><span class="ws-code-layer">${esc(partsText(ctx.lang).layers[application.layer])}</span><small class="mu">${esc(t.files(application.files.length))}</small></h4>${
+        appOpen
+          ? `${notes}${shown.length > 0 ? `<ul class="ws-code-nodes ws-code-root">${folderHtml(folderTree(shown))}</ul>` : ''}`
+          : ''
       }</section>`;
     })
     .join('');
@@ -1788,11 +2202,10 @@ export function renderSourceTree(
     searching
       ? `<button type="button" class="ws-code-btn" data-action="ws-code-search-clear" aria-label="${esc(t.clearSearch)}" title="${esc(t.clearSearch)}">${icon('x')}</button>`
       : ''
-  }</div>${
-    searching
-      ? `<p class="mu ws-code-small ws-code-count">${esc(matched > 0 ? t.matches(matched) : t.noMatch)}</p>`
-      : ''
-  }`;
+  }</div>`;
+  const count = searching
+    ? `<p class="mu ws-code-small ws-code-count">${esc(matched > 0 ? t.matches(matched) : t.noMatch)}</p>`
+    : '';
   const denied =
     tree.denied.length > 0
       ? `<details class="ws-code-denied"${tree.denied.length <= 5 ? ' open' : ''}><summary>${icon('ban')}${esc(t.denied(tree.denied.length))}</summary><p class="mu ws-code-small">${esc(t.deniedHint)}</p><ul class="ws-code-list">${tree.denied
@@ -1806,7 +2219,39 @@ export function renderSourceTree(
     applications.length > 0
       ? appHtml
       : panelState(ctx.lang, 'empty', layer ? t.noLayerApp(partsText(ctx.lang).layers[layer]) : t.noTree);
-  return `<nav class="ws-code-tree" aria-label="${esc(t.tree)}">${search}${body}${denied}</nav>`;
+  return { search, count, body, denied };
+}
+
+/**
+ * L'ARBORESCENCE DU PÉRIMÈTRE : par application (nom, couche, repliable), dossiers repliables
+ * (`ws-code-folder`), fichiers (`ws-code-open`, état de sélection `file`, fichier affiché en
+ * `aria-current`), fichiers cités par l'investigation marqués « concerné », recherche par nom
+ * (`data-ws-field="code-search"`), chemins refusés par le périmètre (« Hors périmètre ») avec leur raison,
+ * listes partielles signalées. `layer` restreint l'arborescence à une couche (onglets Frontend, BFF, Backend).
+ */
+export function renderSourceTree(
+  ctx: WorkspaceContext,
+  ui: CodeUi,
+  tree: SourceTree | undefined,
+  state?: CodeLoadState,
+  layer?: CodeLayer,
+): string {
+  const t = codeText(ctx.lang);
+  if (!ctx.can('RUN')) return panelState(ctx.lang, 'denied', t.deniedCode);
+  if (state === 'loading' || (!tree && state === undefined))
+    return panelState(ctx.lang, 'loading', t.loadingTree);
+  if (state !== undefined) return panelState(ctx.lang, 'error', state.error, 'ws-code-reload');
+  if (!tree) return panelState(ctx.lang, 'empty', t.noTree);
+  const targets = new Map<CodeLayer, SourceLocation | undefined>();
+  const parts = treeParts(ctx, ui, tree, {
+    ...(layer ? { layer } : {}),
+    currentOf: (applicationId, codeLayer) => {
+      if (!targets.has(codeLayer)) targets.set(codeLayer, codeTarget(ctx, ui, codeLayer, tree));
+      const target = targets.get(codeLayer);
+      return target?.applicationId === applicationId ? target.file : undefined;
+    },
+  });
+  return `<nav class="ws-code-tree" aria-label="${esc(t.tree)}">${parts.search}${parts.count}${parts.body}${parts.denied}</nav>`;
 }
 
 // ── Rendu : onglets par couche ───────────────────────────────────────────────────────────────
@@ -1861,16 +2306,24 @@ function involvedIn(ctx: WorkspaceContext, layer: CodeLayer, index: Index): Invo
   return [...found.values()];
 }
 
+function involvedItem(
+  ctx: WorkspaceContext,
+  layer: CodeLayer,
+  entry: Involved,
+  start: SourceLocation | undefined,
+): string {
+  const t = codeText(ctx.lang);
+  const isStart =
+    start?.applicationId === entry.source.applicationId &&
+    start.file === entry.source.file &&
+    start.line === entry.source.line;
+  return `<li class="ws-code-item"><button type="button" class="ws-code-btn ws-code-name ${selectionClass(ctx, entry.kind, entry.id)}" ${selectable(ctx, entry.kind, entry.id)} title="${esc(entry.label)}">${esc(entry.label)}</button>${entry.detail ? `<span class="ws-code-kind">${esc(entry.detail)}</span>` : ''}<button type="button" class="ws-code-btn ws-code-ln" data-action="ws-code-open" data-app="${esc(entry.source.applicationId)}" data-file="${esc(entry.source.file)}" data-line="${String(entry.source.line)}" data-layer="${layer}" data-sel="${esc(selectionKeyOf(ctx))}" title="${esc(partsText(ctx.lang).openCode(entry.source.file, entry.source.line))}"><code>${esc(baseName(entry.source.file))}:${String(entry.source.line)}</code></button>${isStart ? `<span class="ws-code-start">${esc(t.start)}</span>` : ''}</li>`;
+}
+
 function involvedList(ctx: WorkspaceContext, layer: CodeLayer, start: SourceLocation | undefined): string {
   const t = codeText(ctx.lang);
-  const items = involvedIn(ctx, layer, indexOf(ctx));
-  const isStart = (source: SourceLocation): boolean =>
-    start?.applicationId === source.applicationId && start.file === source.file && start.line === source.line;
-  const list = items
-    .map(
-      (entry) =>
-        `<li class="ws-code-item"><button type="button" class="ws-code-btn ws-code-name ${selectionClass(ctx, entry.kind, entry.id)}" ${selectable(ctx, entry.kind, entry.id)}>${esc(entry.label)}</button>${entry.detail ? `<span class="ws-code-kind">${esc(entry.detail)}</span>` : ''}<button type="button" class="ws-code-btn ws-code-ln" data-action="ws-code-open" data-app="${esc(entry.source.applicationId)}" data-file="${esc(entry.source.file)}" data-line="${String(entry.source.line)}" data-layer="${layer}" data-sel="${esc(selectionKeyOf(ctx))}" title="${esc(partsText(ctx.lang).openCode(entry.source.file, entry.source.line))}"><code>${esc(baseName(entry.source.file))}:${String(entry.source.line)}</code></button>${isStart(entry.source) ? `<span class="ws-code-start">${esc(t.start)}</span>` : ''}</li>`,
-    )
+  const list = involvedIn(ctx, layer, indexOf(ctx))
+    .map((entry) => involvedItem(ctx, layer, entry, start))
     .join('');
   return `<section class="ws-code-box ws-code-inv" aria-label="${esc(t.involved)}"><h4>${esc(t.involved)}</h4>${
     list ? `<ul class="ws-code-list">${list}</ul>` : `<p class="mu ws-code-small">${esc(t.noInvolved)}</p>`
@@ -1913,6 +2366,421 @@ export function renderLayerCode(
             : ''
         }`;
   return `<section class="ws-code-layer-tab" data-layer="${layer}" aria-label="${esc(t.layerCode(layerName))}">${head}${involvedList(ctx, layer, start)}<div class="ws-code-layer-grid"><div class="ws-code-layer-tree">${renderSourceTree(ctx, ui, tree, treeState, layer)}</div><div class="ws-code-layer-view">${viewer}</div></div></section>`;
+}
+
+// ── Rendu : l'espace de code (arborescence | éditeur | preuves) ──────────────────────────────
+
+/** Un fichier lu (ou en cours de lecture) pour l'éditeur. */
+export interface CodeFileEntry {
+  view?: SourceFileView;
+  state?: CodeLoadState;
+}
+
+/** Ce que le contrôleur sait d'un fichier (`ws.sources`) : la vue lue, ou l'état de sa lecture. */
+export type CodeFiles = (applicationId: string, file: string) => CodeFileEntry | undefined;
+
+/** Les trois corps de panneaux de l'onglet Code (sans le cadre des panneaux, posé par la mise en page). */
+export interface CodeWorkspaceHtml {
+  tree: string;
+  editor: string;
+  evidence: string;
+}
+
+/** Au plus autant de résultats comptés par la recherche dans le fichier. */
+export const MAX_FIND_MATCHES = 5000;
+
+interface FileModel {
+  view: SourceFileView;
+  lines: CodeToken[][];
+  total: number;
+  selected: number | undefined;
+  /** La ligne montrée : le résultat courant de la recherche, sinon la ligne sélectionnée. */
+  target: number;
+  range: { from: number; to: number };
+  matches: number;
+  capped: boolean;
+  /** Le résultat courant (à partir de 0), s'il y a des résultats. */
+  current?: number;
+  found: Map<number, Decoration[]>;
+}
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function fileModel(ctx: WorkspaceContext, ui: CodeUi, view: SourceFileView): FileModel {
+  const lines = linesOf(view);
+  const total = view.text === '' ? 0 : lines.length;
+  const selected = selectedLineOf(ctx, ui, view);
+  const hits: { line: number; start: number; end: number }[] = [];
+  let capped = false;
+  if (ui.find !== '' && total > 0) {
+    const pattern = new RegExp(escapeRegExp(ui.find), 'gi');
+    for (let index = 0; index < total && !capped; index += 1) {
+      const text = (lines[index] ?? []).map((token) => token.text).join('');
+      pattern.lastIndex = 0;
+      for (let found = pattern.exec(text); found; found = pattern.exec(text)) {
+        if (hits.length >= MAX_FIND_MATCHES) {
+          capped = true;
+          break;
+        }
+        hits.push({ line: index + 1, start: found.index, end: found.index + found[0].length });
+      }
+    }
+  }
+  const current =
+    hits.length > 0 ? (((ui.findAt ?? 0) % hits.length) + hits.length) % hits.length : undefined;
+  // Le résultat courant ne mène la vue que si la recherche a été la dernière à la déplacer.
+  const currentLine = current === undefined || ui.findLeads === false ? undefined : hits[current]?.line;
+  const firstMark = [...view.highlights].sort((a, b) => a.line - b.line)[0]?.line;
+  const target = Math.min(Math.max(1, currentLine ?? selected ?? firstMark ?? 1), Math.max(total, 1));
+  const range = lineWindow(total, target);
+  const found = new Map<number, Decoration[]>();
+  hits.forEach((hit, index) => {
+    if (hit.line < range.from || hit.line > range.to) return;
+    found.set(hit.line, [
+      ...(found.get(hit.line) ?? []),
+      { start: hit.start, end: hit.end, kind: index === current ? 'current' : 'find' },
+    ]);
+  });
+  return {
+    view,
+    lines,
+    total,
+    selected,
+    target,
+    range,
+    matches: hits.length,
+    capped,
+    ...(current === undefined ? {} : { current }),
+    found,
+  };
+}
+
+function treeRail(ctx: WorkspaceContext): string {
+  const t = codeText(ctx.lang);
+  return `<div class="ws-code-pane ws-code-rail"><button type="button" class="ws-code-ib" data-action="ws-code-tree-toggle" aria-expanded="false" aria-label="${esc(t.treeExpand)}" title="${esc(t.treeExpand)}">${icon('folder')}</button><span class="ws-code-rail-t" aria-hidden="true">${esc(t.rail)}</span></div>`;
+}
+
+/** Les onglets de couche au-dessus de l'arborescence (« Tous », puis les couches présentes). */
+function layerTabs(ctx: WorkspaceContext, tree: SourceTree, current: CodeLayer | undefined): string {
+  const t = codeText(ctx.lang);
+  const layers = CODE_LAYERS.filter((layer) => tree.applications.some((entry) => entry.layer === layer));
+  if (layers.length < 2) return '';
+  const count = (layer: CodeLayer): number =>
+    tree.applications
+      .filter((entry) => entry.layer === layer)
+      .reduce((total, entry) => total + entry.files.length, 0);
+  const tab = (value: string, label: string, on: boolean, hint?: string): string =>
+    `<button type="button" class="ws-code-lt" data-action="ws-code-layer" data-layer="${value}" aria-pressed="${String(on)}"${hint ? ` title="${esc(hint)}"` : ''}>${esc(label)}</button>`;
+  return `<div class="ws-code-lts" role="group" aria-label="${esc(t.layerTabs)}">${tab('ALL', t.layerAll, current === undefined)}${layers
+    .map((layer) =>
+      tab(layer, t.layerNames[layer], current === layer, t.layerHint(t.layerNames[layer], count(layer))),
+    )
+    .join('')}</div>`;
+}
+
+function workspaceTree(
+  ctx: WorkspaceContext,
+  ui: CodeUi,
+  tree: SourceTree | undefined,
+  state: CodeLoadState | undefined,
+): string {
+  const t = codeText(ctx.lang);
+  if (ui.treeCollapsed) return treeRail(ctx);
+  const toggle = `<button type="button" class="ws-code-ib" data-action="ws-code-tree-toggle" aria-expanded="true" aria-label="${esc(t.treeCollapse)}" title="${esc(t.treeCollapse)}">${icon('arrowL')}</button>`;
+  let inner: string;
+  if (state === 'loading' || (!tree && state === undefined))
+    inner = `<div class="ws-code-tree-head ws-code-tree-head-end">${toggle}</div>${panelState(ctx.lang, 'loading', t.loadingTree)}`;
+  else if (state !== undefined)
+    inner = `<div class="ws-code-tree-head ws-code-tree-head-end">${toggle}</div>${panelState(ctx.lang, 'error', state.error, 'ws-code-reload')}`;
+  else if (!tree) inner = panelState(ctx.lang, 'empty', t.noTree);
+  else {
+    const active = activeTab(ui);
+    const layer =
+      ui.layer && tree.applications.some((entry) => entry.layer === ui.layer) ? ui.layer : undefined;
+    const parts = treeParts(ctx, ui, tree, {
+      byLayer: true,
+      ...(layer ? { layer } : {}),
+      currentOf: (applicationId) => (active?.applicationId === applicationId ? active.file : undefined),
+    });
+    inner = `${layerTabs(ctx, tree, layer)}<div class="ws-code-tree-head">${parts.search}${toggle}</div>${parts.count}${parts.body}${parts.denied}`;
+  }
+  return `<nav class="ws-code-pane ws-code-tree ws-code-tree-pane" aria-label="${esc(t.tree)}">${inner}</nav>`;
+}
+
+function tabsBar(ctx: WorkspaceContext, ui: CodeUi, tree: SourceTree | undefined): string {
+  const t = codeText(ctx.lang);
+  const names = new Map<string, number>();
+  for (const tab of ui.tabs) names.set(baseName(tab.file), (names.get(baseName(tab.file)) ?? 0) + 1);
+  const items = ui.tabs
+    .map((tab, index) => {
+      const on = index === ui.active;
+      const name = baseName(tab.file);
+      const app = appName(ctx, tab.applicationId, tree);
+      const twin = (names.get(name) ?? 0) > 1;
+      const dir = twin ? (tab.file.split('/').slice(-2, -1)[0] ?? app) : '';
+      const spoken = twin ? `${name} (${dir})` : name;
+      return `<div class="ws-code-tabw${on ? ' ws-code-on' : ''}" role="presentation"><button type="button" role="tab" id="ws-code-tab-${String(index)}" class="ws-code-tab" aria-selected="${String(on)}"${on ? ' aria-controls="ws-code-editor-panel"' : ''} tabindex="${on ? '0' : '-1'}" data-action="ws-code-tab" data-index="${String(index)}" title="${esc(t.tabTitle(app, tab.file))}">${icon('file')}<span class="ws-code-tname">${esc(name)}</span>${twin ? `<small class="ws-code-tdir">${esc(dir)}</small>` : ''}</button><button type="button" class="ws-code-tab-x" data-action="ws-code-tab-close" data-index="${String(index)}" tabindex="${on ? '0' : '-1'}" aria-label="${esc(t.closeTab(spoken))}" title="${esc(t.closeTab(spoken))}">${icon('x')}</button></div>`;
+    })
+    .join('');
+  return `<div class="ws-code-tabs" role="tablist" aria-label="${esc(t.openFiles)}">${items}</div>`;
+}
+
+function findBox(ctx: WorkspaceContext, ui: CodeUi, model: FileModel): string {
+  const t = codeText(ctx.lang);
+  const total = `${String(model.matches)}${model.capped ? '+' : ''}`;
+  const at = (model.current ?? 0) + 1;
+  const searching = ui.find !== '';
+  const shown = !searching ? '' : model.matches === 0 ? t.findNone : `${String(at)}/${total}`;
+  const spoken = !searching ? '' : model.matches === 0 ? t.findNone : t.findCount(at, total);
+  const off = model.matches === 0 ? ' disabled' : '';
+  return `<div class="ws-code-find" role="search" aria-label="${esc(t.find)}"><input type="search" data-ws-field="code-find" value="${esc(ui.find)}" placeholder="${esc(t.findPlaceholder)}" aria-label="${esc(t.find)}" aria-describedby="ws-code-find-count" aria-keyshortcuts="Enter Shift+Enter" autocomplete="off" spellcheck="false" data-count="${String(model.matches)}"><span id="ws-code-find-count" class="ws-code-fcount${searching && model.matches === 0 ? ' ws-code-fnone' : ''}"><span aria-hidden="true">${esc(shown)}</span><span class="ws-code-sr">${esc(spoken)}</span></span><button type="button" class="ws-code-ib" data-action="ws-code-find-prev" aria-label="${esc(t.findPrev)}" title="${esc(t.findPrev)}"${off}>${icon('arrowU')}</button><button type="button" class="ws-code-ib" data-action="ws-code-find-next" aria-label="${esc(t.findNext)}" title="${esc(t.findNext)}"${off}>${icon('arrowD')}</button></div>`;
+}
+
+function gotoBox(ctx: WorkspaceContext, ui: CodeUi, model: FileModel): string {
+  const t = codeText(ctx.lang);
+  const view = model.view;
+  const max = model.total;
+  const toggle = `<button type="button" class="ws-code-btn ws-code-gotob" data-action="ws-code-goto-open" aria-expanded="${String(ui.gotoOpen)}"${ui.gotoOpen ? ' aria-controls="ws-code-goto"' : ''} aria-keyshortcuts="Control+G Meta+G" title="${esc(t.gotoHint)}">${esc(t.goto)}</button>`;
+  if (!ui.gotoOpen) return toggle;
+  const draft = ui.gotoDraft ?? '';
+  const parsed = lineOf(draft);
+  const invalid = ui.gotoInvalid === true || (draft.trim() !== '' && (parsed === undefined || parsed > max));
+  const data = `data-app="${esc(view.applicationId)}" data-file="${esc(view.file)}" data-max="${String(max)}" data-sel="${esc(selectionKeyOf(ctx))}"`;
+  return `${toggle}<div id="ws-code-goto" class="ws-code-goto" role="group" aria-label="${esc(t.goto)}"><label for="ws-code-goto-input">${esc(t.gotoField(max))}</label><input id="ws-code-goto-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" data-ws-field="code-goto" ${data} value="${esc(draft)}"${invalid ? ' aria-invalid="true" aria-describedby="ws-code-goto-err"' : ''}><button type="button" class="btn small" data-action="ws-code-goto-submit" ${data}>${esc(t.gotoSubmit)}</button><button type="button" class="ws-code-ib" data-action="ws-code-goto-open" data-open="false" aria-label="${esc(t.gotoClose)}" title="${esc(t.gotoClose)}">${icon('x')}</button>${
+    invalid ? `<p id="ws-code-goto-err" class="ws-code-err">${esc(t.gotoError(max))}</p>` : ''
+  }</div>`;
+}
+
+function workspaceEditor(
+  ctx: WorkspaceContext,
+  ui: CodeUi,
+  tree: SourceTree | undefined,
+  state: CodeLoadState | undefined,
+  model: FileModel | undefined,
+): string {
+  const t = codeText(ctx.lang);
+  const tab = activeTab(ui);
+  const label = esc(t.editor);
+  if (!tab) {
+    const start = codeStartOf(ctx);
+    const button = start
+      ? `<p class="ws-code-small ws-code-startp"><button type="button" class="btn small" data-action="ws-code-open" data-app="${esc(start.applicationId)}" data-file="${esc(start.file)}" data-line="${String(start.line)}" data-layer="${start.layer}" data-sel="${esc(selectionKeyOf(ctx))}">${esc(t.startHere(baseName(start.file), start.line))}</button></p>`
+      : '';
+    return `<section class="ws-code-pane ws-code-ed" aria-label="${label}">${panelState(ctx.lang, 'empty', t.noFile)}${button}</section>`;
+  }
+  const parts = partsText(ctx.lang);
+  const layer = model?.view.layer ?? layerOfApp(ctx, tab.applicationId, tree);
+  const crumbs = breadcrumb(ctx, { applicationId: tab.applicationId, file: tab.file, layer }, tree, true);
+  const meta = `<span class="ws-code-meta">${readOnlyBadge(ctx.lang)}${
+    model
+      ? `<span class="ws-code-kind">${esc(t.languages[tokenLanguageOf(model.view.file, model.view.language)])}</span><span class="mu ws-code-small">${esc(t.lines(model.total))}</span>`
+      : ''
+  }${ctx.demo ? `<span class="ws-code-demo" title="${esc(parts.demoHint)}">${esc(parts.demo)}</span>` : ''}</span>`;
+  const tools =
+    model && model.total > 0
+      ? `<div class="ws-code-tools">${findBox(ctx, ui, model)}${gotoBox(ctx, ui, model)}</div>`
+      : '';
+  let body: string;
+  if (state === 'loading' || (!model && state === undefined))
+    body = panelState(ctx.lang, 'loading', t.loadingFile);
+  else if (state !== undefined) body = panelState(ctx.lang, 'error', state.error, 'ws-code-reload');
+  else if (!model || model.total === 0)
+    body = `<p class="mu ws-code-small ws-code-emptyf">${esc(t.emptyFile)}</p>`;
+  else {
+    const { view, range } = model;
+    const windowed = model.total > range.to - range.from + 1;
+    const notice = windowed
+      ? `<p class="ws-code-note" role="note">${esc(t.windowed(range.from, range.to, model.total))}</p>`
+      : '';
+    const key = `${view.applicationId}|${view.file}|${String(model.target)}|${model.current === undefined ? '' : String(model.current)}`;
+    body = `${notice}<div class="ws-code-scroll" tabindex="0" role="region" aria-label="${esc(t.codeOf(view.file))}" data-app="${esc(view.applicationId)}" data-file="${esc(view.file)}" data-ws-target="${esc(key)}"><table class="ws-code-table" role="presentation"><tbody>${rowsHtml(
+      ctx.lang,
+      model.lines,
+      range,
+      marksIn(view.highlights, range.from, range.to),
+      model.selected,
+      { target: model.target, found: model.found, gutter: true },
+    )}</tbody></table></div>`;
+  }
+  return `<section class="ws-code-pane ws-code-ed" aria-label="${label}">${tabsBar(ctx, ui, tree)}<div id="ws-code-editor-panel" class="ws-code-edpanel" role="tabpanel" aria-labelledby="ws-code-tab-${String(ui.active ?? 0)}"><div class="ws-code-tool">${crumbs}${meta}${tools}</div>${body}</div></section>`;
+}
+
+/** « En jeu dans l'investigation », toutes couches : chaque élément ouvre son fichier à sa ligne. */
+function involvedAll(ctx: WorkspaceContext, index: Index): string {
+  const t = codeText(ctx.lang);
+  const start = codeStartOf(ctx);
+  const groups = LAYER_ORDER.flatMap((layer) => {
+    const items = involvedIn(ctx, layer, index);
+    return items.length > 0 ? [{ layer, items }] : [];
+  });
+  const body = groups
+    .map(
+      ({ layer, items }) =>
+        `<h5><span class="ws-code-layer">${esc(partsText(ctx.lang).layers[layer])}</span></h5><ul class="ws-code-list">${items
+          .map((entry) => involvedItem(ctx, layer, entry, start))
+          .join('')}</ul>`,
+    )
+    .join('');
+  return `<section class="ws-code-box ws-code-inv" aria-label="${esc(t.involved)}"><h4>${esc(t.involved)}</h4>${
+    body || `<p class="mu ws-code-small">${esc(t.noInvolvedAll)}</p>`
+  }</section>`;
+}
+
+/** Une preuve des reproductions ou des vérifications. */
+function evidenceById(ctx: WorkspaceContext, id: string): Evidence | undefined {
+  for (const run of ctx.incident.investigation.reproductions) {
+    const found = run.evidence.find((item) => item.id === id);
+    if (found) return found;
+  }
+  for (const experiment of ctx.incident.investigation.experiments) {
+    const found = experiment.evidence.find((item) => item.id === id);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * La preuve à montrer depuis une ligne : une requête reliée (en erreur d'abord), sinon une preuve reliée,
+ * sinon une preuve favorable d'une hypothèse qui touche la ligne. Rien n'est relié par supposition : les
+ * clés viennent de l'index des liens (`pointersAt`).
+ */
+function lineEvidence(
+  ctx: WorkspaceContext,
+  index: Index,
+  keys: ReadonlySet<string>,
+  hypotheses: readonly Hypothesis[],
+): { kind: 'request' | 'evidence'; id: string; label: string; evidence?: Evidence } | undefined {
+  const requests = [...keys]
+    .filter((key) => key.startsWith('request:'))
+    .flatMap((key) => {
+      const request = index.requests.get(key.slice('request:'.length));
+      return request ? [request] : [];
+    });
+  const request =
+    requests.find((entry) => entry.failure !== undefined || (entry.status ?? 0) >= 400) ?? requests[0];
+  if (request)
+    return { kind: 'request', id: request.id, label: `${request.method.toUpperCase()} ${request.path}` };
+  const fromKey = (
+    key: string | undefined,
+  ): { kind: 'evidence'; id: string; label: string; evidence: Evidence } | undefined => {
+    if (!key?.startsWith('evidence:')) return undefined;
+    const evidence = evidenceById(ctx, key.slice('evidence:'.length));
+    return evidence ? { kind: 'evidence', id: evidence.id, label: evidence.summary, evidence } : undefined;
+  };
+  for (const key of keys) {
+    const found = fromKey(key);
+    if (found) return found;
+  }
+  for (const hypothesis of hypotheses)
+    for (const { ref } of hypothesis.supporting) {
+      const key = ctx.links.refs.get(ref) ?? refKey(ctx, index, ref);
+      if (key?.startsWith('request:')) {
+        const linked = index.requests.get(key.slice('request:'.length));
+        if (linked)
+          return { kind: 'request', id: linked.id, label: `${linked.method.toUpperCase()} ${linked.path}` };
+      }
+      const found = fromKey(key);
+      if (found) return found;
+    }
+  return undefined;
+}
+
+/**
+ * « DÉTAILS DE LA LIGNE » : la ligne sélectionnée du fichier actif (numéro, fichier, extrait), les
+ * hypothèses qui la touchent (confiance de l'hypothèse, statut) et « Voir les preuves associées »
+ * (`ws-repro-ev-show` : le contrôleur sélectionne la preuve et ouvre Reproduction › Preuves).
+ */
+function lineDetails(ctx: WorkspaceContext, model: FileModel | undefined, index: Index): string {
+  const t = codeText(ctx.lang);
+  const head = `<h4>${esc(t.lineDetails)}</h4>`;
+  const line = model?.selected;
+  if (!model || model.total === 0 || line === undefined || line > model.total)
+    return `<section class="ws-code-box ws-code-linebox" aria-label="${esc(t.lineDetails)}">${head}<p class="mu ws-code-small">${esc(t.lineHint)}</p></section>`;
+  const view = model.view;
+  const name = baseName(view.file);
+  const range = { from: Math.max(1, line - 1), to: Math.min(model.total, line + 1) };
+  const excerpt = `<div class="ws-code-scroll ws-code-mini" tabindex="0" role="region" aria-label="${esc(t.lineExcerpt(name, line))}"><table class="ws-code-table" role="presentation"><tbody>${rowsHtml(ctx.lang, model.lines, range, marksIn(view.highlights, range.from, range.to), line)}</tbody></table></div>`;
+  const { keys } = pointersAt(ctx, index, view, line);
+  const hypotheses = [...keys]
+    .filter((key) => key.startsWith('hypothesis:'))
+    .flatMap((key) => {
+      const hypothesis = index.hypotheses.get(key.slice('hypothesis:'.length));
+      return hypothesis ? [hypothesis] : [];
+    })
+    .sort((a, b) => b.confidence - a.confidence);
+  const hypothesisList =
+    hypotheses.length === 0
+      ? `<p class="mu ws-code-small">${esc(t.noLineHypotheses)}</p>`
+      : `<ul class="ws-code-list">${hypotheses
+          .slice(0, 6)
+          .map((hypothesis) => {
+            const percent = Math.round(Math.min(Math.max(hypothesis.confidence, 0), 1) * 100);
+            const explanation = hypothesis.suspectedCause || hypothesis.description;
+            return `<li class="ws-code-item ws-code-hyp"><span class="ws-code-hyp-h"><button type="button" class="ws-code-btn ${selectionClass(ctx, 'hypothesis', hypothesis.id)}" ${selectable(ctx, 'hypothesis', hypothesis.id)}>${esc(hypothesis.title)}</button><span class="ws-code-pct" title="${esc(t.confidence(percent))}">${String(percent)} %</span><small class="mu">${esc(t.hypothesisStatus[hypothesis.status])}</small></span>${explanation ? `<span class="ws-code-small ws-code-hyp-why">${esc(explanation)}</span>` : ''}</li>`;
+          })
+          .join('')}</ul>`;
+  const target = lineEvidence(ctx, index, keys, hypotheses);
+  const show = target
+    ? `<button type="button" class="btn small ws-code-evb" data-action="ws-repro-ev-show" data-kind="${target.kind}" data-ref="${esc(target.id)}"${target.evidence ? ` data-evkind="${esc(target.evidence.kind)}"${target.evidence.source.file ? ` data-file="${esc(target.evidence.source.file)}"` : ''}` : ''} title="${esc(t.showEvidenceHint(target.label))}">${icon('eye')}<span>${esc(t.showEvidence)}</span></button>`
+    : `<button type="button" class="btn small ws-code-evb" disabled aria-describedby="ws-code-noev">${icon('eye')}<span>${esc(t.showEvidence)}</span></button><p id="ws-code-noev" class="mu ws-code-small">${esc(t.noLineEvidence)}</p>`;
+  return `<section class="ws-code-box ws-code-linebox" aria-label="${esc(t.lineDetails)}">${head}<p class="ws-code-lineh"><b>${esc(t.line(line))}</b><span class="ws-code-chip" title="${esc(view.file)}">${icon('file')}<span>${esc(name)}</span></span></p>${excerpt}<h5>${esc(t.lineHypotheses)}</h5>${hypothesisList}<div class="ws-code-evrow">${show}</div></section>`;
+}
+
+function workspaceEvidence(ctx: WorkspaceContext, model: FileModel | undefined): string {
+  const t = codeText(ctx.lang);
+  const index = indexOf(ctx, model?.view);
+  const body = model
+    ? `${lineDetails(ctx, model, index)}${marksList(ctx, model.view, model.selected, true)}${evidencePanel(ctx, model.view, model.selected, index)}${involvedAll(ctx, index)}${symbolNavigator(ctx, model.view, model.selected, involvedSymbolIds(ctx))}`
+    : `<p class="mu ws-code-small ws-code-hint">${esc(t.noActive)}</p>${involvedAll(ctx, index)}`;
+  return `<section class="ws-code-pane ws-code-evidence" aria-label="${esc(t.evidencePane)}">${demoBanner(ctx)}${body}</section>`;
+}
+
+/**
+ * L'ONGLET CODE DE L'ESPACE D'INVESTIGATION, comme un éditeur : trois corps de panneaux (le cadre, les
+ * séparateurs et les boutons des panneaux sont posés par la mise en page).
+ * - `tree` : l'arborescence de TOUTES les applications du périmètre, rangées par couche (badge), avec la
+ *   recherche par nom, les dossiers et applications repliables, les fichiers « concernés », ou le rail
+ *   replié (`ws-code-tree-toggle`) ;
+ * - `editor` : la barre d'onglets (`role="tablist"`, fermeture), la barre d'outils (chemin, « Lecture
+ *   seule », langage, recherche dans le fichier « n/m », « Aller à la ligne » validé) et le code (défilement
+ *   propre sur les deux axes, gouttière collante, lignes signalées, ligne visée `ws-code-target` +
+ *   `data-ws-line`, clé `data-ws-target` sur la zone qui défile : le contrôleur la fait défiler en vue
+ *   quand la clé change) ;
+ * - `evidence` : les lignes signalées du fichier, ce qui mène à la ligne, ce qui est en jeu dans
+ *   l'investigation (toutes couches) et les symboles du fichier.
+ * `files` donne ce que le contrôleur sait d'un fichier ; il lit `openCodeFiles(ui)` (l'onglet actif d'abord).
+ */
+export function renderCodeWorkspace(
+  ctx: WorkspaceContext,
+  ui: CodeUi,
+  tree: SourceTree | undefined,
+  files: CodeFiles,
+  treeState?: CodeLoadState,
+): CodeWorkspaceHtml {
+  const t = codeText(ctx.lang);
+  if (!ctx.can('RUN')) {
+    const denied = panelState(ctx.lang, 'denied', t.deniedCode);
+    return {
+      tree: ui.treeCollapsed
+        ? treeRail(ctx)
+        : `<nav class="ws-code-pane ws-code-tree ws-code-tree-pane" aria-label="${esc(t.tree)}">${denied}</nav>`,
+      editor: `<section class="ws-code-pane ws-code-ed" aria-label="${esc(t.editor)}">${denied}</section>`,
+      evidence: `<section class="ws-code-pane ws-code-evidence" aria-label="${esc(t.evidencePane)}">${denied}</section>`,
+    };
+  }
+  const tab = activeTab(ui);
+  const entry = tab ? files(tab.applicationId, tab.file) : undefined;
+  const view =
+    tab && entry?.state === undefined && entry?.view && sameFile(entry.view, tab.applicationId, tab.file)
+      ? entry.view
+      : undefined;
+  const state: CodeLoadState | undefined = tab && !view ? (entry?.state ?? 'loading') : undefined;
+  const model = view ? fileModel(ctx, ui, view) : undefined;
+  return {
+    tree: workspaceTree(ctx, ui, tree, treeState),
+    editor: workspaceEditor(ctx, ui, tree, state, model),
+    evidence: workspaceEvidence(ctx, model),
+  };
 }
 
 // ── Rendu : extrait pour le panneau latéral ──────────────────────────────────────────────────
@@ -2030,4 +2898,102 @@ export const INCIDENT_CODE_CSS = `
 .ws-code-ex-h{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .ws-code-ex .ws-code-table{font-size:12px}
 .ws-code-ex .ws-code-scroll{max-height:320px}
+.ws-code-app-h .ws-code-app-t{flex:1 1 auto;width:auto;min-width:0;color:var(--qa-color-text);padding-left:2px}
+.ws-code-app-h .ws-code-app-t .ico{width:14px;height:14px;color:var(--qa-color-muted)}
+.ws-code-pane{box-sizing:border-box;height:100%;min-height:0;min-width:0;overflow:auto;overscroll-behavior:contain}
+.ws-code-tree-pane{gap:8px;padding:0 8px 10px}
+.ws-code-tree-head{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:4px;padding:8px 0 6px;background:var(--qa-color-surface)}
+.ws-code-tree-head .ws-code-search{flex:1 1 auto;min-width:0}
+.ws-code-tree-head-end{justify-content:flex-end}
+.ws-code-tree-pane .ws-code-root{max-height:none;overflow:visible}
+.ws-code-tree-pane .ws-code-app{gap:2px}
+.ws-code-tree-pane .ws-code-file,.ws-code-tree-pane .ws-code-folder{min-height:26px;padding:2px 6px}
+.ws-code-ib{appearance:none;flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:1px solid transparent;border-radius:6px;background:none;color:var(--qa-color-muted);cursor:pointer}
+.ws-code-ib:hover:not(:disabled){background:color-mix(in srgb,var(--qa-color-primary) 9%,transparent);color:var(--qa-color-text)}
+.ws-code-ib:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px}
+.ws-code-ib:disabled{cursor:default;opacity:.45}
+.ws-code-ib .ico{width:15px;height:15px}
+.ws-code-rail{display:flex;flex-direction:column;align-items:center;gap:10px;padding:8px 0;overflow:hidden auto}
+.ws-code-rail-t{writing-mode:vertical-rl;font-size:12px;font-weight:600;letter-spacing:.04em;color:var(--qa-color-muted);white-space:nowrap}
+.ws-code-ed{display:flex;flex-direction:column;container:ws-code-ed/inline-size}
+.ws-code-ed>.ws-state,.ws-code-startp{margin:12px}
+.ws-code-tabs{flex:none;display:flex;align-items:stretch;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;background:var(--qa-color-surface-2);border-bottom:1px solid var(--qa-color-border)}
+.ws-code-tabw{flex:none;display:flex;align-items:center;max-width:240px;border-right:1px solid var(--qa-color-border);color:var(--qa-color-muted)}
+.ws-code-tabw.ws-code-on{background:var(--qa-color-surface);color:var(--qa-color-text);box-shadow:inset 0 2px 0 var(--qa-color-primary)}
+.ws-code-tab{appearance:none;display:flex;align-items:center;gap:6px;min-width:0;min-height:34px;padding:4px 2px 4px 10px;border:0;background:none;color:inherit;font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}
+.ws-code-tabw.ws-code-on .ws-code-tab{font-weight:600}
+.ws-code-tab .ico{flex:none;width:14px;height:14px}
+.ws-code-tab:focus-visible,.ws-code-tab-x:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:-2px}
+.ws-code-tname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-code-tdir{flex:none;font-size:11px;color:var(--qa-color-muted)}
+.ws-code-tab-x{appearance:none;flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;margin:0 4px 0 2px;padding:0;border:0;border-radius:5px;background:none;color:var(--qa-color-muted);cursor:pointer}
+.ws-code-tab-x:hover{background:color-mix(in srgb,var(--qa-color-text) 12%,transparent);color:var(--qa-color-text)}
+.ws-code-tab-x .ico{width:13px;height:13px}
+.ws-code-edpanel{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;min-width:0}
+.ws-code-edpanel>.ws-state{margin:12px}
+.ws-code-tool{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:6px 10px;border-bottom:1px solid var(--qa-color-border);background:var(--qa-color-surface)}
+.ws-code-crumbs-1{flex:1 1 220px;min-width:min(100%,15rem)}
+.ws-code-crumbs-1 ol{flex-wrap:nowrap;white-space:nowrap}
+.ws-code-crumbs-1 li{flex:none}
+.ws-code-crumbs-1 .ws-code-dir{flex:0 1000 auto;min-width:3ch;overflow:hidden;text-overflow:ellipsis}
+.ws-code-crumbs-1 li:first-child{flex:0 1 auto;min-width:4ch;overflow:hidden;text-overflow:ellipsis}
+.ws-code-tools{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;flex:1 1 auto;justify-content:flex-end}
+.ws-code-demo{display:inline-block;padding:0 7px;border-radius:999px;font-size:11px;font-weight:600;color:color-mix(in srgb,var(--qa-color-warning) 62%,var(--qa-color-text));background:color-mix(in srgb,var(--qa-color-warning) 14%,transparent)}
+.ws-code-find{display:flex;align-items:center;gap:2px;min-width:0}
+.ws-code-find input,.ws-code-goto input{min-width:0;padding:4px 8px;border:1px solid var(--qa-color-border);border-radius:6px;background:var(--qa-color-surface);color:var(--qa-color-text);font:inherit;font-size:13px}
+.ws-code-find input{width:180px}
+.ws-code-find input:focus-visible,.ws-code-goto input:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px;border-color:var(--qa-color-primary)}
+.ws-code-fcount{min-width:6ch;padding:0 4px;font-size:12px;color:var(--qa-color-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.ws-code-fnone{color:color-mix(in srgb,var(--qa-color-danger) 70%,var(--qa-color-text))}
+.ws-code-gotob{min-height:28px;border:1px solid var(--qa-color-border);font-size:12px;font-weight:600}
+.ws-code-gotob[aria-expanded="true"]{border-color:var(--qa-color-primary)}
+.ws-code-goto{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px}
+.ws-code-goto label{font-size:12px;color:var(--qa-color-muted)}
+.ws-code-goto input{width:9ch}
+.ws-code-goto input[aria-invalid="true"]{border-color:var(--qa-color-danger);box-shadow:0 0 0 1px var(--qa-color-danger)}
+.ws-code-err{flex-basis:100%;margin:0;font-size:12px;color:color-mix(in srgb,var(--qa-color-danger) 70%,var(--qa-color-text))}
+.ws-code-ed .ws-code-note{flex:none;margin:6px 10px 0}
+.ws-code-ed .ws-code-scroll{flex:1 1 auto;min-height:72px;max-height:none;border:0;border-radius:0}
+@container ws-code-ed (max-width:760px){
+  .ws-code-find input{width:120px}
+  .ws-code-meta .ws-code-rot{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+}
+@container ws-code-ed (max-width:640px){
+  .ws-code-tool{gap:4px 6px;padding:4px 8px}
+  .ws-code-crumbs-1{flex-basis:140px}
+  .ws-code-meta .ws-code-small,.ws-code-meta .ws-code-kind{display:none}
+  .ws-code-find input{width:110px}
+}
+.ws-code-ed .ws-code-emptyf{padding:12px}
+.ws-code-f{border-radius:2px;color:var(--qa-color-text);background:color-mix(in srgb,var(--qa-color-warning) 20%,transparent)}
+.ws-code-fcur{background:color-mix(in srgb,var(--qa-color-warning) 38%,transparent);outline:1px solid color-mix(in srgb,var(--qa-color-warning) 62%,var(--qa-color-text))}
+.ws-code-mask{border:1px dashed var(--qa-color-border-strong);border-radius:3px;color:var(--qa-color-muted);font-style:italic}
+.ws-code-evidence{display:flex;flex-direction:column;gap:10px;padding:10px}
+.ws-code-evidence .ws-code-list{max-height:none;overflow:visible}
+.ws-code-evidence .ws-code-why,.ws-code-evidence .ws-code-mk{flex:1 1 100%;min-width:0;overflow-wrap:break-word}
+.ws-code-evidence .ws-code-box h5 .ws-code-layer{font-size:11px}
+.ws-code-inv .ws-code-name{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:normal}
+.ws-code-hint{padding:2px}
+.ws-code-num[data-action]{cursor:pointer}
+.ws-code-num[data-action]:hover{color:var(--qa-color-text);background:color-mix(in srgb,var(--qa-color-primary) 10%,var(--qa-color-surface))}
+.ws-code-lts{display:flex;flex-wrap:wrap;gap:0 2px;padding:6px 0 0;border-bottom:1px solid var(--qa-color-border)}
+.ws-code-lt{min-height:32px;padding:0 8px;border:0;border-bottom:2px solid transparent;background:none;color:var(--qa-color-muted);font:inherit;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.ws-code-lt:hover{color:var(--qa-color-text)}
+.ws-code-lt[aria-pressed="true"]{color:color-mix(in srgb,var(--qa-color-primary) 75%,var(--qa-color-text));border-bottom-color:var(--qa-color-primary)}
+.ws-code-lt:focus-visible,.ws-code-evb:focus-visible,.ws-code-mini:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px}
+.ws-code-linebox{display:flex;flex-direction:column;gap:6px}
+.ws-code-linebox h4,.ws-code-linebox h5{margin:0}
+.ws-code-lineh{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:13px}
+.ws-code-chip{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:1px 8px;border:1px solid var(--qa-color-border);border-radius:999px;background:var(--qa-color-surface-2);font:12px var(--qa-font-family-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-code-chip .ico{width:12px;height:12px;flex:none}
+.ws-code-mini{max-height:none}
+.ws-code-mini .ws-code-table{font-size:12px}
+.ws-code-hyp{flex-direction:column;flex-wrap:nowrap;align-items:stretch;gap:2px;padding:6px 8px;border-left:3px solid var(--qa-color-warning);background:color-mix(in srgb,var(--qa-color-warning) 7%,transparent)}
+.ws-code-hyp-h{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.ws-code-hyp-why{display:block;min-width:0;overflow-wrap:break-word;color:var(--qa-color-text)}
+.ws-code-pct{font-size:11px;font-weight:700;padding:0 6px;border-radius:999px;font-variant-numeric:tabular-nums;color:color-mix(in srgb,var(--qa-color-warning) 55%,var(--qa-color-text));background:color-mix(in srgb,var(--qa-color-warning) 18%,transparent)}
+.ws-code-evrow{display:flex;flex-direction:column;align-items:stretch;gap:4px}
+.ws-code-evb{align-self:stretch;justify-content:center;min-height:36px}
+.ws-code-evb .ico{width:16px;height:16px}
+@media (max-height:559px),(max-width:599px){.ws-code-pane{height:auto}.ws-code-ed .ws-code-scroll{max-height:70vh}}
 `;

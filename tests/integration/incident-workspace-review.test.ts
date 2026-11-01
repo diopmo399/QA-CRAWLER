@@ -15,8 +15,11 @@ import { startIncidentSite, type IncidentSite } from '../fixtures/incident-site.
  * sélection synchronisée, lecteur sans droit sur le code, pas de défilement horizontal, ids uniques,
  * noms accessibles. Accès nominatif : un administrateur et un lecteur se connectent avec leur jeton.
  *
- * Les tests du bloc « défauts relevés par la revue » échouent tant que le défaut est là (voir
- * docs/incident-reconstruction/qa-review.md) ; chaque assertion concernée porte `// DEFECT:`.
+ * Disposition v2 : les vues sont des onglets principaux (`#ws-ux-tab-<onglet>`) et des sous-onglets
+ * (`#ws-ux-sub-<sous-onglet>`) ; les zones sont des panneaux (`data-ws-pane` / `data-ws-zone` : primary,
+ * details, tree, editor, evidence, content). Les quinze clés de vue historiques désignent chacune un onglet
+ * et un sous-onglet (`VIEWS`). Le bloc « défauts relevés par la revue » garde les contrôles des défauts
+ * corrigés (docs/incident-reconstruction/qa-review.md).
  */
 let site: IncidentSite;
 let server: RunningSdkServer;
@@ -31,23 +34,27 @@ let browser: Browser;
 
 const FAILING = 'Créer un livre sans éditeur';
 const PASSING = 'Créer un livre avec éditeur';
-const TABS = [
-  'overview',
-  'scope',
-  'environment',
-  'timeline',
-  'traceability',
-  'requests',
-  'frontend',
-  'bff',
-  'backend',
-  'logs',
-  'hypotheses',
-  'experiments',
-  'diagnosis',
-  'report',
-  'regression',
-] as const;
+/** Les clés de vue (route `tab`) : l'onglet principal et le sous-onglet de chacune (contrat v2). */
+const VIEWS = {
+  overview: ['overview', 'summary'],
+  scope: ['overview', 'scope'],
+  environment: ['overview', 'environment'],
+  timeline: ['timeline', 'events'],
+  logs: ['timeline', 'logs'],
+  traceability: ['traceability', 'fullstack'],
+  frontend: ['traceability', 'frontend'],
+  bff: ['traceability', 'bff'],
+  backend: ['traceability', 'backend'],
+  requests: ['traceability', 'http'],
+  code: ['code', undefined],
+  diagnosis: ['diagnosis', 'diagnosis'],
+  hypotheses: ['diagnosis', 'hypotheses'],
+  experiments: ['diagnosis', 'experiments'],
+  report: ['report', 'report'],
+  regression: ['report', 'regression'],
+} as const satisfies Record<string, readonly [string, string | undefined]>;
+type View = keyof typeof VIEWS;
+const TABS = Object.keys(VIEWS) as View[];
 const MUTATING =
   /^(inc-(reproduce|cancel|resume|validate|scope-edit|ext-approve|ext-reject|app-add|app-remove)|ws-dx-(analyze|plan|plan-submit|run|approve|diagnose|regression)|ws-ux-target-save)$/;
 
@@ -167,13 +174,18 @@ async function openMenu(dash: Locator): Promise<void> {
 async function openIncident(opened: Opened, width = 1440): Promise<void> {
   if (width <= 960) await openMenu(opened.dash);
   await opened.dash.locator('.drawer [data-action="nav"][data-view="incidents"]').click();
-  await opened.dash.locator(`[data-action="inc-open"][data-incident="${incident.id}"]`).click();
+  await opened.dash.locator(`button[data-action="inc-open"][data-incident="${incident.id}"]`).first().click();
   await opened.dash.locator('#ws-ux-tab-overview[aria-selected="true"]').waitFor();
 }
 
-async function openTab(opened: Opened, tab: string): Promise<void> {
+/** Ouvre une vue : son onglet principal, puis son sous-onglet. */
+async function openTab(opened: Opened, view: View): Promise<void> {
+  const [tab, sub] = VIEWS[view];
   await opened.dash.locator(`#ws-ux-tab-${tab}`).click();
   await opened.dash.locator(`#ws-ux-tab-${tab}[aria-selected="true"]`).waitFor();
+  if (sub === undefined) return;
+  await opened.dash.locator(`#ws-ux-sub-${sub}`).click();
+  await opened.dash.locator(`#ws-ux-sub-${sub}[aria-selected="true"]`).waitFor();
 }
 
 /** Évalue dans la racine fantôme du Dashboard. */
@@ -197,15 +209,27 @@ describe('Investigation Workspace — QA review (Chromium)', () => {
     try {
       await openIncident(opened);
       await dash.locator('#ws-ux-tab-overview').focus();
-      expect(
-        await inRoot<number>(page, `return root.querySelectorAll('[role="tab"][tabindex="0"]').length;`),
-      ).toBe(1);
+      // Un seul arrêt de tabulation par liste d'onglets (onglets principaux, sous-onglets).
+      const stops = await inRoot<number[]>(
+        page,
+        `return [...root.querySelectorAll('[role="tablist"]')].map((list) => list.querySelectorAll('[role="tab"][tabindex="0"]').length);`,
+      );
+      expect(stops).toEqual([1, 1]);
       await page.keyboard.press('ArrowRight');
-      await dash.locator('#ws-ux-tab-scope[aria-selected="true"]').waitFor();
-      expect((await activeElement(page))?.id).toBe('ws-ux-tab-scope');
+      await dash.locator('#ws-ux-tab-timeline[aria-selected="true"]').waitFor();
+      expect((await activeElement(page))?.id).toBe('ws-ux-tab-timeline');
       await page.keyboard.press('End');
-      await dash.locator('#ws-ux-tab-regression[aria-selected="true"]').waitFor();
-      expect((await activeElement(page))?.id).toBe('ws-ux-tab-regression');
+      await dash.locator('#ws-ux-tab-report[aria-selected="true"]').waitFor();
+      expect((await activeElement(page))?.id).toBe('ws-ux-tab-report');
+      // Les sous-onglets roulent aussi, le focus suit.
+      await dash.locator('#ws-ux-sub-report').focus();
+      await page.keyboard.press('ArrowRight');
+      await dash.locator('#ws-ux-sub-regression[aria-selected="true"]').waitFor();
+      expect((await activeElement(page))?.id).toBe('ws-ux-sub-regression');
+      await page.keyboard.press('Home');
+      await dash.locator('#ws-ux-sub-report[aria-selected="true"]').waitFor();
+      expect((await activeElement(page))?.id).toBe('ws-ux-sub-report');
+      await dash.locator('#ws-ux-tab-report').focus();
       await page.keyboard.press('Home');
       await dash.locator('#ws-ux-tab-overview[aria-selected="true"]').waitFor();
       const tab = await activeElement(page);
@@ -216,22 +240,23 @@ describe('Investigation Workspace — QA review (Chromium)', () => {
         await inRoot<string | null>(page, `return root.querySelector('#ws-ux-panel')?.getAttribute('role');`),
       ).toBe('tabpanel');
       // Un nœud du graphe : Entrée sélectionne, le focus reste, Échap vide la sélection.
-      const node = dash.locator('[data-ws-zone="graph"] .ws-graph-node[data-action="ws-select"]').first();
+      await openTab(opened, 'traceability');
+      const node = dash.locator('[data-ws-zone="primary"] .ws-graph-node[data-action="ws-select"]').first();
       const ref = await node.getAttribute('data-ref');
       await node.focus();
       await page.keyboard.press('Enter');
-      await dash.locator(`[data-ws-zone="aside"] .ws-ctx-body[data-sel="node:${ref ?? ''}"]`).waitFor();
+      await dash.locator(`[data-ws-zone="details"] .ws-ctx-body[data-sel="node:${ref ?? ''}"]`).waitFor();
       expect((await activeElement(page))?.ref).toBe(ref);
       await page.keyboard.press('Escape');
-      await dash.locator('[data-ws-zone="aside"] .ws-ctx-body[data-sel=""]').waitFor();
+      await dash.locator('[data-ws-zone="details"] .ws-ctx-body[data-sel=""]').waitFor();
       // Une requête choisie au clavier : la sélection est faite, le focus reste sur elle.
       await openTab(opened, 'requests');
       const request = dash
-        .locator('[data-ws-zone="main"] .ws-timeline-path', { hasText: '/api/books' })
+        .locator('[data-ws-zone="primary"] .ws-timeline-path', { hasText: '/api/books' })
         .first();
       await request.focus();
       await page.keyboard.press('Enter');
-      await dash.locator('[data-ws-zone="aside"] .ws-timeline-detail').waitFor();
+      await dash.locator('[data-ws-zone="details"] .ws-timeline-detail').waitFor();
       expect((await activeElement(page))?.action).toBe('ws-select');
       expect(opened.errors).toEqual([]);
     } finally {
@@ -269,7 +294,11 @@ describe('Investigation Workspace — QA review (Chromium)', () => {
       await page.waitForTimeout(2000);
       expect(calls).toEqual([]);
       await openTab(opened, 'diagnosis');
-      expect(await dash.locator('#ws-ux-panel .ws-dx-diag').getAttribute('data-status')).toBe('PROBABLE');
+      expect(
+        await dash
+          .locator('#ws-ux-panel .ws-dx-board .ws-dx-boardhead .ws-dx-chip')
+          .getAttribute('data-status'),
+      ).toBe('PROBABLE');
       expect(await dash.locator('#ws-ux-panel').textContent()).not.toContain('Cause racine confirmée');
       expect(opened.errors).toEqual([]);
     } finally {
@@ -284,56 +313,69 @@ describe('Investigation Workspace — QA review (Chromium)', () => {
       await openIncident(opened);
       await openTab(opened, 'requests');
       await dash
-        .locator('[data-ws-zone="main"] .ws-timeline-path', { hasText: '/api/books' })
+        .locator('[data-ws-zone="primary"] .ws-timeline-path', { hasText: '/api/books' })
         .first()
         .click();
-      const aside = dash.locator('[data-ws-zone="aside"]');
+      const aside = dash.locator('[data-ws-zone="details"]');
       await aside.locator('.ws-timeline-detail').waitFor();
       expect(await aside.locator('.ws-ctx-body').getAttribute('data-sel')).toMatch(/^request:/);
-      // Le graphe met en évidence les nœuds reliés et atténue les autres.
-      expect(
-        await dash.locator('[data-ws-zone="graph"] .ws-graph-node[data-ws-state="related"]').count(),
-      ).toBeGreaterThan(0);
-      // L'extrait du code relié, la ligne visée en évidence.
+      // L'extrait du code relié, la ligne visée en évidence ; l'éditeur ouvre le même endroit.
       await aside.locator('.ws-ctx-code .ws-code-sel').waitFor();
+      await dash.locator('[data-ws-zone="editor"] .ws-code-scroll .ws-code-target').waitFor();
+      // Le graphe met en évidence les nœuds reliés et atténue les autres.
+      await openTab(opened, 'traceability');
+      expect(
+        await dash.locator('[data-ws-zone="primary"] .ws-graph-node[data-ws-state="related"]').count(),
+      ).toBeGreaterThan(0);
+      expect(
+        await dash.locator('[data-ws-zone="primary"] .ws-graph-node[data-ws-state="dimmed"]').count(),
+      ).toBeGreaterThan(0);
       // La chronologie peut se restreindre aux éléments reliés.
       await openTab(opened, 'timeline');
       const count = async () => (await dash.locator('.ws-timeline-count').textContent()) ?? '';
       const all = await count();
-      await dash.locator('[data-ws-zone="main"] input[data-action="ws-timeline-related"]').check();
+      await dash.locator('[data-ws-zone="content"] input[data-action="ws-timeline-related"]').check();
       await expect.poll(count).not.toBe(all);
-      expect(await dash.locator('[data-ws-zone="main"] .ws-timeline-ev').count()).toBeGreaterThan(0);
+      expect(await dash.locator('[data-ws-zone="content"] .ws-timeline-ev').count()).toBeGreaterThan(0);
       // Un nœud du graphe : son détail ; un nœud de code ne porte aucune durée.
       await page.keyboard.press('Escape');
       await openTab(opened, 'traceability');
       const codeNode = await inRoot<string>(
         page,
-        `return [...root.querySelectorAll('[data-ws-zone="main"] .ws-graph-node[data-action="ws-select"]')].map((n) => n.dataset.ref).find((ref) => /CatalogBookService/.test(ref)) ?? '';`,
+        `return [...root.querySelectorAll('[data-ws-zone="primary"] .ws-graph-node[data-action="ws-select"]')].map((n) => n.dataset.ref).find((ref) => /CatalogBookService/.test(ref)) ?? '';`,
       );
       expect(codeNode).not.toBe('');
       await inRoot(
         page,
-        `[...root.querySelectorAll('[data-ws-zone="main"] .ws-graph-node')].find((n) => n.dataset.ref === ${JSON.stringify(codeNode)}).dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true })); return 0;`,
+        `[...root.querySelectorAll('[data-ws-zone="primary"] .ws-graph-node')].find((n) => n.dataset.ref === ${JSON.stringify(codeNode)}).dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true })); return 0;`,
       );
-      await dash.locator(`[data-ws-zone="aside"] .ws-ctx-body[data-sel="node:${codeNode}"]`).waitFor();
+      await dash.locator(`[data-ws-zone="details"] .ws-ctx-body[data-sel="node:${codeNode}"]`).waitFor();
       await aside.locator('.ws-ctx-code .ws-code-sel').waitFor();
       const nodeDetail = ((await aside.locator('.ws-ctx-body').textContent()) ?? '').split('Code relié')[0];
       expect(nodeDetail).not.toMatch(/\b\d+\s?ms\b/);
-      // Aucune relation lue dans le code n'est présentée comme observée.
+      // Aucune relation lue dans le code n'est présentée comme observée (table « Toutes les relations »).
+      expect(
+        await inRoot<number>(
+          page,
+          `return root.querySelectorAll('[data-ws-zone="details"] .ws-rel-table tbody tr').length;`,
+        ),
+      ).toBeGreaterThan(0);
       const staticObserved = await inRoot<number>(
         page,
-        `return [...root.querySelectorAll('.ws-rel-table tbody tr')].filter((tr) => tr.querySelector('.ws-rel-observed') && /\\.(java|ts):\\d+/.test(tr.children[3]?.textContent ?? '')).length;`,
+        `return [...root.querySelectorAll('[data-ws-zone="details"] .ws-rel-table tbody tr')].filter((tr) => tr.querySelector('.ws-rel-observed') && /\\.(java|ts):\\d+/.test(tr.children[3]?.textContent ?? '')).length;`,
       );
       expect(staticObserved).toBe(0);
       // Une hypothèse : ses éléments reliés sont mis en évidence dans le graphe.
       await page.keyboard.press('Escape');
       await openTab(opened, 'hypotheses');
       await dash
-        .locator('[data-ws-zone="main"] [data-action="ws-select"][data-kind="hypothesis"]')
+        .locator('[data-ws-zone="content"] [data-action="ws-select"][data-kind="hypothesis"]')
         .first()
         .click();
+      await aside.locator('.ws-ctx-body[data-sel^="hypothesis:"]').waitFor();
+      await openTab(opened, 'traceability');
       await expect
-        .poll(() => dash.locator('[data-ws-zone="graph"] .ws-graph-node[data-ws-state="related"]').count())
+        .poll(() => dash.locator('[data-ws-zone="primary"] .ws-graph-node[data-ws-state="related"]').count())
         .toBeGreaterThan(0);
       expect(await aside.locator('.ws-ctx-body').getAttribute('data-sel')).toMatch(/^hypothesis:/);
       expect(opened.errors).toEqual([]);
@@ -352,15 +394,18 @@ describe('Investigation Workspace — QA review (Chromium)', () => {
     try {
       await openIncident(opened);
       await openTab(opened, 'backend');
-      expect(await dash.locator('[data-ws-zone="main"]').textContent()).toContain(
+      expect(await dash.locator('[data-ws-zone="tree"]').textContent()).toContain(
         'Votre rôle ne permet pas de lire le code du périmètre.',
       );
       await openTab(opened, 'requests');
       await dash
-        .locator('[data-ws-zone="main"] .ws-timeline-path', { hasText: '/api/books' })
+        .locator('[data-ws-zone="primary"] .ws-timeline-path', { hasText: '/api/books' })
         .first()
         .click();
-      expect(await dash.locator('[data-ws-zone="aside"] .ws-ctx-code').textContent()).toContain(
+      expect(await dash.locator('[data-ws-zone="details"] .ws-ctx-code').textContent()).toContain(
+        'Votre rôle ne permet pas de lire le code',
+      );
+      expect(await dash.locator('[data-ws-zone="editor"]').textContent()).toContain(
         'Votre rôle ne permet pas de lire le code',
       );
       for (const tab of TABS) {
@@ -392,18 +437,30 @@ describe('Investigation Workspace — QA review (Chromium)', () => {
         ? route.fulfill({
             status: 500,
             contentType: 'application/json',
-            body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Erreur interne simulée' } }),
+            // Le format d'erreur du serveur SDK (ErrorBody).
+            body: JSON.stringify({ error: 'Erreur interne simulée', status: 500, code: 'INTERNAL' }),
           })
         : route.continue(),
     );
     try {
       await openIncident(opened);
       await openTab(opened, 'backend');
-      await dash.locator('[data-ws-zone="main"] [role="alert"]').first().waitFor();
+      // L'arborescence et le fichier de départ de la couche (ouvert dans l'éditeur) en échec : dits.
+      const tree = dash.locator('[data-ws-zone="tree"]');
+      const editor = dash.locator('[data-ws-zone="editor"]');
+      await tree.locator('[role="alert"]').first().waitFor();
+      await editor.locator('[role="alert"]').first().waitFor();
+      expect(await tree.locator('[role="alert"]').first().textContent()).toContain('Erreur interne simulée');
+      expect(await editor.locator('[role="alert"]').first().textContent()).toContain(
+        'Erreur interne simulée',
+      );
       fail = false;
-      await dash.locator('[data-ws-zone="main"] [data-action="ws-code-reload"]').first().click();
-      await dash.locator('[data-ws-zone="main"] .ws-code .ws-code-sel').waitFor();
-      expect(await dash.locator('[data-ws-zone="main"] [role="alert"]').count()).toBe(0);
+      await editor.locator('[data-action="ws-code-reload"]').first().click();
+      await editor.locator('.ws-code-scroll .ws-code-sel').waitFor();
+      if ((await tree.locator('[data-action="ws-code-reload"]').count()) > 0)
+        await tree.locator('[data-action="ws-code-reload"]').first().click();
+      await tree.locator('.ws-code-file').first().waitFor();
+      expect(await dash.locator('[data-ws-pane] [role="alert"]').count()).toBe(0);
     } finally {
       await page.close();
     }
@@ -414,6 +471,7 @@ describe('Investigation Workspace — QA review (Chromium)', () => {
     const { page } = opened;
     try {
       await openIncident(opened);
+      const dangling = new Set<string>();
       for (const tab of TABS) {
         await openTab(opened, tab);
         const audit = await inRoot<{ dup: string[]; unnamed: string[]; dangling: string[]; imgs: number }>(
@@ -443,16 +501,19 @@ describe('Investigation Workspace — QA review (Chromium)', () => {
         );
         expect(audit.dup, tab).toEqual([]);
         expect(audit.unnamed, tab).toEqual([]);
-        expect(audit.dangling, tab).toEqual([]);
         expect(audit.imgs, tab).toBe(0);
+        for (const reference of audit.dangling) dangling.add(reference);
       }
+      // Les boutons qui déplient un élément (« Détails », progression, « Aller à la ligne ») ne le désignent
+      // (aria-controls) que lorsqu'il est affiché.
+      expect([...dangling]).toEqual([]);
     } finally {
       await page.close();
     }
   });
 });
 
-describe('Investigation Workspace — defects found by the QA review (fail until fixed)', () => {
+describe('Investigation Workspace — defects found by the QA review (regression checks)', () => {
   it('no horizontal page scroll, at 390 px and at 1440 px, on every tab', async () => {
     for (const width of [390, 1440]) {
       const opened = await signIn({ width });
@@ -464,8 +525,8 @@ describe('Investigation Workspace — defects found by the QA review (fail until
             scroll: document.documentElement.scrollWidth,
             client: document.documentElement.clientWidth,
           }));
-          // DEFECT: the screen-reader count (.sr, position:absolute) of the tab counters escapes the
-          // scrolling tab bar (.ws-ux-tabs is not positioned) and widens the page (1331 px at 390).
+          // Fixed defect (qa-review): the screen-reader count (.sr, position:absolute) of the tab counters
+          // escaped the scrolling tab bar and widened the page (1331 px at 390).
           expect(scroll.scroll, `${String(width)} ${tab}`).toBeLessThanOrEqual(scroll.client);
         }
       } finally {
@@ -481,7 +542,7 @@ describe('Investigation Workspace — defects found by the QA review (fail until
       await openTab(opened, 'traceability');
       const refs = await inRoot<string[]>(
         opened.page,
-        `return [...new Set([...root.querySelectorAll('[data-ws-zone="main"] .ws-chip[data-action="ws-select"]')].map((c) => c.dataset.kind + '|' + c.dataset.ref))];`,
+        `return [...new Set([...root.querySelectorAll('[data-ws-pane] .ws-chip[data-action="ws-select"]')].map((c) => c.dataset.kind + '|' + c.dataset.ref))];`,
       );
       expect(refs.length).toBeGreaterThan(0);
       const dead: string[] = [];
@@ -489,15 +550,15 @@ describe('Investigation Workspace — defects found by the QA review (fail until
         const [kind, ref] = key.split('|');
         const text = await inRoot<string>(
           opened.page,
-          `const chip = [...root.querySelectorAll('[data-ws-zone="main"] .ws-chip[data-action="ws-select"]')].find((c) => c.dataset.kind === ${JSON.stringify(kind)} && c.dataset.ref === ${JSON.stringify(ref)});
+          `const chip = [...root.querySelectorAll('[data-ws-pane] .ws-chip[data-action="ws-select"]')].find((c) => c.dataset.kind === ${JSON.stringify(kind)} && c.dataset.ref === ${JSON.stringify(ref)});
            chip.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
-           return root.querySelector('[data-ws-zone="aside"] .ws-ctx-body')?.textContent ?? '';`,
+           return root.querySelector('[data-ws-zone="details"] .ws-ctx-body')?.textContent ?? '';`,
         );
         if (/n’existe plus/.test(text)) dead.push(key);
         await opened.page.keyboard.press('Escape');
       }
-      // DEFECT: evidenceChips (incident-parts.ts) turns every ref that is not a request into an
-      // `evidence` selection; graph edges carry symbol ids and reproduction ids → « n'existe plus ».
+      // Fixed defect (qa-review): evidenceChips (incident-parts.ts) turned every ref that is not a request
+      // into an `evidence` selection; graph edges carry symbol ids and reproduction ids → « n'existe plus ».
       expect(dead).toEqual([]);
     } finally {
       await opened.page.close();
@@ -509,8 +570,13 @@ describe('Investigation Workspace — defects found by the QA review (fail until
     try {
       await openIncident(opened);
       const worst: { cls: string; ratio: number }[] = [];
-      for (const tab of ['traceability', 'timeline']) {
+      for (const tab of ['traceability', 'timeline'] as const) {
         await openTab(opened, tab);
+        // La table « Toutes les relations » (panneau des détails) ouverte : ses badges sont rendus.
+        if (tab === 'traceability')
+          await opened.dash
+            .locator('[data-ws-zone="details"] details[data-ws-details="relations"] > summary')
+            .click();
         worst.push(
           ...(await inRoot<{ cls: string; ratio: number }[]>(
             opened.page,
@@ -519,7 +585,7 @@ describe('Investigation Workspace — defects found by the QA review (fail until
              const bg = (el) => { const layers = []; for (let c = el; c; c = up(c)) { const v = parse(getComputedStyle(c).backgroundColor); if (v[3] > 0) { layers.push(v); if (v[3] >= 1) break; } }
                let out = [255, 255, 255]; for (const l of layers.reverse()) out = out.map((x, i) => l[i] * l[3] + x * (1 - l[3])); return out; };
              const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
-             return [...root.querySelectorAll('[data-ws-zone="main"] .ws-rel, [data-ws-zone="main"] .ws-timeline-status')].map((el) => {
+             return [...root.querySelectorAll('[data-ws-pane] .ws-rel, [data-ws-pane] .ws-timeline-status')].map((el) => {
                const b = bg(el); const f = parse(getComputedStyle(el).color);
                const [x, y] = [lum(f), lum(b)].sort((p, q) => q - p);
                return { cls: el.className, ratio: Math.round(((x + 0.05) / (y + 0.05)) * 100) / 100 };
@@ -527,8 +593,8 @@ describe('Investigation Workspace — defects found by the QA review (fail until
           )),
         );
       }
-      // DEFECT: .ws-rel-* (incident-parts.ts) and .ws-timeline-status (incident-timeline.ts) use the raw
-      // status token as text colour (2.5–3.6:1) where the Dashboard's .pill mixes it with --qa-color-text.
+      // Fixed defect (qa-review): .ws-rel-* (incident-parts.ts) and .ws-timeline-status (incident-timeline.ts)
+      // used the raw status token as text colour (2.5–3.6:1).
       expect([...new Set(worst.map((entry) => `${entry.cls} ${String(entry.ratio)}`))]).toEqual([]);
     } finally {
       await opened.page.close();
@@ -540,13 +606,27 @@ describe('Investigation Workspace — defects found by the QA review (fail until
     try {
       await openIncident(opened);
       await openTab(opened, 'traceability');
+      // La table vit dans le panneau des détails, sous « Toutes les relations » (fermé par défaut).
+      const drawer = opened.dash.locator('[data-ws-zone="details"] details[data-ws-details="relations"]');
+      expect(await drawer.locator('summary').textContent()).toContain('Toutes les relations');
+      await drawer.locator('summary').click();
+      await opened.dash
+        .locator('[data-ws-zone="details"] details[data-ws-details="relations"][open] tbody tr')
+        .first()
+        .waitFor();
+      expect(
+        await inRoot<string[]>(
+          opened.page,
+          `return [...root.querySelectorAll('[data-ws-zone="details"] .ws-rel-table thead th')].map((th) => th.textContent.trim()).slice(0, 2);`,
+        ),
+      ).toEqual(['De', 'Vers']);
       const widths = await inRoot<number[]>(
         opened.page,
-        `return [...(root.querySelector('.ws-rel-table tbody tr')?.children ?? [])].slice(0, 2).map((cell) => Math.round(cell.getBoundingClientRect().width));`,
+        `return [...(root.querySelector('[data-ws-zone="details"] .ws-rel-table tbody tr')?.children ?? [])].slice(0, 2).map((cell) => Math.round(cell.getBoundingClientRect().width));`,
       );
       expect(widths).toHaveLength(2);
-      // DEFECT: .ws-graph-nodebtn has overflow-wrap:anywhere, so the table squeezes the node columns to
-      // 33 and 49 px (labels broken letter by letter) while « Raison » takes 375 px.
+      // Fixed defect (qa-review): .ws-graph-nodebtn had overflow-wrap:anywhere, which squeezed the node
+      // columns to 33 and 49 px (labels broken letter by letter).
       for (const width of widths) expect(width).toBeGreaterThanOrEqual(96);
     } finally {
       await opened.page.close();

@@ -240,6 +240,17 @@ describe('Dashboard — execution console in Chromium', () => {
     // Assez de place pour que la poignée ait de la marge (la fenêtre est haute) ; rendue après.
     await page.setViewportSize({ width: 1600, height: 1300 });
     const handle = editor().locator('[data-con-split]');
+    // L'éditeur suit la hauteur de la fenêtre : attendre que la poignée ne bouge plus avant de la saisir
+    // (un glisser commencé pendant la remise en page manque la poignée).
+    let previous = '';
+    await expect
+      .poll(async () => {
+        const current = JSON.stringify(await handle.boundingBox());
+        const stable = current === previous;
+        previous = current;
+        return stable;
+      })
+      .toBe(true);
     const panelBox = await panel.boundingBox();
     const box = await handle.boundingBox();
     if (!box || !panelBox) throw new Error('no handle');

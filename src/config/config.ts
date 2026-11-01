@@ -2160,6 +2160,10 @@ const aiSchema = z
       })
       .strict()
       .prefault({}),
+    /** L'investigation IA des incidents : DETERMINISTIC par défaut ; forme détaillée et bornes dans src/incident/ai/config.ts. */
+    incidents: z
+      .looseObject({ mode: z.enum(['DETERMINISTIC', 'AI_ASSISTED', 'AI_AGENTIC']).default('DETERMINISTIC') })
+      .prefault({}),
   })
   .strict()
   .superRefine((ai, context) => {

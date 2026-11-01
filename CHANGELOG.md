@@ -32,6 +32,14 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Découverte autonome des déclencheurs** (`src/incident/trigger`, `docs/incident-reconstruction/trigger-discovery.md`) :
+  interprète de description (FR/EN, provenance), découverte du périmètre (statuts du Scope Policy Engine), analyse
+  statique Angular (`src/incident/code/angular.ts`), collecteur d'observations navigateur, oracle de défaillance
+  silencieuse, stratégies d'exploration, rejouages, minimisation (delta debugging), conditions, première défaillance,
+  perte de données, hypothèses et vérifications, test de non-régression proposé, rapport ; routes `…/trigger/*`,
+  client `incidents.trigger`, onglet « Déclencheurs » du Dashboard ; application Angular de test avec défaut contrôlé
+  (`tests/fixtures/angular-app`, `tests/fixtures/angular-site.ts`).
+
 - **Incident Reconstruction** (`docs/INCIDENT_RECONSTRUCTION.md`) : diagnostic d'un incident fonctionnel à partir de
   preuves — déclarer, délimiter, reproduire, observer, inspecter le code, corréler, diagnostiquer, vérifier,
   rapporter, générer un test.
@@ -63,6 +71,27 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
     requête → erreur affichée), chronologie unifiée, choix de l'environnement LOCAL / REMOTE / ARO, thème sombre,
     responsive, accessibilité (navigation clavier, contrastes AA, annonces) ; démonstration étiquetée
     « Données de démonstration », sans appel au serveur, jamais présentée comme un diagnostic réel.
+  - **Investigation IA** (`src/incident/ai`, `docs/incident-reconstruction/ai-investigation.md`) : modes `DETERMINISTIC`
+    (défaut : rien n'est chargé), `AI_ASSISTED`, `AI_AGENTIC` ; profondeurs `QUICK`, `STANDARD`, `DEEP` ; agents
+    (plan, preuves, frontend, BFF, backend, inter-couches, hypothèses, plan de vérification, chasseur de contradictions,
+    synthèse, assistant) sur des outils en lecture seule gardés par le Scope Policy Engine (liste fermée, résultats
+    délimités comme données, refus jamais rejoués, aucune commande) ; hypothèses d'origine IA toujours `PROPOSED` et
+    plafonnées, relations `INFERRED`, confirmation réservée au validateur déterministe ; budgets bornés, annulation,
+    pause et reprise ; investigation approfondie (stratégies, expériences avec opérations exactes, contradictions,
+    rôles, couverture par dimension, mémoire persistante, politique d'arrêt) ; routes `…/ai/*`, client
+    `client.incidents.ai`, sous-onglet « Diagnostic › Investigation IA », section « Investigation IA » du rapport.
+    Fournisseur `anthropic` (SDK optionnel) ; tests avec un client de modèle scripté.
+  - **Espace d'investigation façon IDE** : hauteur de la fenêtre sans défilement de la page, en-tête compact,
+    progression repliable, six vues avec sous-onglets, panneaux redimensionnables (souris et clavier), agrandis,
+    réduits ou masqués, défilement propre à chaque panneau, graphe qui remplit son panneau (plein écran, « Ajuster »,
+    menu « Couches »), explorateur de code (onglets de fichiers, recherche, « Aller à la ligne »), ouverture du code à
+    la sélection, préférences locales, un panneau à la fois sur mobile.
+  - **Parcours guidé en douze écrans** : liste à onglets et recherche, déclaration avec application, type et pièces
+    jointes, périmètre par arborescence de dossiers, profondeur et limites (mémoire imposée au Job ARO), cartes
+    d'environnement et test de connectivité, reproduction suivie étape par étape pendant le rejeu, preuves avec commande
+    cURL reconstruite, graphe en couloirs horizontaux, tableau du diagnostic, rapport par sections exporté en PDF, HTML,
+    Markdown ou JSON, test de non-régression Playwright généré. Routes `…/attachments`, `…/scope/tree`,
+    `…/report?format=html|pdf&sections=`, `…/regression/spec`.
   - Routes `GET …/incidents/:i/sources`, `…/source?application=&file=` (droit `RUN`) et
     `…/screenshot?reproduction=&file=` ; en-têtes HTTP des échanges restreints à une liste autorisée.
 - Moteur : `network.captureBodies` (corps des échanges en erreur et des écritures, masqués, tronqués à 8 Kio) et

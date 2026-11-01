@@ -44,3 +44,15 @@ export type {
   ScopeExtension,
   ScopeExtensionKind,
 } from './incident-contracts.js';
+/** La découverte des déclencheurs : le contrat commun, en types seulement. */
+export type {
+  IncidentBrief,
+  TriggerBudget,
+  TriggerCondition,
+  TriggerDepth,
+  TriggerInvestigationInput,
+  TriggerRun,
+  TriggerRunReport,
+  TriggerState,
+  TriggerTrial,
+} from './incident-trigger-contracts.js';

@@ -423,3 +423,81 @@ describe('IncidentStore — mutate', () => {
     ).rejects.toBeInstanceOf(IncidentNotFoundError);
   });
 });
+
+describe('IncidentStore — application, nature et limite de mémoire', () => {
+  it('stores application and kind on creation, in the summary, and updates them with a history entry', async () => {
+    const store = new IncidentStore(projectDir, { now });
+    const created = await store.create(
+      'p1',
+      input({ application: '  Catalogue  ', kind: 'TECHNICAL' }),
+      'alice',
+    );
+    expect(created.application).toBe('Catalogue');
+    expect(created.kind).toBe('TECHNICAL');
+    const summary = (await store.list()).find((entry) => entry.id === created.id);
+    expect(summary).toMatchObject({
+      application: 'Catalogue',
+      kind: 'TECHNICAL',
+      createdAt: created.createdAt,
+    });
+    const updated = await store.update(
+      created.id,
+      created.revision,
+      { kind: 'DATA', application: 'BFF' },
+      'bob',
+    );
+    expect(updated.kind).toBe('DATA');
+    expect(updated.application).toBe('BFF');
+    expect(updated.history.at(-1)?.message).toBe('Modifié : application, kind.');
+    expect(
+      JSON.parse(await readFile(path.join(projectDir, 'incidents', `${created.id}.json`), 'utf8')),
+    ).toMatchObject({ kind: 'DATA', application: 'BFF' });
+  });
+
+  it('refuses an unknown kind and an application longer than 120 characters', async () => {
+    const store = new IncidentStore(projectDir, { now });
+    await expect(store.create('p1', input({ kind: 'COSMETIC' as never }), 'alice')).rejects.toBeInstanceOf(
+      IncidentValidationError,
+    );
+    await expect(store.create('p1', input({ application: 'x'.repeat(121) }), 'alice')).rejects.toThrow(
+      /application/,
+    );
+    const created = await store.create('p1', input(), 'alice');
+    await expect(
+      store.update(created.id, created.revision, { kind: 'NOPE' as never }, 'alice'),
+    ).rejects.toThrow(/kind/);
+  });
+
+  it('accepts maxMemoryMb within 64..16384, refuses outside, and removes it with null', async () => {
+    const store = new IncidentStore(projectDir, { now });
+    const limits = {
+      maxFiles: 10,
+      maxFileBytes: 1000,
+      maxDurationMs: 60_000,
+      maxRequests: 5,
+      maxExperiments: 2,
+    };
+    const created = await store.create(
+      'p1',
+      input({ scope: { limits: { ...limits, maxMemoryMb: 512 } } }),
+      'alice',
+    );
+    expect(created.scope.limits.maxMemoryMb).toBe(512);
+    for (const wrong of [63, 16_385, 1.5])
+      await expect(
+        store.update(
+          created.id,
+          created.revision,
+          { scope: { limits: { ...limits, maxMemoryMb: wrong } } },
+          'a',
+        ),
+      ).rejects.toThrow(/maxMemoryMb/);
+    const cleared = await store.update(
+      created.id,
+      created.revision,
+      { scope: { limits: { ...limits, maxMemoryMb: null as unknown as number } } },
+      'alice',
+    );
+    expect('maxMemoryMb' in cleared.scope.limits).toBe(false);
+  });
+});

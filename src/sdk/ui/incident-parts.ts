@@ -27,6 +27,12 @@ export interface WorkspaceContext {
   related: ReadonlySet<string>;
   /** Données de démonstration : jamais présentées comme un diagnostic réel. */
   demo: boolean;
+  /**
+   * Le bandeau « Données de démonstration » est affiché une fois par la coquille (en-tête) : les vues ne le
+   * répètent pas dans chaque panneau (`demoBanner(ctx)` rend alors une chaîne vide, `demoBanner(ctx, true)`
+   * le rend quand même).
+   */
+  demoInShell?: boolean;
   /** Les droits de la personne (RUN, DECIDE, PUBLISH, RUN_WRITES). */
   can: (right: 'RUN' | 'DECIDE' | 'PUBLISH' | 'RUN_WRITES') => boolean;
 }
@@ -198,8 +204,8 @@ export function panelState(lang: Lang, state: PanelState, detail?: string, retry
 }
 
 /** Le bandeau des données de démonstration : toujours visible quand `demo` est vrai. */
-export function demoBanner(ctx: WorkspaceContext): string {
-  if (!ctx.demo) return '';
+export function demoBanner(ctx: WorkspaceContext, shell = false): string {
+  if (!ctx.demo || (ctx.demoInShell === true && !shell)) return '';
   const t = partsText(ctx.lang);
   return `<p class="ws-demo" role="note"><b>${esc(t.demo)}</b><span>${esc(t.demoHint)}</span></p>`;
 }
@@ -208,10 +214,11 @@ export function demoBanner(ctx: WorkspaceContext): string {
 export const INCIDENT_PARTS_CSS = `
 .ws-selected{outline:2px solid var(--qa-color-primary);outline-offset:1px;border-radius:6px}
 .ws-related{background:color-mix(in srgb,var(--qa-color-primary) 10%,transparent);border-radius:6px}
-.ws-dimmed{opacity:.45}
+.ws-dimmed{opacity:.9;color:var(--qa-color-muted)}
+.ws-dimmed .ws-dimmed{opacity:1}
 .ws-rel{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
 .ws-rel-observed{background:color-mix(in srgb,var(--qa-color-primary) 14%,transparent);color:color-mix(in srgb,var(--qa-color-primary) 62%,var(--qa-color-text))}
-.ws-rel-statically_resolved{background:color-mix(in srgb,var(--qa-color-success) 16%,transparent);color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text))}
+.ws-rel-statically_resolved{background:color-mix(in srgb,var(--qa-color-success) 16%,transparent);color:color-mix(in srgb,var(--qa-color-success) 52%,var(--qa-color-text))}
 .ws-rel-inferred{background:color-mix(in srgb,var(--qa-color-warning) 18%,transparent);color:color-mix(in srgb,var(--qa-color-warning) 62%,var(--qa-color-text))}
 .ws-rel-unknown{background:color-mix(in srgb,var(--qa-color-danger) 14%,transparent);color:color-mix(in srgb,var(--qa-color-danger) 62%,var(--qa-color-text))}
 .ws-legend{display:flex;flex-wrap:wrap;gap:6px 18px;list-style:none;margin:0;padding:0;font-size:13px}

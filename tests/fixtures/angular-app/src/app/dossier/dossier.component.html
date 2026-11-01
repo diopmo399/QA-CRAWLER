@@ -1,0 +1,28 @@
+<h1>Nouveau dossier</h1>
+<nav><a routerLink="/dossiers">Liste des dossiers</a></nav>
+<form [formGroup]="form" (ngSubmit)="enregistrer()">
+  <label>Code <input formControlName="code" /></label>
+  <label>Titre <input formControlName="titre" /></label>
+  <label
+    >Catégorie
+    <select formControlName="categorie">
+      <option value="courant">Courant</option>
+      <option value="prioritaire">Prioritaire</option>
+      <option value="archive">Archive</option>
+    </select>
+  </label>
+  <label><input type="checkbox" formControlName="urgent" /> Urgent</label>
+  <p class="mat-error" role="alert" *ngIf="erreur">{{ erreur }}</p>
+  <button type="submit" [disabled]="busy.locked && !statut">Enregistrer</button>
+  <button type="button" (click)="actualiser()">Actualiser</button>
+  <button type="button" (click)="ouvrirNotes()">Notes</button>
+  <button type="button" (click)="ouvrirAide()">Aide</button>
+</form>
+<p id="statut" role="status" aria-live="polite">{{ statut }}</p>
+<div class="spinner" *ngIf="busy.locked" aria-busy="true"></div>
+<app-notes-dialog *ngIf="notesOuvertes" />
+<dialog *ngIf="aideOuverte" open role="dialog">
+  <h2>Aide</h2>
+  <p>Renseignez le code puis enregistrez.</p>
+  <button type="button" (click)="fermerAide()">Fermer</button>
+</dialog>

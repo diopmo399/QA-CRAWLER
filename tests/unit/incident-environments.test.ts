@@ -137,6 +137,7 @@ describe('capabilities (sans effet de bord)', () => {
       tests: true,
       logs: 'FILES',
       kubernetesJobs: false,
+      memoryLimit: false,
     });
     expect(calls).toHaveLength(0);
   });
@@ -163,6 +164,8 @@ describe('capabilities (sans effet de bord)', () => {
     const bare = await environmentAdapter({ target: 'REMOTE' }, { env: { PATH: tools } }).capabilities();
     expect(bare.logs).toBe('FILES');
     expect(bare.limitations.join('\n')).toMatch(/remote\.openshift/);
+    // Rien ne fait respecter une limite de mémoire en REMOTE.
+    expect(bare.memoryLimit).toBe(false);
   });
 
   it('ARO dans le cluster : conteneur, volume, Jobs et journaux OpenShift', async () => {
@@ -176,6 +179,7 @@ describe('capabilities (sans effet de bord)', () => {
       repositories: 'CLUSTER_VOLUME',
       logs: 'OPENSHIFT',
       kubernetesJobs: true,
+      memoryLimit: true,
       tests: true,
     });
     expect(caps.limitations).toEqual([]);
@@ -187,6 +191,7 @@ describe('capabilities (sans effet de bord)', () => {
       serviceAccountDir: serviceAccount,
     }).capabilities();
     expect(outside.kubernetesJobs).toBe(false);
+    expect(outside.memoryLimit).toBe(false);
     expect(outside.logs).toBe('NONE');
     expect(outside.limitations.join('\n')).toMatch(/not running inside a cluster/);
     const config = aroConfig();
@@ -520,6 +525,39 @@ describe('investigationJobManifest (ARO)', () => {
     expect(container?.securityContext).toMatchObject({ allowPrivilegeEscalation: false, runAsNonRoot: true });
     expect(container?.volumeMounts).toContainEqual({ name: 'repositories', mountPath: repos });
     expect(yaml).not.toMatch(/secretKeyRef|password|\btoken:/i);
+  });
+
+  it('écrit maxMemoryMb dans resources.limits.memory (Mi), la demande ne dépassant jamais la limite', () => {
+    const base = {
+      config: aroConfig(),
+      incidentId: 'inc_1',
+      command: 'mvn',
+      args: ['test'],
+      cwd: backendRoot,
+    };
+    const resourcesOf = (yaml: string) =>
+      (
+        parse(yaml.replace(/^#.*\n/, '')) as {
+          spec: {
+            template: {
+              spec: {
+                containers: { resources: { requests: { memory: string }; limits: { memory: string } } }[];
+              };
+            };
+          };
+        }
+      ).spec.template.spec.containers[0]?.resources;
+    expect(resourcesOf(investigationJobManifest({ ...base, maxMemoryMb: 2048 }))).toMatchObject({
+      requests: { memory: '1Gi' },
+      limits: { memory: '2048Mi' },
+    });
+    expect(resourcesOf(investigationJobManifest({ ...base, maxMemoryMb: 512 }))).toMatchObject({
+      requests: { memory: '512Mi' },
+      limits: { memory: '512Mi' },
+    });
+    expect(resourcesOf(investigationJobManifest(base))?.limits.memory).toBe('3Gi');
+    for (const wrong of [0, 63, 16_385, 1.5])
+      expect(() => investigationJobManifest({ ...base, maxMemoryMb: wrong })).toThrow(/maxMemoryMb/);
   });
 
   it('refuse un secret en clair, un shell, un dossier hors montage, une cible non ARO', () => {

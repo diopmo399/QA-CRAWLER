@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { incidentReproduction } from '../../src/sdk/core/incident-contracts.js';
 import {
   DEMO_INCIDENT_ID,
+  demoAttachment,
   demoIncident,
+  demoRegressionSpec,
   demoReport,
   demoSource,
   demoSourceTree,
@@ -118,5 +120,33 @@ describe('demonstration dataset', () => {
     copy.title = 'changé';
     expect(demoIncident().title).toBe(incident.title);
     expect(demoIncident()).toEqual(incident);
+  });
+
+  it('feeds the mockup screens: application, kind, attachments with generated content, a generated Playwright spec', () => {
+    expect(incident.application).toBe('Catalogue');
+    expect(incident.kind).toBe('FUNCTIONAL');
+    const attachments = incident.attachments ?? [];
+    expect(attachments.map((entry) => entry.type)).toEqual(['image/png', 'text/plain']);
+    for (const entry of attachments) {
+      const content = demoAttachment(entry.id);
+      expect(content?.id).toBe(entry.id);
+      // La taille annoncée est celle du contenu fourni (rien d'inventé).
+      const bytes =
+        content && 'dataUrl' in content
+          ? Buffer.from(content.dataUrl.split(',')[1] ?? '', 'base64').length
+          : Buffer.byteLength(content && 'text' in content ? content.text : '', 'utf8');
+      expect(bytes).toBe(entry.bytes);
+    }
+    const image = demoAttachment('att_demo_1');
+    expect(image && 'dataUrl' in image ? image.dataUrl : '').toMatch(/^data:image\/png;base64,iVBORw0KGgo/);
+    const log = demoAttachment('att_demo_2');
+    expect(log && 'text' in log ? log.text : '').toContain('Données de démonstration');
+    expect(demoAttachment('att_missing')).toBeUndefined();
+    const spec = demoRegressionSpec();
+    expect(spec.language).toBe('typescript');
+    expect(spec.code.split('\n')[0]).toContain('Données de démonstration');
+    expect(spec.code).toContain("from '@playwright/test'");
+    expect(spec.code).toContain('page.goto("http://localhost:4200/books/new")');
+    expect(spec.steps).toBe(5);
   });
 });

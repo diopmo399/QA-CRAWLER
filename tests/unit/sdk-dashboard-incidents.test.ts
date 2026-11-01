@@ -19,17 +19,28 @@ import {
 } from '../../src/sdk/ui/dashboard-incidents-controller.js';
 import {
   applicationOf,
+  applicationSuggestions,
+  attachmentTypeOf,
+  base64Of,
   canReproduce,
   emptyApplicationForm,
   emptyIncidentForm,
   emptyIncidentsUi,
+  groupCounts,
   incidentFormProblems,
   incidentInputOf,
+  incidentsCsv,
   needsPolling,
   scopeFormOf,
   scopeOf,
+  sizeText,
+  sortAttachments,
+  visibleIncidents,
   type IncidentsUi,
 } from '../../src/sdk/ui/dashboard-incidents.js';
+import type { IncidentSummary } from '../../src/sdk/core/incident-contracts.js';
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from '../../src/sdk/core/incident-contracts.js';
+import { emptyCodeUi, revealInCode } from '../../src/sdk/ui/incident-code.js';
 import { planInputOf, regressionVerdict } from '../../src/sdk/ui/incident-diagnosis.js';
 import { graphLayout2 } from '../../src/sdk/ui/incident-graph.js';
 import { evidenceChips } from '../../src/sdk/ui/incident-parts.js';
@@ -256,6 +267,17 @@ const incidentOf = (over: Partial<Incident> = {}): Incident => ({
   ...over,
 });
 
+const summary = (over: Partial<IncidentSummary> = {}): IncidentSummary => ({
+  id: 'inc_1',
+  title: 'Erreur',
+  severity: 'HIGH',
+  state: 'DRAFT',
+  target: 'LOCAL',
+  createdAt: at,
+  updatedAt: at,
+  ...over,
+});
+
 const role = (name: 'READER' | 'ANALYST' | 'PILOT') => ({
   me: {
     id: 'm',
@@ -408,10 +430,33 @@ describe('dashboard — incidents: pure helpers', () => {
     const form = emptyIncidentForm(project);
     expect(form.scenario).toBe('Créer un livre');
     expect(form.environmentId).toBe('env_test');
-    expect(incidentFormProblems(form)).toEqual(['title', 'observed', 'expected']);
-    const filled = { ...form, title: ' T ', observed: 'HTTP 500', expected: 'créé' };
+    expect(form.kind).toBe('FUNCTIONAL');
+    expect(form.application).toBe('');
+    expect(incidentFormProblems(form)).toEqual([
+      'title',
+      'description',
+      'application',
+      'expected',
+      'observed',
+    ]);
+    const filled = {
+      ...form,
+      title: ' T ',
+      description: 'D',
+      application: ' Catalogue ',
+      observed: 'HTTP 500',
+      expected: 'créé',
+    };
     expect(incidentFormProblems(filled)).toEqual([]);
-    expect(incidentInputOf(filled)).toMatchObject({ title: 'T', execution: { target: 'LOCAL' } });
+    expect(incidentFormProblems({ ...filled, application: 'x'.repeat(121) })).toEqual(['application']);
+    expect(incidentInputOf(filled)).toMatchObject({
+      title: 'T',
+      application: 'Catalogue',
+      kind: 'FUNCTIONAL',
+      execution: { target: 'LOCAL' },
+    });
+    expect(incidentInputOf({ ...filled, application: '  ', kind: 'DATA' })).not.toHaveProperty('application');
+    expect(incidentInputOf({ ...filled, kind: 'DATA' }).kind).toBe('DATA');
     expect(incidentFormProblems({ ...filled, target: 'ARO' })).toEqual([
       'namespace',
       'serviceAccount',
@@ -545,104 +590,328 @@ describe('dashboard — incidents: screens', () => {
     expect(activeNav({ view: 'investigations', projectId: 'p' })).toBe('investigations');
   });
 
-  it('the list: escaped titles, severity, state, target and diagnosis; declaring needs the RUN right', () => {
-    const list = [
-      {
+  it('the list: group tabs with counts, search, ID / title / severity / application / status / creation date', () => {
+    const list: IncidentSummary[] = [
+      summary({
         id: 'inc_1',
         title: 'Erreur <500>',
-        severity: 'CRITICAL' as const,
-        state: 'DIAGNOSED' as const,
-        scenario: 'Créer un livre',
-        target: 'ARO' as const,
-        updatedAt: at,
-        diagnosis: 'PROBABLE' as const,
-      },
+        severity: 'CRITICAL',
+        state: 'DIAGNOSED',
+        diagnosis: 'PROBABLE',
+      }),
+      summary({
+        id: 'inc_2',
+        title: 'Timeout API',
+        state: 'DRAFT',
+        application: 'Commande',
+        createdAt: '2026-10-31T08:00:00.000Z',
+      }),
+      summary({ id: 'inc_3', title: 'Page blanche', state: 'REPRODUCING', severity: 'LOW' }),
     ];
     const html = renderDashboard(base({ view: 'incidents', projectId: 'prj_books' }, { list }));
     expect(html).toContain('<h1>Incidents</h1>');
-    expect(html).toContain('Catalogue · 1 incident(s)');
-    expect(html).toContain('data-action="inc-open" data-incident="inc_1">Erreur &lt;500&gt;</button>');
-    expect(html).toContain('<span class="pill ko">Critique</span>');
+    expect(html).toContain('Catalogue · 3 incident(s)');
+    expect(html).toContain('<button class="btn primary" data-action="inc-new">');
+    expect(html).toContain('<span>Nouvel incident</span>');
+    // Onglets : Tous, Ouverts, En investigation, Résolus, Fermés, avec leur nombre.
+    expect(html).toContain('<div class="tabs inc-l-tabs" role="tablist" aria-label="Afficher :">');
+    expect(html).toMatch(
+      /id="inc-l-tab-ALL" data-action="inc-group" data-group="ALL" data-index="ALL" aria-selected="true" aria-controls="inc-l-panel" tabindex="0">Tous <span class="inc-l-n"><span aria-hidden="true">3<\/span><span class="sr">3 incident\(s\)<\/span>/,
+    );
+    for (const [group, text, count] of [
+      ['OPEN', 'Ouverts', 1],
+      ['INVESTIGATING', 'En investigation', 1],
+      ['RESOLVED', 'Résolus', 1],
+      ['CLOSED', 'Fermés', 0],
+    ] as const)
+      expect(html).toMatch(
+        new RegExp(
+          `data-group="${group}"[^>]*aria-selected="false"[^>]*tabindex="-1">${text} <span class="inc-l-n"><span aria-hidden="true">${String(count)}<`,
+        ),
+      );
+    expect(html).toContain('<div id="inc-l-panel" role="tabpanel" aria-labelledby="inc-l-tab-ALL">');
+    // La recherche a un libellé ; le nombre affiché lui est relié.
+    expect(html).toContain(
+      '<span class="sr">Rechercher un incident (identifiant, titre, application, scénario)</span><input type="search" id="inc-l-q" data-inc="list.query" value="" placeholder="Rechercher un incident…"',
+    );
+    expect(html).toContain('<p id="inc-l-shown" class="mu inc-l-shown">3 incident(s) affiché(s) sur 3</p>');
+    expect(html).toContain('data-action="inc-refresh" aria-label="Actualiser"');
+    expect(html).toContain('data-action="inc-export" aria-label="Exporter les lignes affichées (CSV)"');
+    for (const col of ['ID', 'Titre', 'Sévérité', 'Application', 'Statut', 'Date de création'])
+      expect(html).toContain(`<th scope="col">${col}</th>`);
+    // La ligne entière ouvre l'incident ; le titre est le bouton du clavier.
+    expect(html).toContain('<tr class="inc-l-row" data-action="inc-open" data-incident="inc_1">');
+    expect(html).toContain(
+      'data-action="inc-open" data-incident="inc_1" title="Ouvrir l’incident Erreur &lt;500&gt;">Erreur &lt;500&gt;</button>',
+    );
+    expect(html).toContain(
+      '<span class="pill ko inc-sev"><span class="inc-dot inc-dot-critical" aria-hidden="true"></span>Critique</span>',
+    );
     expect(html).toContain('<span class="pill ok">Diagnostiqué</span>');
-    expect(html).toContain('Azure Red Hat OpenShift');
-    expect(html).toContain('<span class="pill warn">Probable</span>');
-    expect(html).toContain('data-action="inc-new"');
+    expect(html).toContain('<td>Commande</td>');
+    // Le plus récent d'abord.
+    expect(html.indexOf('data-incident="inc_2"')).toBeLessThan(html.indexOf('data-incident="inc_1"'));
     const reader = renderDashboard(
       base({ view: 'incidents', projectId: 'prj_books' }, { list }, role('READER')),
     );
     expect(reader).not.toContain('data-action="inc-new"');
     expect(reader).toContain('Lecture seule');
-    expect(renderDashboard(base({ view: 'incidents', projectId: 'prj_books' }, { list: [] }))).toContain(
-      'Aucun incident déclaré pour ce projet.',
+    const empty = renderDashboard(base({ view: 'incidents', projectId: 'prj_books' }, { list: [] }));
+    expect(empty).toContain('Aucun incident déclaré pour ce projet.');
+    expect(empty).toMatch(/data-action="inc-export"[^>]*disabled/);
+    // Un onglet et une recherche sans résultat : dit, avec le retour à tout.
+    const none = renderDashboard(
+      base({ view: 'incidents', projectId: 'prj_books' }, { list, group: 'CLOSED', query: 'zzz' }),
     );
+    expect(none).toContain('Aucun incident ne correspond à « zzz » dans cet onglet.');
+    expect(none).toContain('data-action="inc-list-reset"');
+    expect(none).toContain('aria-labelledby="inc-l-tab-CLOSED"');
+    // La lecture en échec : dite, avec « Réessayer ».
+    const failed = renderDashboard(
+      base({ view: 'incidents', projectId: 'prj_books' }, { listError: 'serveur injoignable' }),
+    );
+    expect(failed).toContain('La liste des incidents n’a pas pu être lue : serveur injoignable');
+    expect(failed).toContain('data-action="inc-refresh">Réessayer');
+    const loading = renderDashboard(base({ view: 'incidents', projectId: 'prj_books' }));
+    expect(loading).toContain('aria-busy="true"');
   });
 
-  it('the declaration form: labelled fields, library scenarios only, project environments, targets; errors on submit', () => {
-    const form = { ...emptyIncidentForm(project), target: 'ARO' as const };
+  it('list helpers: groups of states, search without accents, newest first, CSV without formulas', () => {
+    const list: IncidentSummary[] = [
+      summary({
+        id: 'inc_a',
+        title: 'Échec de connexion',
+        state: 'FAILED',
+        createdAt: '2026-10-01T00:00:00.000Z',
+      }),
+      summary({ id: 'inc_b', title: '=HYPERLINK("x")', state: 'INCONCLUSIVE', application: 'Portail' }),
+      summary({
+        id: 'inc_c',
+        title: 'Erreur',
+        state: 'SCOPED',
+        scenario: 'Créer un livre',
+        createdAt: '2026-10-31T00:00:00.000Z',
+      }),
+    ];
+    expect(groupCounts(list)).toEqual({ ALL: 3, OPEN: 1, INVESTIGATING: 0, RESOLVED: 1, CLOSED: 1 });
+    expect(visibleIncidents(list, 'ALL', '').map((row) => row.id)).toEqual(['inc_c', 'inc_b', 'inc_a']);
+    expect(visibleIncidents(list, 'CLOSED', '').map((row) => row.id)).toEqual(['inc_a']);
+    expect(visibleIncidents(list, 'ALL', 'echec').map((row) => row.id)).toEqual(['inc_a']);
+    expect(visibleIncidents(list, 'ALL', 'portail').map((row) => row.id)).toEqual(['inc_b']);
+    expect(visibleIncidents(list, 'ALL', 'LIVRE créer').map((row) => row.id)).toEqual(['inc_c']);
+    expect(visibleIncidents(list, 'ALL', 'INC_A').map((row) => row.id)).toEqual(['inc_a']);
+    expect(visibleIncidents(list, 'OPEN', 'portail')).toEqual([]);
+    const csv = incidentsCsv(
+      visibleIncidents(list, 'ALL', ''),
+      {
+        columns: ['ID', 'Titre', 'Sévérité', 'Application', 'Statut', 'Date de création'],
+        severities: t.inc.severities,
+        states: t.inc.states,
+      },
+      'fr',
+    );
+    const lines = csv
+      .replace(/^\uFEFF/, '')
+      .trimEnd()
+      .split('\r\n');
+    expect(lines[0]).toBe('"ID";"Titre";"Sévérité";"Application";"Statut";"Date de création"');
+    expect(lines[2]).toBe(`"inc_b";"'=HYPERLINK(""x"")";"Haute";"Portail";"Inconclusif";"${at}"`);
+    expect(lines).toHaveLength(4);
+    expect(
+      incidentsCsv([], { columns: ['a', 'b', 'c', 'd', 'e', 'f'], severities: {}, states: {} }, 'en'),
+    ).toContain('"a","b"');
+    expect(applicationSuggestions('Catalogue', list)).toEqual(['Catalogue', 'Portail']);
+    expect(applicationSuggestions(undefined)).toEqual([]);
+  });
+
+  it('attachments: accepted types and sizes, the count limit, base64 and readable sizes', () => {
+    expect(attachmentTypeOf('a.png', 'image/png')).toBe('image/png');
+    expect(attachmentTypeOf('server.log', '')).toBe('text/plain');
+    expect(attachmentTypeOf('data.json', 'application/octet-stream')).toBe('application/json');
+    expect(attachmentTypeOf('capture.JPG', '')).toBe('image/jpeg');
+    expect(attachmentTypeOf('script.sh', 'application/x-sh')).toBeUndefined();
+    expect(attachmentTypeOf('page.html', 'text/html')).toBeUndefined();
+    expect(attachmentTypeOf('vector.svg', 'image/svg+xml')).toBeUndefined();
+    const sorted = sortAttachments(MAX_ATTACHMENTS - 1, [
+      { name: 'a.png', type: 'image/png', size: 10 },
+      { name: 'big.png', type: 'image/png', size: MAX_ATTACHMENT_BYTES + 1 },
+      { name: 'b.txt', type: 'text/plain', size: 5 },
+      { name: 'empty.txt', type: 'text/plain', size: 0 },
+      { name: 'x.exe', type: 'application/x-msdownload', size: 5 },
+    ]);
+    expect(sorted.accepted).toEqual([{ index: 0, type: 'image/png' }]);
+    expect(sorted.rejected).toEqual([
+      { name: 'big.png', reason: 'size' },
+      { name: 'b.txt', reason: 'count' },
+      { name: 'empty.txt', reason: 'empty' },
+      { name: 'x.exe', reason: 'type' },
+    ]);
+    expect(base64Of(new TextEncoder().encode('Erreur 500 ✓'))).toBe(
+      Buffer.from('Erreur 500 ✓').toString('base64'),
+    );
+    const large = new Uint8Array(100_000).map((_, index) => index % 251);
+    expect(base64Of(large)).toBe(Buffer.from(large).toString('base64'));
+    expect(sizeText(512, 'fr')).toBe('512 o');
+    expect(sizeText(2048, 'fr')).toBe('2 Kio');
+    expect(sizeText(5 * 1024 * 1024, 'fr')).toBe('5,0 Mio');
+    expect(sizeText(5 * 1024 * 1024, 'en')).toBe('5.0 MiB');
+  });
+
+  it('the creation form: labelled fields, inline errors described, kinds, severity dot, attachments, options', () => {
+    const form = { ...emptyIncidentForm(project), target: 'ARO' as const, application: 'x'.repeat(130) };
     const html = renderDashboard(
       base(
         { view: 'incidents', projectId: 'prj_books', create: true },
-        { list: [], form, invalid: ['title', 'image'] },
+        {
+          list: [summary({ application: 'Portail' })],
+          form,
+          invalid: ['title', 'application', 'image'],
+        },
       ),
     );
-    expect(html).toContain('<form class="col inc-form" data-action="inc-create" novalidate>');
-    expect(html).toMatch(
-      /<label class="field" for="inc-f-title">Titre <span aria-hidden="true">\*<\/span><input id="inc-f-title" data-inc="title" required aria-required="true" aria-invalid="true"/,
+    expect(html).toContain(
+      '<nav class="inc-cf-crumbs" aria-label="Fil d’Ariane"><ol><li><button type="button" class="lnk" data-action="inc-create-cancel">Incidents</button></li><li aria-current="page">Nouvel incident</li></ol></nav>',
     );
+    expect(html).toContain('<h1>Créer un incident</h1>');
+    expect(html).toContain('<form class="inc-cf-form inc-form" data-action="inc-create" novalidate>');
+    // Chaque champ refusé : aria-invalid, et son message relié par aria-describedby.
+    expect(html).toContain(
+      '<label class="inc-cf-l" for="inc-f-title">Titre <span aria-hidden="true">*</span></label><div class="inc-cf-c"><input id="inc-f-title" data-inc="title" required aria-required="true" aria-invalid="true" aria-describedby="inc-f-title-e"',
+    );
+    expect(html).toMatch(/<small id="inc-f-title-e" class="err inc-cf-err">.*Champ obligatoire\./);
+    expect(html).toContain(
+      'id="inc-f-application" data-inc="application" required aria-required="true" aria-invalid="true" aria-describedby="inc-f-application-e inc-f-application-h"',
+    );
+    expect(html).toContain('<span>120 caractères au plus.</span>');
+    expect(html).toContain('list="inc-f-apps"');
+    expect(html).toContain(
+      '<datalist id="inc-f-apps"><option value="Catalogue"></option><option value="Portail"></option></datalist>',
+    );
+    expect(html).toContain('id="inc-f-description" data-inc="description" required aria-required="true"');
+    expect(html).toContain('<option value="FUNCTIONAL" selected>Fonctionnel</option>');
+    for (const kind of ['Technique', 'Performance', 'Sécurité', 'Données'])
+      expect(html).toContain(`>${kind}</option>`);
+    expect(html).toContain(
+      '<span class="inc-cf-sev inc-cf-sev-medium"><span class="inc-dot inc-dot-medium" aria-hidden="true"></span><select id="inc-f-severity" data-inc="severity"',
+    );
+    expect(html).toContain('<label class="inc-cf-l" for="inc-f-scenario">Scénario associé</label>');
     expect(html).toContain('<option value="Créer un livre" selected>Créer un livre</option>');
     // Un bloc réutilisable ne mène pas seul à un symptôme.
     expect(html).not.toContain('Bloc connexion');
+    expect(html).toContain('Résultat attendu');
+    expect(html).toContain('Résultat observé');
+    // Les pièces jointes : un vrai sélecteur de fichiers, les types et limites dits.
+    expect(html).toContain(
+      '<input type="file" id="inc-f-files" class="inc-cf-file" data-inc="files" multiple accept="image/png,image/jpeg,image/webp,text/plain,application/json,.png,.jpg,.jpeg,.webp,.txt,.log,.json" aria-labelledby="inc-f-files-l inc-f-files-b" aria-describedby="inc-f-files-h">',
+    );
+    expect(html).toContain('10 fichiers au plus, 5,0 Mio chacun. Envoyés après la création.');
+    // ARO choisi (ou un champ ARO refusé) : le volet des options est ouvert.
+    expect(html).toContain('<details class="inc-cf-opts" open><summary data-action="inc-options-toggle">');
     expect(html).toContain('<option value="env_test" selected>Recette</option>');
     expect(html).toContain('data-inc="target" value="ARO" checked');
     expect(html).toContain(
       'id="inc-f-image" data-inc="image" required aria-required="true" aria-invalid="true"',
     );
-    expect(html).toContain('<p class="err" role="alert">Les champs marqués * sont obligatoires.</p>');
+    expect(html).toContain('<p class="err" role="alert">');
+    expect(html).toContain('3 champ(s) à compléter.');
+    expect(html).toContain('data-action="inc-create-cancel">Annuler</button>');
+    expect(html).toMatch(
+      /<button type="submit" class="btn primary"[^>]*><span>Créer et investiguer<\/span><svg/,
+    );
     const local = renderDashboard(
       base(
         { view: 'incidents', projectId: 'prj_books', create: true },
-        { list: [], form: emptyIncidentForm(project) },
+        {
+          list: [],
+          form: {
+            ...emptyIncidentForm(project),
+            severity: 'HIGH',
+            attachments: [{ name: 'capture <1>.png', type: 'image/png', bytes: 2048, dataBase64: 'AA==' }],
+            rejected: [{ name: 'outil.exe', reason: 'type' }],
+          },
+        },
       ),
     );
     expect(local).not.toContain('data-inc="image"');
-    expect(local).not.toContain('role="alert"');
+    expect(local).toContain('<details class="inc-cf-opts"><summary');
+    expect(local).not.toContain('aria-invalid');
+    expect(local).toContain('inc-cf-sev-high');
+    expect(local).toContain(
+      '<span class="inc-cf-att-n" title="capture &lt;1&gt;.png">capture &lt;1&gt;.png</span><small class="mu">2 Kio</small>',
+    );
+    expect(local).toContain(
+      'data-action="inc-att-remove" data-index="0" aria-label="Retirer capture &lt;1&gt;.png"',
+    );
+    expect(local).toContain(
+      '<div class="inc-cf-rej" role="alert"><p class="err"><b>Fichiers écartés</b></p><ul class="plain tight"><li><code>outil.exe</code> — type non accepté</li>',
+    );
+    // Dix pièces jointes : le sélecteur est désactivé.
+    const full = renderDashboard(
+      base(
+        { view: 'incidents', projectId: 'prj_books', create: true },
+        {
+          list: [],
+          form: {
+            ...emptyIncidentForm(project),
+            attachments: Array.from({ length: MAX_ATTACHMENTS }, (_, index) => ({
+              name: `f${String(index)}.txt`,
+              type: 'text/plain' as const,
+              bytes: 1,
+              dataBase64: 'AA==',
+            })),
+          },
+        },
+      ),
+    );
+    expect(full).toMatch(/data-inc="files"[^>]*disabled>/);
   });
 
-  it('the investigation workspace: header, progress, accessible tabs, three zones; cancel is confirmed in the page', () => {
+  it('the investigation workspace: compact header, progress, main and sub tabs, panes; cancel is confirmed in the page', () => {
     const incident = incidentOf();
     const html = renderDashboard(base(page('overview'), { incident, ws: wsOf() }));
-    expect(html).toContain('<h1 id="ws-ux-title">Erreur 500 à la création d’un &lt;livre&gt;</h1>');
+    expect(html).toContain(
+      '<h1 id="ws-ux-title" title="Erreur 500 à la création d’un &lt;livre&gt;">Erreur 500 à la création d’un &lt;livre&gt;</h1>',
+    );
     expect(html).toContain('<span class="sr">Gravité : </span>Haute');
-    expect(html).toContain('<nav class="ws-ux-stepper" aria-label="Progression de l’investigation">');
+    expect(html).toContain(
+      '<nav class="ws-ux-stepper ws-ux-stepper-row" aria-label="Progression de l’investigation">',
+    );
+    expect(html.match(/<li class="ws-ux-sr /g)).toHaveLength(10);
     expect(html).toContain(
       '<div class="tabs ws-ux-tabs" role="tablist" aria-label="Sections de l’investigation"',
     );
     expect(html).toContain(
       'id="ws-ux-tab-overview" data-action="ws-ux-tab" data-tab="overview" aria-selected="true" aria-controls="ws-ux-panel" tabindex="0"',
     );
-    for (const tab of [
-      'scope',
-      'environment',
-      'traceability',
-      'requests',
-      'frontend',
-      'bff',
-      'backend',
-      'logs',
-      'diagnosis',
-      'regression',
-    ])
+    for (const tab of ['timeline', 'traceability', 'code', 'diagnosis', 'report'])
       expect(html).toContain(`data-tab="${tab}" aria-selected="false"`);
     expect(html).toContain(
-      '<div id="ws-ux-panel" class="ws-ux-panel" role="tabpanel" aria-labelledby="ws-ux-tab-overview"',
+      'id="ws-ux-sub-summary" data-action="ws-ux-sub" data-sub="summary" aria-selected="true"',
     );
-    // Le contenu, le graphe full-stack et le panneau contextuel.
-    expect(html).toContain('<div class="ws-ux-shell">');
-    expect(html).toContain('data-ws-zone="graph"');
-    expect(html).toContain('data-ws-zone="aside" aria-labelledby="ws-ctx-t"');
+    for (const sub of ['scope', 'environment'])
+      expect(html).toContain(`data-sub="${sub}" aria-selected="false"`);
+    expect(html).toContain(
+      '<div id="ws-ux-panel" class="ws-ux-panel ws-body" role="tabpanel" aria-labelledby="ws-ux-sub-summary"',
+    );
+    // Le contenu de l'onglet et le panneau des détails, côte à côte et redimensionnables.
+    expect(html).toContain('data-ws-layout="document"');
+    expect(html).toContain('id="ws-pane-content" data-ws-pane="content"');
+    expect(html).toContain('id="ws-pane-details" data-ws-pane="details"');
+    expect(html).toContain('data-ws-splitter="content-details"');
     expect(html).toContain('<dd>erreur HTTP 500 après Enregistrer</dd>');
     expect(html).toContain('data-action="inc-cancel"');
-    expect(html).toContain('<p class="inc-live" role="status" aria-live="polite">');
+    // Sans message, ni paragraphe de message ni zone des remarques vide (la zone live est permanente,
+    // hors de la partie redessinée : le Dashboard la crée une fois).
+    expect(html).not.toContain('inc-live');
+    expect(html).not.toContain('class="inc-msg"');
+    expect(html).not.toContain('class="ws-notes"');
+    const noticed = renderDashboard(
+      base(page('overview'), { incident, ws: wsOf(), notice: 'Vérification planifiée.' }),
+    );
+    expect(noticed).toContain(
+      '<div class="ws-notes"><p class="inc-msg"><span>Vérification planifiée.</span></p>',
+    );
+    expect(noticed).not.toContain('aria-live');
     const confirming = renderDashboard(base(page('overview'), { incident, confirmCancel: true, ws: wsOf() }));
     expect(confirming).toContain('data-action="inc-cancel-yes"');
     expect(confirming).toContain('data-action="inc-cancel-no"');
@@ -655,10 +924,12 @@ describe('dashboard — incidents: screens', () => {
     expect(cancelled).toContain('data-action="inc-resume"');
     expect(cancelled).not.toContain('data-action="inc-cancel"');
     expect(cancelled).toContain('Investigation annulée à l’état « Reproduit »');
-    // Le graphe est l'onglet Traçabilité : il n'est pas répété à côté.
+    // Traçabilité : le graphe, le détail, puis les fichiers, le code et les preuves, en panneaux.
     const trace = renderDashboard(base(page('traceability'), { incident, ws: wsOf() }));
-    expect(trace).not.toContain('data-ws-zone="graph"');
-    expect(trace).toContain('ws-ux-shell ws-nograph');
+    expect(trace).toContain('data-ws-layout="trace"');
+    for (const pane of ['primary', 'details', 'tree', 'editor', 'evidence'])
+      expect(trace).toContain(`data-ws-pane="${pane}"`);
+    expect(trace.match(/class="ws-graph[ "]/g)).toHaveLength(1);
     // Pendant le chargement : l'incident d'une autre page n'est jamais montré.
     const loading = renderDashboard(
       base({ view: 'incident', projectId: 'prj_books', incidentId: 'inc_other' }, { incident }),
@@ -696,20 +967,33 @@ describe('dashboard — incidents: screens', () => {
         },
       }),
     );
+    // L'écran « Définition du périmètre » en tête, puis les autres paramètres.
+    expect(html).toContain('<h2 id="inc-sc-t" class="fl">Définition du périmètre</h2>');
+    expect(html.indexOf('inc-sc-t')).toBeLessThan(html.indexOf('Autres paramètres du périmètre'));
+    expect(html).toMatch(/data-action="inc-scope-mode" data-mode="GUIDED"[^>]*aria-checked="true"/);
+    expect(html).toContain('data-action="inc-scope-toggle" data-block="bff" data-index=""');
+    // Pas encore d'arborescence lue : la lecture est en cours (le contrôleur la lance).
+    expect(html).toContain('Lecture des dossiers…');
+    expect(html).toContain('Éléments inclus (1)');
+    expect(html).toContain('data-action="inc-scope-next"');
     expect(html).toContain('<b>BFF livres</b>');
     expect(html).toContain('<code>/repos/bff</code>');
     expect(html).toContain('<code>BookController</code>');
     expect(html).toContain('<code>POST /api/books</code>');
-    expect(html).toContain('Guidé');
     expect(html).toContain('<b>Effets de bord</b><span>Refusé</span>');
     expect(html).toContain('<b>Requêtes HTTP directes</b><span>Aucune</span>');
     expect(html).toContain('le controller &lt;BookController&gt; est hors du dossier inclus');
     expect(html).toContain('data-action="inc-ext-approve" data-block="ext_1"');
     expect(html).toContain('data-action="inc-ext-reject" data-block="ext_1"');
-    expect(html).toContain('<div role="alert"><p class="err"><b>1 problème(s) dans le périmètre</b>');
+    expect(html).toContain(
+      '<div role="alert" class="inc-sc-issues"><p class="err"><b>1 problème(s) dans le périmètre</b>',
+    );
     expect(html).toContain('data-action="inc-validate"');
     expect(html).toContain('data-action="inc-ext-request"');
     const reader = renderDashboard(base(page('scope'), { incident }, role('READER')));
+    expect(reader).toContain('Lecture seule : votre rôle ne permet pas de modifier le périmètre.');
+    expect(reader).not.toContain('data-action="inc-scope-next"');
+    expect(reader).toContain('data-action="ws-ux-stage" data-stage="environment"');
     expect(reader).not.toContain('data-action="inc-ext-approve"');
     expect(reader).not.toContain('data-action="inc-validate"');
     expect(reader).not.toContain('data-action="inc-ext-request"');
@@ -720,7 +1004,9 @@ describe('dashboard — incidents: screens', () => {
     expect(editing).toContain(
       'data-action="inc-app-remove" data-index="0" aria-label="Retirer l’application BFF livres"',
     );
-    expect(editing).toContain('data-inc="scope.depth" type="number" min="1" max="5"');
+    // La profondeur et le mode se règlent dans l'écran du périmètre, plus dans ce formulaire.
+    expect(editing).not.toContain('data-inc="scope.depth"');
+    expect(editing).toContain('data-inc="scope.range" min="1" max="5"');
   });
 
   it('environment tab: LOCAL / REMOTE / ARO selector with the measured capabilities and the save action', () => {
@@ -747,7 +1033,13 @@ describe('dashboard — incidents: screens', () => {
     );
     expect(html).toContain('data-target="ARO" aria-checked="false"');
     expect(html).toContain('mvn is not installed');
-    expect(html).toContain('data-action="ws-ux-target-save"');
+    expect(html).toContain('Configuration sélectionnée : LOCAL');
+    expect(html).toContain('data-action="ws-ux-check"');
+    expect(html).toContain('data-action="ws-ux-stage" data-stage="reproduction"');
+    const dirty = renderDashboard(
+      base(page('environment'), { incident, ws: wsOf({ ux: { ...wsOf().ux, target: 'REMOTE' } }) }),
+    );
+    expect(dirty).toContain('data-action="ws-ux-target-save"');
     const failed = renderDashboard(
       base(page('environment'), { incident, ws: wsOf({ capabilitiesState: { error: 'refused' } }) }),
     );
@@ -849,7 +1141,7 @@ describe('dashboard — incidents: screens', () => {
     expect(none).not.toContain('data-ws-zone="graph"');
   });
 
-  it('code tabs: the scope tree of the layer and the file read from the server, its line highlighted', () => {
+  it('code views: the scope tree, the file read from the server in the editor, its line targeted', () => {
     const file = 'src/main/java/org/example/bff/books/BookController.java';
     const incident = incidentOf({
       investigation: {
@@ -905,15 +1197,18 @@ describe('dashboard — incidents: screens', () => {
       ],
       denied: [{ path: '.env', reason: 'sensitive file' }],
     };
+    // Le fichier ouvert dans l'éditeur (le contrôleur l'y montre en entrant dans la vue de la couche).
+    const code = revealInCode(emptyCodeUi(), { applicationId: 'bff', layer: 'BFF', file, line: 3 }, '');
     const html = renderDashboard(
       base(page('bff'), {
         incident,
-        ws: wsOf({ tree, sources: { [`bff:${file}`]: { view, revision: incident.revision } } }),
+        ws: wsOf({ tree, code, sources: { [`bff:${file}`]: { view, revision: incident.revision } } }),
       }),
     );
-    expect(html).toContain('data-layer="BFF"');
+    expect(html).toContain('data-ws-pane="editor"');
+    expect(html).toContain('data-focus="BFF"');
     expect(html).toContain('BookController.java');
-    expect(html).toContain('ws-code-sel');
+    expect(html).toContain('ws-code-target');
     expect(html).toContain('Lecture seule');
     // Lecture refusée par le serveur (403) : panneau « accès refusé », sans contenu.
     const denied = renderDashboard(base(page('bff'), { incident, ws: wsOf({ treeState: 'denied' }) }));
@@ -1031,8 +1326,10 @@ describe('dashboard — incidents: screens', () => {
     const analyst = renderDashboard(
       base(page('regression'), { incident: without, ws: wsOf() }, role('ANALYST')),
     );
-    expect(analyst).not.toContain('data-op="accept"');
+    // Sans le droit PUBLISH, « Ajouter au catalogue » reste visible mais désactivé, avec sa raison.
+    expect(analyst).toMatch(/data-op="accept" disabled aria-describedby="ws-dx-rt-why"/);
     expect(analyst).toContain('data-op="reject"');
+    expect(analyst).not.toMatch(/data-op="reject" disabled/);
     const failed = incidentOf({
       investigation: {
         ...incidentOf().investigation,
@@ -1226,10 +1523,16 @@ describe('dashboard — incidents: controller', () => {
     const { controller } = setup(state, { create });
     controller.submit({ dataset: { action: 'inc-create' } } as unknown as HTMLFormElement);
     expect(create).not.toHaveBeenCalled();
-    expect(state.inc?.invalid).toEqual(['title', 'observed', 'expected']);
+    expect(state.inc?.invalid).toEqual(['title', 'description', 'application', 'expected', 'observed']);
     const form = state.inc?.form;
     if (!form) throw new Error('form expected');
     controller.input({ dataset: { inc: 'title' }, value: 'Erreur 500' } as unknown as HTMLInputElement);
+    controller.input({
+      dataset: { inc: 'description' },
+      value: 'Après Enregistrer',
+    } as unknown as HTMLInputElement);
+    controller.input({ dataset: { inc: 'application' }, value: 'Catalogue' } as unknown as HTMLInputElement);
+    controller.input({ dataset: { inc: 'kind' }, value: 'TECHNICAL' } as unknown as HTMLInputElement);
     controller.input({ dataset: { inc: 'observed' }, value: 'HTTP 500' } as unknown as HTMLInputElement);
     controller.input({ dataset: { inc: 'expected' }, value: 'créé' } as unknown as HTMLInputElement);
     controller.submit({ dataset: { action: 'inc-create' } } as unknown as HTMLFormElement);
@@ -1240,6 +1543,9 @@ describe('dashboard — incidents: controller', () => {
       'prj_books',
       expect.objectContaining({
         title: 'Erreur 500',
+        description: 'Après Enregistrer',
+        application: 'Catalogue',
+        kind: 'TECHNICAL',
         scenario: 'Créer un livre',
         execution: { target: 'LOCAL' },
       }),
@@ -1251,5 +1557,291 @@ describe('dashboard — incidents: controller', () => {
       tab: 'scope',
     });
     expect(state.inc?.notice).toBe('Incident « Erreur 500 à la création d’un <livre> » déclaré.');
+  });
+
+  it('the list: group tabs (click and arrow keys), search, reset, a failed read said with retry', async () => {
+    const list = [
+      summary({ id: 'inc_1', state: 'DRAFT', title: 'Timeout API' }),
+      summary({ id: 'inc_2', state: 'DIAGNOSED', title: 'Erreur 500' }),
+    ];
+    const state = base({ view: 'incidents', projectId: 'prj_books' }, { list });
+    const { controller, paints } = setup(state, {});
+    controller.click('inc-group', element({ group: 'RESOLVED' }));
+    expect(state.inc?.group).toBe('RESOLVED');
+    controller.click('inc-group', element({ group: 'NOPE' }));
+    expect(state.inc?.group).toBe('RESOLVED');
+    const key = (name: string) => {
+      let prevented = false;
+      const handled = controller.keydown({
+        key: name,
+        target: { dataset: { action: 'inc-group' } },
+        preventDefault: () => {
+          prevented = true;
+        },
+      } as unknown as KeyboardEvent);
+      return { handled, prevented };
+    };
+    expect(key('ArrowRight')).toEqual({ handled: true, prevented: true });
+    expect(state.inc?.group).toBe('CLOSED');
+    key('Home');
+    expect(state.inc?.group).toBe('ALL');
+    expect(key('a').handled).toBe(false);
+    const before = paints();
+    controller.input({ dataset: { inc: 'list.query' }, value: 'timeout' } as unknown as HTMLInputElement);
+    expect(state.inc?.query).toBe('timeout');
+    expect(paints()).toBe(before + 1);
+    expect(renderDashboard(state)).toContain('1 incident(s) affiché(s) sur 2');
+    if (state.inc) state.inc.group = 'CLOSED';
+    controller.click('inc-list-reset', element({}));
+    expect(state.inc?.group).toBe('ALL');
+    expect(state.inc?.query).toBe('');
+
+    const failing = vi.fn(() => Promise.reject(new Error('serveur injoignable')));
+    const failedState = base({ view: 'incidents', projectId: 'prj_books' });
+    const failed = setup(failedState, { list: failing });
+    await failed.controller.load(
+      { incidents: { list: failing } } as unknown as QaCrawlerClient,
+      failedState.route,
+      () => true,
+    );
+    expect(failedState.inc?.listError).toBe('serveur injoignable');
+    expect(renderDashboard(failedState)).toContain(
+      'La liste des incidents n’a pas pu être lue : serveur injoignable',
+    );
+  });
+
+  it('exports the shown rows as a CSV file downloaded by the page', () => {
+    const list = [summary({ id: 'inc_1', title: 'Erreur 500', application: 'Catalogue' })];
+    const state = base({ view: 'incidents', projectId: 'prj_books' }, { list });
+    const clicked: { href: string; download: string }[] = [];
+    const link = {
+      href: '',
+      download: '',
+      hidden: false,
+      click: () => clicked.push({ href: link.href, download: link.download }),
+      remove: vi.fn(),
+    };
+    const root = {
+      querySelector: () => null,
+      activeElement: null,
+      ownerDocument: { createElement: () => link, body: { append: vi.fn() } },
+    } as unknown as ShadowRoot;
+    const blobs: Blob[] = [];
+    const create = vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      blobs.push(blob as Blob);
+      return 'blob:csv';
+    });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const host = {
+      root,
+      api: () => ({}) as QaCrawlerClient,
+      paint: () => undefined,
+      navigate: () => undefined,
+      refresh: () => Promise.resolve(),
+    };
+    Object.defineProperty(host, 'state', { get: () => state });
+    const controller = new IncidentsController(host as unknown as IncidentsHost);
+    controller.click('inc-export', element({}));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(clicked).toHaveLength(1);
+    expect(clicked[0]?.href).toBe('blob:csv');
+    expect(clicked[0]?.download).toMatch(/^incidents-prj_books-\d{4}-\d{2}-\d{2}\.csv$/);
+    expect(blobs[0]?.type).toBe('text/csv;charset=utf-8');
+    expect(state.inc?.notice).toMatch(/^1 incident\(s\) exporté\(s\) : incidents-prj_books-/);
+    vi.restoreAllMocks();
+  });
+
+  it('declaring with attachments: created, then each attachment sent; a refused one is said, the others go on', async () => {
+    const created = incidentOf({ id: 'inc_new', state: 'DRAFT' });
+    const create = vi.fn(() => Promise.resolve(created));
+    const addAttachment = vi.fn((_p: string, _i: string, input: { name: string }) =>
+      input.name === 'bad.png'
+        ? Promise.reject(
+            new QaCrawlerError({ error: 'content is not a PNG image', status: 422, code: 'INVALID' }),
+          )
+        : Promise.resolve(created),
+    );
+    const form = {
+      ...emptyIncidentForm(project),
+      title: 'Erreur 500',
+      description: 'Après Enregistrer',
+      application: 'Catalogue',
+      observed: 'HTTP 500',
+      expected: 'créé',
+      attachments: [
+        { name: 'bad.png', type: 'image/png' as const, bytes: 3, dataBase64: 'AAAA' },
+        { name: 'server.log', type: 'text/plain' as const, bytes: 3, dataBase64: 'b2sK' },
+      ],
+    };
+    const state = base({ view: 'incidents', projectId: 'prj_books', create: true }, { list: [], form });
+    const { controller } = setup(state, { create, addAttachment });
+    controller.submit({ dataset: { action: 'inc-create' } } as unknown as HTMLFormElement);
+    await vi.waitFor(() => {
+      expect(state.route.view).toBe('incident');
+    });
+    expect(addAttachment).toHaveBeenNthCalledWith(1, 'prj_books', 'inc_new', {
+      name: 'bad.png',
+      type: 'image/png',
+      dataBase64: 'AAAA',
+    });
+    expect(addAttachment).toHaveBeenNthCalledWith(2, 'prj_books', 'inc_new', {
+      name: 'server.log',
+      type: 'text/plain',
+      dataBase64: 'b2sK',
+    });
+    expect(state.inc?.notice).toBe(
+      'Incident « Erreur 500 à la création d’un <livre> » déclaré. 1 pièce(s) jointe(s) envoyée(s).',
+    );
+    expect(state.inc?.error).toBe(
+      '1 pièce(s) jointe(s) non envoyée(s) : l’incident est créé, les raisons suivent.',
+    );
+    expect(state.inc?.details).toEqual(['bad.png : content is not a PNG image']);
+  });
+
+  it('chosen files are sorted, read and kept until creation; one can be removed', async () => {
+    const state = base(
+      { view: 'incidents', projectId: 'prj_books', create: true },
+      { list: [], form: emptyIncidentForm(project) },
+    );
+    const { controller } = setup(state, {});
+    const files = [
+      new File(['Erreur 500'], 'server.log', { type: '' }),
+      new File(['x'], 'tool.exe', { type: 'application/x-msdownload' }),
+      new File([new Uint8Array([137, 80, 78, 71])], 'capture.png', { type: 'image/png' }),
+    ];
+    const input = { dataset: { inc: 'files' }, files, value: 'C:\\fakepath\\server.log' };
+    expect(controller.input(input as unknown as HTMLInputElement)).toBe(true);
+    controller.change(input as unknown as HTMLInputElement);
+    await vi.waitFor(() => {
+      expect(state.inc?.form?.attachments).toHaveLength(2);
+    });
+    expect(input.value).toBe('');
+    expect(state.inc?.form?.attachments).toEqual([
+      {
+        name: 'server.log',
+        type: 'text/plain',
+        bytes: 10,
+        dataBase64: Buffer.from('Erreur 500').toString('base64'),
+      },
+      { name: 'capture.png', type: 'image/png', bytes: 4, dataBase64: 'iVBORw==' },
+    ]);
+    expect(state.inc?.form?.rejected).toEqual([{ name: 'tool.exe', reason: 'type' }]);
+    controller.click('inc-att-remove', element({ index: '0' }));
+    expect(state.inc?.form?.attachments.map((file) => file.name)).toEqual(['capture.png']);
+    // Le volet des options garde son état d'un dessin à l'autre.
+    controller.click('inc-options-toggle', {
+      dataset: {},
+      parentElement: { open: false },
+    } as unknown as HTMLElement);
+    expect(state.inc?.form?.optionsOpen).toBe(true);
+  });
+
+  it('scope screen: trees read per application, folders toggled, « Étape suivante » saves, checks and opens Environnement', async () => {
+    const incident = incidentOf({ state: 'SCOPED' });
+    const saved = incidentOf({ state: 'SCOPED', revision: 5 });
+    const tree = {
+      applicationId: 'bff',
+      root: {
+        path: '',
+        name: 'bff',
+        included: true,
+        children: [{ path: 'src', name: 'src', included: true, children: [] }],
+      },
+    };
+    const scopeTree = vi.fn(() => Promise.resolve(tree));
+    const update = vi.fn(() => Promise.resolve(saved));
+    const validateScope = vi.fn(() => Promise.resolve({ ok: true, issues: [] }));
+    const capabilities = vi.fn(() => new Promise<never>(() => undefined));
+    const state = base(page('scope'), { incident, ws: wsOf() });
+    const { controller } = setup(state, { scopeTree, update, validateScope, capabilities });
+    controller.beforePaint();
+    expect(scopeTree).toHaveBeenCalledWith('prj_books', incident.id, 'bff');
+    expect(state.inc?.scopeTrees.bff).toEqual({ state: 'loading', root: '/repos/bff' });
+    await vi.waitFor(() => {
+      expect(state.inc?.scopeTrees.bff?.tree).toEqual(tree);
+    });
+    controller.beforePaint();
+    expect(scopeTree).toHaveBeenCalledTimes(1);
+    expect(renderDashboard(state)).toContain(
+      'data-action="inc-scope-toggle" data-block="bff" data-index="src"',
+    );
+
+    controller.click('inc-scope-toggle', element({ block: 'bff', index: '' }));
+    expect(state.inc?.scope.selection.bff).toEqual({ whole: true, paths: [] });
+    controller.click('inc-scope-mode', element({ mode: 'MANUAL' }));
+    controller.input({
+      dataset: { inc: 'scope.range' },
+      value: '5',
+      setAttribute: vi.fn(),
+    } as unknown as HTMLInputElement);
+    controller.input({
+      dataset: { inc: 'scope.limit.memory' },
+      value: '2048',
+    } as unknown as HTMLInputElement);
+    expect(state.inc?.scope).toMatchObject({ mode: 'MANUAL', depth: 5, limits: { memory: '2048' } });
+    controller.click('inc-scope-next', element({}));
+    await vi.waitFor(() => {
+      expect(state.inc?.busy).toBeUndefined();
+    });
+    expect(update).toHaveBeenCalledWith('prj_books', incident.id, 4, {
+      scope: expect.objectContaining({
+        mode: 'MANUAL',
+        depth: 5,
+        limits: expect.objectContaining({ maxMemoryMb: 2048 }) as unknown,
+        applications: [
+          expect.objectContaining({ repository: expect.objectContaining({ include: [] }) as unknown }),
+        ],
+        permissions: scope.permissions,
+      }) as unknown,
+    });
+    expect(validateScope).toHaveBeenCalledWith('prj_books', incident.id);
+    expect(state.inc?.incident?.revision).toBe(5);
+    expect(state.inc?.scope.selection).toEqual({});
+    expect(state.route).toMatchObject({ view: 'incident', tab: 'environment' });
+    expect(state.inc?.notice).toBe('Périmètre enregistré.');
+  });
+
+  it('scope screen: refused drafts never reach the server; issues of the check keep the page on the scope', async () => {
+    const incident = incidentOf({ state: 'SCOPED' });
+    const update = vi.fn(() => Promise.resolve(incident));
+    const validateScope = vi.fn(() =>
+      Promise.resolve({
+        ok: false,
+        issues: [{ field: 'applications[0].repository.root', message: 'introuvable' }],
+      }),
+    );
+    const scopeTree = vi.fn(() =>
+      Promise.reject(new QaCrawlerError({ error: 'forbidden', status: 403, code: 'FORBIDDEN' })),
+    );
+    const state = base(page('scope'), { incident, ws: wsOf() });
+    const { controller } = setup(state, { update, validateScope, scopeTree });
+    controller.beforePaint();
+    await vi.waitFor(() => {
+      expect(state.inc?.scopeTrees.bff?.state).toBe('denied');
+    });
+    // Toute l'application décochée : rien n'est envoyé, la case est signalée.
+    controller.click('inc-scope-toggle', element({ block: 'bff', index: 'src/main/java' }));
+    controller.click('inc-scope-toggle', element({ block: 'bff', index: '' }));
+    controller.click('inc-scope-toggle', element({ block: 'bff', index: '' }));
+    expect(state.inc?.scope.selection.bff).toEqual({ whole: false, paths: [] });
+    controller.click('inc-scope-next', element({}));
+    expect(update).not.toHaveBeenCalled();
+    expect(state.inc?.scope.invalid).toEqual(['app:bff']);
+    controller.click('inc-scope-reset', element({}));
+    expect(state.inc?.scope.selection).toEqual({});
+    // Rien de modifié : la vérification seule ; ses problèmes restent affichés sur le périmètre.
+    controller.click('inc-scope-next', element({}));
+    await vi.waitFor(() => {
+      expect(state.inc?.busy).toBeUndefined();
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(validateScope).toHaveBeenCalledTimes(1);
+    expect(state.route).toMatchObject({ tab: 'scope' });
+    expect(renderDashboard(state)).toContain('<code>applications[0].repository.root</code> introuvable');
+    // Un lecteur : « Étape suivante » navigue seulement (rendu en ws-ux-stage), un clic de brouillon ne change rien.
+    const readerState = base(page('scope'), { incident, ws: wsOf() }, role('READER'));
+    const reader = setup(readerState, { update });
+    reader.controller.click('inc-scope-toggle', element({ block: 'bff', index: '' }));
+    expect(readerState.inc?.scope.selection).toEqual({});
   });
 });

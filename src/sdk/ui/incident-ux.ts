@@ -13,15 +13,18 @@ import {
   type IncidentSeverity,
   type IncidentState,
 } from '../core/incident-contracts.js';
+import type { EnvironmentCheck, EnvironmentInput, EnvironmentKind } from '../core/contracts.js';
 import { formatDate, icon } from './dashboard-parts.js';
 import {
   demoBanner,
   panelState,
+  partsText,
   selectable,
   selectionClass,
   type Lang,
   type WorkspaceContext,
 } from './incident-parts.js';
+import { INCIDENT_SCOPE_CSS } from './incident-scope.js';
 import { esc } from './view.js';
 
 /**
@@ -154,6 +157,12 @@ export interface UxUi {
   /** L'enregistrement est en cours. */
   saving: boolean;
   error?: string;
+  /** Le test de connectivité est en cours. */
+  checking?: boolean;
+  /** Le dernier test de connectivité, par clé de cible (`connectivityTargets`). */
+  connectivity?: Record<string, Connectivity>;
+  /** Le test de connectivité n'a pas pu être lancé. */
+  checkError?: string;
 }
 
 export const emptyUxUi = (): UxUi => ({ fields: {}, invalid: [], saving: false });
@@ -167,8 +176,9 @@ const isField = (value: string | undefined): value is UxField =>
  * Le réducteur pur des actions `ws-ux-…`. Les actions de l'interface : `ws-ux-target` (`data-target`),
  * `ws-ux-field` (`field`, `value` : le champ saisi), `ws-ux-target-reset`, `ws-ux-target-save` (marque
  * l'enregistrement en cours). Les retours de l'intégration : `ws-ux-invalid` (`fields`, liste séparée par
- * des virgules), `ws-ux-saved`, `ws-ux-error` (`message`). `ws-ux-stage` et `ws-ux-tab` sont de la
- * navigation (route) : non traitées ici.
+ * des virgules), `ws-ux-saved`, `ws-ux-error` (`message`). Le test de connectivité : `ws-ux-check` (lancé),
+ * `ws-ux-check-error` (`message`) ; ses résultats arrivent par `withConnectivity`. `ws-ux-stage` et
+ * `ws-ux-tab` sont de la navigation (route) : non traitées ici.
  */
 export function reduceUx(
   ui: UxUi,
@@ -207,6 +217,10 @@ export function reduceUx(
       return emptyUxUi();
     case 'ws-ux-error':
       return { ...ui, saving: false, error: dataset.message ?? '' };
+    case 'ws-ux-check':
+      return { ...ui, checking: true, connectivity: undefined, checkError: undefined };
+    case 'ws-ux-check-error':
+      return { ...ui, checking: false, checkError: dataset.message ?? '' };
     default:
       return undefined;
   }
@@ -301,6 +315,111 @@ export function environmentDirty(incident: Incident, ui: UxUi): boolean {
   );
 }
 
+// ── Connectivité ─────────────────────────────────────────────────────────────────────────────
+
+/** L'environnement du projet de l'incident (son URL de base est celle du frontend). */
+export interface EnvironmentRef {
+  id: string;
+  name: string;
+  kind: EnvironmentKind;
+  baseUrl: string;
+}
+
+/** Une URL à vérifier : celle de l'environnement du projet ou celle d'une application du périmètre. */
+export interface ConnectivityTarget {
+  /** `environment`, ou `app:<id>`. */
+  key: string;
+  role: 'FRONTEND' | 'BFF' | 'BACKEND';
+  /** Le nom de l'environnement ou de l'application. */
+  label: string;
+  url: string;
+}
+
+/** Le résultat d'une URL, tel que le serveur l'a mesuré (`EnvironmentCheck.url`) ou l'erreur de l'appel. */
+export interface Connectivity {
+  url: string;
+  formatOk: boolean;
+  /** Absent : aucune requête faite (format invalide, appel en échec). */
+  reachable?: boolean;
+  status?: number;
+  durationMs?: number;
+  message?: string;
+}
+
+/** Les URL connues de l'incident : l'environnement du projet (frontend), puis les applications qui en ont une. */
+export function connectivityTargets(incident: Incident, environment?: EnvironmentRef): ConnectivityTarget[] {
+  const targets: ConnectivityTarget[] = [];
+  const seen = new Set<string>();
+  const add = (target: ConnectivityTarget): void => {
+    const url = target.url.trim();
+    // La même URL pour la même couche n'est testée qu'une fois ; une autre couche la garde (rien n'est caché).
+    if (!url || seen.has(`${target.role} ${url}`)) return;
+    seen.add(`${target.role} ${url}`);
+    targets.push({ ...target, url });
+  };
+  if (environment)
+    add({ key: 'environment', role: 'FRONTEND', label: environment.name, url: environment.baseUrl });
+  for (const app of incident.scope.applications)
+    if (app.baseUrl) add({ key: `app:${app.id}`, role: app.layer, label: app.name, url: app.baseUrl });
+  return targets;
+}
+
+/**
+ * L'appel du test d'une URL : `client.environments.check(projectId, input, options)`. Le serveur ne joint
+ * que `baseUrl` (`reach: true`) ; les autres remarques de la vérification (nom, variables) ne sont pas lues.
+ */
+export function connectivityInput(
+  target: ConnectivityTarget,
+  environment?: EnvironmentRef,
+): { input: EnvironmentInput; options: { reach: true; selfId?: string } } {
+  return {
+    input: {
+      name: environment?.name ?? target.label,
+      kind: environment?.kind ?? 'OTHER',
+      baseUrl: target.url,
+    },
+    options: { reach: true, ...(environment ? { selfId: environment.id } : {}) },
+  };
+}
+
+/** Le résultat d'une URL d'après la vérification du serveur (format, puis joignabilité mesurée). */
+export function connectivityOf(url: string, check: EnvironmentCheck): Connectivity {
+  const result = check.url;
+  if (!result)
+    return {
+      url,
+      formatOk: false,
+      message: check.issues.find((issue) => issue.field === 'baseUrl')?.message,
+    };
+  if (!result.format.ok)
+    return { url, formatOk: false, ...(result.format.message ? { message: result.format.message } : {}) };
+  const reach = result.reachable;
+  if (!reach) return { url, formatOk: true };
+  return {
+    url,
+    formatOk: true,
+    reachable: reach.ok,
+    durationMs: reach.durationMs,
+    ...(reach.status !== undefined ? { status: reach.status } : {}),
+    ...(reach.message ? { message: reach.message } : {}),
+  };
+}
+
+/** L'appel de vérification a échoué (droits, réseau du Dashboard) : rien n'a été mesuré. */
+export const connectivityFailure = (url: string, message: string): Connectivity => ({
+  url,
+  formatOk: true,
+  message,
+});
+
+/** Les résultats arrivés : le test est terminé. */
+export const withConnectivity = (ui: UxUi, results: Record<string, Connectivity>): UxUi => ({
+  ...ui,
+  checking: false,
+  checkError: undefined,
+  connectivity: results,
+});
+
 /** La cible du clavier dans une liste à tabindex itinérant (onglets, groupe de boutons radio). */
 export function rovingTarget<T extends string>(keys: readonly T[], current: T, key: string): T | undefined {
   const at = keys.indexOf(current);
@@ -331,6 +450,19 @@ const fr = {
     reproduction: 'Reproduction',
     evidence: 'Preuves',
     code: 'Analyse du code',
+    traceability: 'Traçabilité',
+    diagnosis: 'Diagnostic',
+    report: 'Rapport',
+    regression: 'Non-régression',
+  } as Record<WorkspaceStage, string>,
+  /** Les libellés courts de la ligne des dix étapes. */
+  stagesShort: {
+    description: 'Description',
+    scope: 'Périmètre',
+    environment: 'Environnement',
+    reproduction: 'Reproduction',
+    evidence: 'Preuves',
+    code: 'Analyse',
     traceability: 'Traçabilité',
     diagnosis: 'Diagnostic',
     report: 'Rapport',
@@ -388,7 +520,58 @@ const fr = {
     string
   >,
   tabsLabel: 'Sections de l’investigation',
+  subTabsLabel: (tab: string) => `Vues de « ${tab} »`,
   count: (count: number) => `${String(count)} élément(s)`,
+  mainTabs: {
+    overview: 'Vue d’ensemble',
+    timeline: 'Reproduction',
+    traceability: 'Traçabilité',
+    code: 'Code',
+    diagnosis: 'Diagnostic',
+    trigger: 'Déclencheurs',
+    report: 'Rapport',
+  } as Record<string, string>,
+  subTabs: {
+    summary: 'Résumé',
+    scope: 'Périmètre',
+    environment: 'Environnement',
+    run: 'Exécution',
+    evidence: 'Preuves',
+    events: 'Chronologie',
+    logs: 'Journaux',
+    fullstack: 'Full Stack',
+    frontend: 'Frontend',
+    bff: 'BFF',
+    backend: 'Backend',
+    http: 'HTTP',
+    diagnosis: 'Diagnostic',
+    hypotheses: 'Hypothèses',
+    experiments: 'Expériences',
+    ai: 'Investigation IA',
+    brief: 'Incident',
+    discovery: 'Périmètre découvert',
+    explorer: 'Explorateur',
+    live: 'Exécution',
+    chronology: 'Chronologie',
+    matrix: 'Matrice',
+    minimal: 'Reproduction minimale',
+    angular: 'Code Angular',
+    causes: 'Causes',
+    proposal: 'Test proposé',
+    report: 'Rapport',
+    regression: 'Non-régression',
+  } as Record<string, string>,
+  details: 'Détails',
+  detailsShow: 'Afficher les détails de l’incident',
+  detailsHide: 'Masquer les détails de l’incident',
+  reference: 'Reproduction de référence',
+  noReference: 'Aucune reproduction terminée',
+  stepperShow: 'Afficher les dix étapes',
+  stepperHide: 'Replier la progression',
+  stepNow: 'Étape actuelle',
+  stepDone: 'Investigation complète',
+  stepOf: (index: number, total: number) => `${String(index)}/${String(total)}`,
+  stepOfLong: (index: number, total: number) => `étape ${String(index)} sur ${String(total)}`,
   tabs: {
     overview: 'Vue d’ensemble',
     timeline: 'Chronologie',
@@ -564,6 +747,38 @@ const fr = {
     reset: 'Revenir à l’environnement enregistré',
     readOnly: 'Lecture seule : votre rôle ne permet pas de changer l’environnement.',
     locked: (state: string) => `Indisponible dans l’état « ${state} ».`,
+    screenTitle: 'Sélection de l’environnement',
+    screenSub: 'Choix entre LOCAL, REMOTE ou ARO : où QA-CRAWLER et Playwright s’exécutent.',
+    cardTitles: { LOCAL: 'LOCAL', REMOTE: 'REMOTE', ARO: 'ARO (OpenShift)' } as Record<
+      ExecutionTarget,
+      string
+    >,
+    generalCase: 'Cas général (non mesuré)',
+    selectedConfig: (target: string) => `Configuration sélectionnée : ${target}`,
+    urlFrontend: 'URL Frontend',
+    urlBff: 'URL BFF',
+    urlBackend: 'URL Backend',
+    repositoriesRow: 'Dépôts',
+    mountRow: 'Montage des dépôts',
+    namespaceRow: 'Namespace',
+    notGiven: 'non indiquée',
+    notGivenPlural: 'aucun',
+    check: 'Tester la connectivité',
+    checking: 'Vérification…',
+    checkFrom: 'Chaque URL est jointe depuis le serveur QA-CRAWLER (une requête, sans effet de bord).',
+    noUrl:
+      'Aucune URL connue : ni l’environnement du projet ni les applications du périmètre n’en indiquent.',
+    checkFailed: (message: string) => `Test de connectivité impossible : ${message}`,
+    reachable: (status: string, ms: number) =>
+      `Joignable${status ? ` · HTTP ${status}` : ''} · ${String(ms)} ms`,
+    unreachable: (message: string, ms?: number) =>
+      `Injoignable${message ? ` : ${message}` : ''}${ms !== undefined ? ` (${String(ms)} ms)` : ''}`,
+    badFormat: (message: string) => `Format invalide${message ? ` : ${message}` : ''}`,
+    notMeasured: (message: string) => `Non mesurée${message ? ` : ${message}` : ''}`,
+    next: 'Étape suivante',
+    nextHint: 'Ouvre « Reproduction ».',
+    saveFirst: 'Enregistrer l’environnement choisi avant de passer à l’étape suivante.',
+    knownLimits: 'Limites connues',
   },
 };
 
@@ -575,6 +790,18 @@ const en: typeof fr = {
     reproduction: 'Reproduction',
     evidence: 'Evidence',
     code: 'Code analysis',
+    traceability: 'Traceability',
+    diagnosis: 'Diagnosis',
+    report: 'Report',
+    regression: 'Non-regression',
+  },
+  stagesShort: {
+    description: 'Description',
+    scope: 'Scope',
+    environment: 'Environment',
+    reproduction: 'Reproduction',
+    evidence: 'Evidence',
+    code: 'Analysis',
     traceability: 'Traceability',
     diagnosis: 'Diagnosis',
     report: 'Report',
@@ -617,7 +844,47 @@ const en: typeof fr = {
   actions: 'Incident actions',
   targets: { LOCAL: 'Local', REMOTE: 'Remote', ARO: 'Azure Red Hat OpenShift' },
   tabsLabel: 'Investigation sections',
+  subTabsLabel: (tab) => `Views of “${tab}”`,
   count: (count) => `${String(count)} item(s)`,
+  mainTabs: {
+    overview: 'Overview',
+    timeline: 'Reproduction',
+    traceability: 'Traceability',
+    code: 'Code',
+    diagnosis: 'Diagnosis',
+    trigger: 'Triggers',
+    report: 'Report',
+  },
+  subTabs: {
+    summary: 'Summary',
+    scope: 'Scope',
+    environment: 'Environment',
+    run: 'Run',
+    evidence: 'Evidence',
+    events: 'Timeline',
+    logs: 'Logs',
+    fullstack: 'Full Stack',
+    frontend: 'Frontend',
+    bff: 'BFF',
+    backend: 'Backend',
+    http: 'HTTP',
+    diagnosis: 'Diagnosis',
+    hypotheses: 'Hypotheses',
+    experiments: 'Experiments',
+    report: 'Report',
+    regression: 'Non-regression',
+  },
+  details: 'Details',
+  detailsShow: 'Show the incident details',
+  detailsHide: 'Hide the incident details',
+  reference: 'Reference reproduction',
+  noReference: 'No completed reproduction',
+  stepperShow: 'Show the ten steps',
+  stepperHide: 'Fold the progress',
+  stepNow: 'Current step',
+  stepDone: 'Investigation complete',
+  stepOf: (index, total) => `${String(index)}/${String(total)}`,
+  stepOfLong: (index, total) => `step ${String(index)} of ${String(total)}`,
   tabs: {
     overview: 'Overview',
     timeline: 'Timeline',
@@ -629,6 +896,17 @@ const en: typeof fr = {
     logs: 'Logs',
     hypotheses: 'Hypotheses',
     experiments: 'Experiments',
+    ai: 'AI investigation',
+    brief: 'Incident',
+    discovery: 'Discovered scope',
+    explorer: 'Explorer',
+    live: 'Execution',
+    chronology: 'Timeline',
+    matrix: 'Matrix',
+    minimal: 'Minimal reproduction',
+    angular: 'Angular code',
+    causes: 'Causes',
+    proposal: 'Proposed test',
     report: 'Report',
     regression: 'Non-regression',
   },
@@ -786,6 +1064,33 @@ const en: typeof fr = {
     reset: 'Back to the saved environment',
     readOnly: 'Read only: your role does not allow changing the environment.',
     locked: (state) => `Unavailable in state “${state}”.`,
+    screenTitle: 'Environment selection',
+    screenSub: 'Choose LOCAL, REMOTE or ARO: where QA-CRAWLER and Playwright run.',
+    cardTitles: { LOCAL: 'LOCAL', REMOTE: 'REMOTE', ARO: 'ARO (OpenShift)' },
+    generalCase: 'General case (not measured)',
+    selectedConfig: (target) => `Selected configuration: ${target}`,
+    urlFrontend: 'Frontend URL',
+    urlBff: 'BFF URL',
+    urlBackend: 'Backend URL',
+    repositoriesRow: 'Repositories',
+    mountRow: 'Repository mount',
+    namespaceRow: 'Namespace',
+    notGiven: 'not given',
+    notGivenPlural: 'none',
+    check: 'Test connectivity',
+    checking: 'Checking…',
+    checkFrom: 'Each URL is reached from the QA-CRAWLER server (one request, no side effect).',
+    noUrl: 'No known URL: neither the project environment nor the scope applications give one.',
+    checkFailed: (message) => `Connectivity test impossible: ${message}`,
+    reachable: (status, ms) => `Reachable${status ? ` · HTTP ${status}` : ''} · ${String(ms)} ms`,
+    unreachable: (message, ms) =>
+      `Unreachable${message ? `: ${message}` : ''}${ms !== undefined ? ` (${String(ms)} ms)` : ''}`,
+    badFormat: (message) => `Invalid format${message ? `: ${message}` : ''}`,
+    notMeasured: (message) => `Not measured${message ? `: ${message}` : ''}`,
+    next: 'Next step',
+    nextHint: 'Opens “Reproduction”.',
+    saveFirst: 'Save the chosen environment before going to the next step.',
+    knownLimits: 'Known limitations',
   },
 };
 
@@ -834,32 +1139,76 @@ const fact = (term: string, value: string): string => `<div><dt>${esc(term)}</dt
 
 // ── Progression : l'affichage ────────────────────────────────────────────────────────────────
 
-/** La progression en liste ordonnée : chaque étape est un bouton (`ws-ux-stage`), l'étape actuelle porte aria-current. */
-export function renderStepper(ctx: WorkspaceContext): string {
+/**
+ * La progression. Repliée (par défaut) : UNE ligne fine des dix étapes numérotées (numéro, libellé court ;
+ * l'étape actuelle mise en avant et `aria-current="step"`, une étape terminée marquée d'une coche, une étape
+ * bloquée d'une alerte), chaque étape un bouton (`ws-ux-stage`) ; la ligne défile horizontalement sans
+ * couper un libellé, et finit par « n/10 ». Le bouton `ws-ux-stepper` déplie la liste ordonnée complète
+ * (`#ws-ux-steps`, statut écrit de chaque étape), préférence `stepper`.
+ */
+export function renderStepper(ctx: WorkspaceContext, opts: { open?: boolean } = {}): string {
   const t = TEXT[ctx.lang];
+  const open = opts.open ?? true;
   const progress = workspaceProgress(ctx.incident);
+  const total = progress.stages.length;
+  const currentIndex = progress.current ? WORKSPACE_STAGES.indexOf(progress.current) + 1 : total;
+  const percent = Math.round((progress.done / Math.max(1, total)) * 100);
+  const blocked = progress.stages.some((stage) => stage.status === 'BLOCKED');
+  const marker = (status: StageStatus, index: number): string =>
+    status === 'DONE'
+      ? icon('check')
+      : status === 'BLOCKED'
+        ? icon('alert')
+        : `<span>${String(index + 1)}</span>`;
+  const toggle = `<button type="button" class="ws-ux-step-toggle" data-action="ws-ux-stepper" aria-expanded="${String(open)}"${open ? ' aria-controls="ws-ux-steps"' : ''} title="${esc(open ? t.stepperHide : t.stepperShow)}">${icon(open ? 'up' : 'down')}<span class="sr">${esc(open ? t.stepperHide : t.stepperShow)}</span></button>`;
+  const running = progress.running
+    ? `<span class="pill live ws-ux-run"><span class="spin sm" aria-hidden="true"></span>${esc(`${t.stages[progress.running]} : ${t.running.toLowerCase()}`)}</span>`
+    : '';
+  const count = `<span class="ws-ux-step-n" aria-label="${esc(t.stepOfLong(currentIndex, total))}">${esc(t.stepOf(currentIndex, total))}</span>`;
+  if (!open) {
+    const steps = progress.stages
+      .map((stage, index) => {
+        const isRunning = progress.running === stage.key;
+        const status = isRunning ? t.running : t.stageStatus[stage.status];
+        const full = t.stages[stage.key];
+        return `<li class="ws-ux-sr ws-ux-s-${stage.status.toLowerCase()}${isRunning ? ' ws-ux-s-running' : ''}"><button type="button" data-action="ws-ux-stage" data-stage="${stage.key}"${progress.current === stage.key ? ' aria-current="step"' : ''} title="${esc(`${String(index + 1)}. ${full} — ${status}`)}"><span class="ws-ux-sn" aria-hidden="true">${isRunning ? '<span class="spin sm"></span>' : marker(stage.status, index)}</span><span class="sr">${String(index + 1)}. </span><span class="ws-ux-sl">${esc(t.stagesShort[stage.key])}</span><span class="sr"> (${esc(status)})</span></button></li>`;
+      })
+      .join('');
+    return `<nav class="ws-ux-stepper ws-ux-stepper-row" aria-label="${esc(t.progress)}"><div class="ws-ux-step-row">${toggle}<ol class="ws-ux-steps-row">${steps}</ol>${count}${running}</div></nav>`;
+  }
   const items = progress.stages
     .map((stage, index) => {
-      const running = progress.running === stage.key;
-      const marker =
-        stage.status === 'DONE'
-          ? icon('check')
-          : stage.status === 'BLOCKED'
-            ? icon('alert')
-            : `<span>${String(index + 1)}</span>`;
-      const status = running ? t.running : t.stageStatus[stage.status];
-      return `<li class="ws-ux-stage ws-ux-s-${stage.status.toLowerCase()}${running ? ' ws-ux-s-running' : ''}"><button type="button" data-action="ws-ux-stage" data-stage="${stage.key}"${progress.current === stage.key ? ' aria-current="step"' : ''}><span class="ws-ux-dot" aria-hidden="true">${marker}</span><span class="ws-ux-stage-t"><b>${esc(t.stages[stage.key])}</b><small>${running ? '<span class="spin sm" aria-hidden="true"></span>' : ''}${esc(status)}</small></span></button></li>`;
+      const isRunning = progress.running === stage.key;
+      const status = isRunning ? t.running : t.stageStatus[stage.status];
+      return `<li class="ws-ux-stage ws-ux-s-${stage.status.toLowerCase()}${isRunning ? ' ws-ux-s-running' : ''}"><button type="button" data-action="ws-ux-stage" data-stage="${stage.key}"${progress.current === stage.key ? ' aria-current="step"' : ''}><span class="ws-ux-dot" aria-hidden="true">${marker(stage.status, index)}</span><span class="ws-ux-stage-t"><b>${esc(t.stages[stage.key])}</b><small>${isRunning ? '<span class="spin sm" aria-hidden="true"></span>' : ''}${esc(status)}</small></span></button></li>`;
     })
     .join('');
-  return `<nav class="ws-ux-stepper" aria-label="${esc(t.progress)}"><p class="ws-ux-progress mu">${esc(t.progressCount(progress.done, progress.stages.length))}</p><ol>${items}</ol></nav>`;
+  const now = progress.current
+    ? `<span class="ws-ux-step-now"><span class="mu">${esc(t.stepNow)} :</span> <b class="${blocked ? 'ws-ux-step-blocked' : ''}">${esc(t.stages[progress.current])}</b>${blocked ? `<span class="sr"> (${esc(t.stageStatus.BLOCKED)})</span>` : ''}</span>`
+    : `<span class="ws-ux-step-now">${icon('check')}<b>${esc(t.stepDone)}</b></span>`;
+  const row = `<div class="ws-ux-step-row">${toggle}${now}${count}<span class="ws-ux-step-bar${blocked ? ' ws-ux-step-bar-ko' : ''}" role="img" aria-label="${esc(t.progressCount(progress.done, total))}"><span style="width:${String(percent)}%"></span></span><span class="ws-ux-progress mu">${esc(t.progressCount(progress.done, total))}</span>${running}</div>`;
+  return `<nav class="ws-ux-stepper ws-ux-stepper-open" aria-label="${esc(t.progress)}">${row}<ol id="ws-ux-steps">${items}</ol></nav>`;
 }
 
 // ── En-tête ──────────────────────────────────────────────────────────────────────────────────
 
-/** L'en-tête : titre, gravité, état, environnement, scénario, mise à jour, bandeau de démonstration, actions. */
-export function renderWorkspaceHeader(ctx: WorkspaceContext, actions: string): string {
+/**
+ * L'en-tête compact : une ligne (retour, titre tronqué avec son infobulle, gravité, état, diagnostic,
+ * environnement, actions) et une divulgation « Détails » (`ws-ux-details`, aria-expanded) pour le
+ * scénario, la description, l'observé et l'attendu, la mise à jour et la reproduction de référence. Le
+ * bandeau de démonstration reste toujours visible, une seule fois pour tout l'espace et sur une ligne : le
+ * détail est dans son infobulle et dans la note `#ws-demo-why` (`demoNote`, lue par les lecteurs d'écran,
+ * référencée par aria-describedby sur chaque bouton désactivé).
+ */
+export function renderWorkspaceHeader(
+  ctx: WorkspaceContext,
+  actions: string,
+  opts: { back?: string; open?: boolean; demoNote?: string } = {},
+): string {
   const t = TEXT[ctx.lang];
+  const o = t.overview;
   const incident = ctx.incident;
+  const open = opts.open ?? false;
   const progress = workspaceProgress(incident);
   const diagnosis = incident.investigation.diagnosis;
   const stateText =
@@ -873,15 +1222,27 @@ export function renderWorkspaceHeader(ctx: WorkspaceContext, actions: string): s
     progress.running
       ? `<span class="pill live ws-ux-run"><span class="spin sm" aria-hidden="true"></span>${esc(`${t.stages[progress.running]} : ${t.running.toLowerCase()}`)}</span>`
       : '',
+    `<span class="ws-ux-env" title="${esc(incident.environmentId ? t.projectEnvironment(incident.environmentId) : t.firstEnvironment)}"><span class="sr">${esc(t.environment)} : </span><b>${esc(t.targets[incident.execution.target])}</b></span>`,
   ].join('');
-  const environment = `<b>${esc(t.targets[incident.execution.target])}</b><small class="mu block">${esc(
+  const toggle = `<button type="button" class="btn small ghost ws-ux-more" data-action="ws-ux-details" aria-expanded="${String(open)}"${open ? ' aria-controls="ws-ux-head-more"' : ''} title="${esc(open ? t.detailsHide : t.detailsShow)}">${icon(open ? 'up' : 'down')}<span>${esc(t.details)}</span></button>`;
+  const reproduction = incidentReproduction(incident);
+  const verdict = reproduction
+    ? `${esc(o.reproduced[String(reproduction.reproduced) as 'true' | 'false' | 'null'])} <small class="mu">${esc(o.run(reproduction.id, formatDate(reproduction.finishedAt ?? reproduction.startedAt, ctx.lang)))}</small>`
+    : `<span class="mu">${esc(t.noReference)}</span>`;
+  const environment = `<b>${esc(t.targets[incident.execution.target])}</b> <small class="mu">${esc(
     incident.environmentId ? t.projectEnvironment(incident.environmentId) : t.firstEnvironment,
   )}</small>`;
-  const meta = `<dl class="ws-ux-meta">${fact(t.environment, environment)}${fact(
-    t.scenario,
-    incident.scenario ? esc(incident.scenario) : `<span class="mu">${esc(t.noScenario)}</span>`,
-  )}${fact(t.updated, `<time datetime="${esc(incident.updatedAt)}">${esc(formatDate(incident.updatedAt, ctx.lang))}</time>`)}</dl>`;
-  return `<header class="ws-ux-head" aria-labelledby="ws-ux-title"><div class="ws-ux-head-top"><div class="ws-ux-head-t"><p class="ws-ux-eyebrow">${esc(t.investigation)} <code>${esc(incident.id)}</code></p><h1 id="ws-ux-title">${esc(incident.title)}</h1><div class="ws-ux-tags">${tags}</div></div><div class="acts" role="group" aria-label="${esc(t.actions)}">${actions}</div></div>${meta}${demoBanner(ctx)}</header>`;
+  const more = open
+    ? `<div class="ws-ux-head-more" id="ws-ux-head-more"><dl class="ws-ux-meta">${fact(t.investigation, `<code>${esc(incident.id)}</code>`)}${fact(t.environment, environment)}${fact(
+        t.scenario,
+        incident.scenario ? esc(incident.scenario) : `<span class="mu">${esc(t.noScenario)}</span>`,
+      )}${fact(t.updated, `<time datetime="${esc(incident.updatedAt)}">${esc(formatDate(incident.updatedAt, ctx.lang))}</time>`)}${fact(o.observed, esc(incident.observed))}${fact(o.expected, esc(incident.expected))}${fact(t.reference, verdict)}<div class="wide"><dt>${esc(o.description)}</dt><dd>${incident.description ? esc(incident.description) : `<span class="mu">${esc(o.noDescription)}</span>`}</dd></div></dl></div>`
+    : '';
+  const banner = demoBanner(ctx, true);
+  const demo = banner
+    ? `<div class="ws-ux-demo" title="${esc(`${partsText(ctx.lang).demoHint}${opts.demoNote ? ` ${opts.demoNote}` : ''}`)}">${banner}${opts.demoNote ? `<p class="sr" id="ws-demo-why">${esc(opts.demoNote)}</p>` : ''}</div>`
+    : '';
+  return `<header class="ws-ux-head" aria-labelledby="ws-ux-title"><div class="ws-ux-head-top">${opts.back ?? ''}<div class="ws-ux-head-t"><h1 id="ws-ux-title" title="${esc(incident.title)}">${esc(incident.title)}</h1><div class="ws-ux-tags">${tags}</div></div><div class="acts" role="group" aria-label="${esc(t.actions)}">${actions}${toggle}</div></div>${demo}${more}</header>`;
 }
 
 // ── Onglets ──────────────────────────────────────────────────────────────────────────────────
@@ -909,20 +1270,36 @@ export function workspaceTabs(ctx: WorkspaceContext): UxTab[] {
   });
 }
 
-/** La liste d'onglets : tabindex itinérant (flèches, Début, Fin via rovingTarget), `ws-ux-tab`. */
-export function renderTabs(ctx: WorkspaceContext, tabs: UxTab[], current: string): string {
+/**
+ * Une liste d'onglets : tabindex itinérant (flèches, Début, Fin via rovingTarget). Les onglets principaux
+ * (`ws-ux-tab`, `data-tab`, id `ws-ux-tab-<clé>`) ou les sous-onglets (`ws-ux-sub`, `data-sub`, id
+ * `ws-ux-sub-<clé>`) ; tous commandent le panneau `ws-ux-panel`. `tools` : des outils à droite de la barre.
+ */
+export function renderTabs(
+  ctx: WorkspaceContext,
+  tabs: UxTab[],
+  current: string,
+  opts: { kind?: 'main' | 'sub'; label?: string; tools?: string } = {},
+): string {
   const t = TEXT[ctx.lang];
-  return `<div class="tabs ws-ux-tabs" role="tablist" aria-label="${esc(t.tabsLabel)}" aria-orientation="horizontal">${tabs
+  const sub = opts.kind === 'sub';
+  const list = `<div class="tabs ws-ux-tabs${sub ? ' ws-ux-subtabs' : ''}" role="tablist" aria-label="${esc(opts.label ?? t.tabsLabel)}" aria-orientation="horizontal">${tabs
     .map((tab) => {
       const selected = tab.key === current;
-      return `<button type="button" role="tab" id="ws-ux-tab-${esc(tab.key)}" data-action="ws-ux-tab" data-tab="${esc(tab.key)}" aria-selected="${String(selected)}" aria-controls="ws-ux-panel" tabindex="${selected ? '0' : '-1'}">${esc(tab.label)}${tab.count !== undefined ? ` <span class="ws-ux-count"><span aria-hidden="true">${String(tab.count)}</span><span class="sr">${esc(t.count(tab.count))}</span></span>` : ''}</button>`;
+      const ident = sub
+        ? `id="ws-ux-sub-${esc(tab.key)}" data-action="ws-ux-sub" data-sub="${esc(tab.key)}"`
+        : `id="ws-ux-tab-${esc(tab.key)}" data-action="ws-ux-tab" data-tab="${esc(tab.key)}"`;
+      return `<button type="button" role="tab" ${ident} aria-selected="${String(selected)}" aria-controls="ws-ux-panel" tabindex="${selected ? '0' : '-1'}">${esc(tab.label)}${tab.count !== undefined ? ` <span class="ws-ux-count"><span aria-hidden="true">${String(tab.count)}</span><span class="sr">${esc(t.count(tab.count))}</span></span>` : ''}</button>`;
     })
     .join('')}</div>`;
+  return opts.tools !== undefined
+    ? `<div class="ws-ux-tabbar${sub ? ' ws-ux-subbar' : ''}">${list}<div class="ws-ux-tabtools">${opts.tools}</div></div>`
+    : list;
 }
 
-/** Le panneau de l'onglet courant, relié à son onglet. */
-export const renderTabPanel = (current: string, body: string): string =>
-  `<div id="ws-ux-panel" class="ws-ux-panel" role="tabpanel" aria-labelledby="ws-ux-tab-${esc(current)}" tabindex="0">${body}</div>`;
+/** Le panneau de l'onglet courant, relié à son onglet (`labelledBy` : l'identifiant de l'onglet). */
+export const renderTabPanel = (current: string, body: string, labelledBy?: string, cls = ''): string =>
+  `<div id="ws-ux-panel" class="ws-ux-panel${cls ? ` ${cls}` : ''}" role="tabpanel" aria-labelledby="${esc(labelledBy ?? `ws-ux-tab-${current}`)}"${labelledBy ? '' : ' tabindex="0"'}>${body}</div>`;
 
 // ── Vue d'ensemble ───────────────────────────────────────────────────────────────────────────
 
@@ -1042,15 +1419,41 @@ function envField(
   return `<label class="field" for="${id}">${esc(e.fields[field])}${options.required ? ' <span aria-hidden="true">*</span>' : ''}<input id="${id}" data-ws-field="${field}" class="mono" spellcheck="false" autocomplete="off" value="${esc(uxFieldValue(ctx.incident, ui, field))}"${options.required ? ' required aria-required="true"' : ''}${invalid ? ' aria-invalid="true"' : ''}${described ? ` aria-describedby="${described}"` : ''}${options.disabled ? ' disabled' : ''}>${problem}${hint ? `<small id="${id}-h" class="mu">${esc(hint)}</small>` : ''}</label>`;
 }
 
+const TARGET_ICONS: Record<ExecutionTarget, string> = {
+  LOCAL: '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
+  REMOTE:
+    '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/>',
+  ARO: '<path d="M7 18h10a4 4 0 00.6-7.95A6 6 0 006.3 9.4 4.4 4.4 0 007 18z"/>',
+};
+
+const targetIcon = (target: ExecutionTarget): string =>
+  `<svg class="ico ws-ux-tg-ico" viewBox="0 0 24 24" aria-hidden="true">${TARGET_ICONS[target]}</svg>`;
+
+/** Le résultat affiché d'une URL testée. */
+function connectivityPill(lang: Lang, result: Connectivity): string {
+  const e = TEXT[lang].env;
+  if (!result.formatOk) return `<span class="pill warn">${esc(e.badFormat(result.message ?? ''))}</span>`;
+  if (result.reachable === true)
+    return `<span class="pill ok">${icon('check')}${esc(e.reachable(result.status !== undefined ? String(result.status) : '', result.durationMs ?? 0))}</span>`;
+  if (result.reachable === false)
+    return `<span class="pill ko">${icon('cross')}${esc(e.unreachable(result.message ?? '', result.durationMs))}</span>`;
+  return `<span class="pill mu">${esc(e.notMeasured(result.message ?? ''))}</span>`;
+}
+
 /**
- * Le choix LOCAL / REMOTE / ARO : trois cartes en groupe de boutons radio (`ws-ux-target`), ce que chaque
- * cible permet (mesuré quand `capabilities` vaut pour elle, sinon le cas général), les champs OpenShift
- * (REMOTE, facultatifs) ou ARO (obligatoires), les limites, puis l'enregistrement (`ws-ux-target-save`).
+ * Le choix LOCAL / REMOTE / ARO : trois cartes en groupe de boutons radio (`ws-ux-target`, flèches par le
+ * contrôleur via rovingTarget), ce que chaque cible permet (mesuré quand `capabilities` vaut pour elle,
+ * sinon le cas général, dit comme tel), les champs OpenShift (REMOTE, facultatifs) ou ARO (obligatoires),
+ * l'encadré « Configuration sélectionnée » (URL de l'environnement du projet `opts.environment` et des
+ * applications du périmètre, dépôts), le test de connectivité (`ws-ux-check`, résultats par URL dans
+ * `ui.connectivity`), l'enregistrement (`ws-ux-target-save`) et « Étape suivante » (`ws-ux-stage`,
+ * `reproduction` ; désactivée tant que le choix n'est pas enregistré).
  */
 export function renderEnvironmentSelector(
   ctx: WorkspaceContext,
   ui: UxUi,
   capabilities?: EnvironmentCapabilities,
+  opts: { environment?: EnvironmentRef } = {},
 ): string {
   const t = TEXT[ctx.lang];
   const e = t.env;
@@ -1065,26 +1468,33 @@ export function renderEnvironmentSelector(
     const checked = target === selected;
     const measured = capabilities?.target === target ? capabilities : undefined;
     const generic = e.generic[target];
-    const rows: [string, string][] = measured
+    const rows: [string, string, 'ok' | 'ko' | 'gen'][] = measured
       ? [
-          [e.playwright, e.playwrightKinds[measured.playwright] ?? measured.playwright],
-          [e.repositories, e.repositoryKinds[measured.repositories] ?? measured.repositories],
-          [e.logs, e.logKinds[measured.logs] ?? measured.logs],
-          [e.tests, measured.tests ? e.available : e.unavailable],
-          [e.jobs, measured.kubernetesJobs ? e.available : e.unavailable],
+          [e.playwright, e.playwrightKinds[measured.playwright] ?? measured.playwright, 'ok'],
+          [e.repositories, e.repositoryKinds[measured.repositories] ?? measured.repositories, 'ok'],
+          [e.logs, e.logKinds[measured.logs] ?? measured.logs, measured.logs === 'NONE' ? 'ko' : 'ok'],
+          [e.tests, measured.tests ? e.available : e.unavailable, measured.tests ? 'ok' : 'ko'],
+          [
+            e.jobs,
+            measured.kubernetesJobs ? e.available : e.unavailable,
+            measured.kubernetesJobs ? 'ok' : 'ko',
+          ],
         ]
       : [
-          [e.playwright, generic.playwright],
-          [e.repositories, generic.repositories],
-          [e.logs, generic.logs],
-          [e.tests, generic.tests],
+          [e.playwright, generic.playwright, 'gen'],
+          [e.repositories, generic.repositories, 'gen'],
+          [e.logs, generic.logs, 'gen'],
+          [e.tests, generic.tests, 'gen'],
         ];
     const badges = [
       target === 'LOCAL' ? `<span class="pill mu">${esc(e.default)}</span>` : '',
       target === saved ? `<span class="pill live">${esc(e.saved)}</span>` : '',
       measured ? `<span class="pill ok">${esc(e.measured)}</span>` : '',
     ].join('');
-    return `<button type="button" role="radio" class="ws-ux-target" data-action="ws-ux-target" data-target="${target}" aria-checked="${String(checked)}" tabindex="${checked ? '0' : '-1'}"><span class="ws-ux-target-h"><span class="ws-ux-radio" aria-hidden="true">${checked ? icon('check') : ''}</span><b>${esc(t.targets[target])}</b>${badges}</span>${rows.map(([term, value]) => `<span class="ws-ux-cap"><span class="mu">${esc(term)}</span><span>${esc(value)}</span></span>`).join('')}${checked ? `<span class="sr">${esc(e.selected)}</span>` : ''}</button>`;
+    const id = `ws-ux-tg-${target}`;
+    const bullet = (kind: 'ok' | 'ko' | 'gen'): string =>
+      `<span class="ws-ux-cap-i ws-ux-cap-${kind}" aria-hidden="true">${kind === 'ok' ? icon('check') : kind === 'ko' ? icon('cross') : ''}</span>`;
+    return `<button type="button" role="radio" class="ws-ux-target" data-action="ws-ux-target" data-target="${target}" aria-checked="${String(checked)}" tabindex="${checked ? '0' : '-1'}" aria-labelledby="${id}-t" aria-describedby="${id}-d"><span class="ws-ux-radio" aria-hidden="true">${checked ? icon('check') : ''}</span><span class="ws-ux-tg-top">${targetIcon(target)}<b id="${id}-t" class="ws-ux-tg-t">${esc(e.cardTitles[target])}<span class="sr"> — ${esc(t.targets[target])}${checked ? ` (${esc(e.selected)})` : ''}</span></b><small class="mu" aria-hidden="true">${esc(t.targets[target])}</small><span class="ws-ux-target-h">${badges}</span></span><span class="ws-ux-caps" id="${id}-d">${rows.map(([term, value, kind]) => `<span class="ws-ux-cap">${bullet(kind)}<span><span class="mu">${esc(term)} : </span>${esc(value)}</span></span>`).join('')}${measured ? '' : `<small class="mu ws-ux-gen">${esc(e.generalCase)}</small>`}</span></button>`;
   }).join('');
 
   const fields =
@@ -1094,6 +1504,44 @@ export function renderEnvironmentSelector(
         ? `<fieldset class="ws-ux-fields"><legend>${esc(e.remoteFields)}</legend><div class="fields">${(['remote.namespace', 'remote.apiServer', 'remote.context'] as const).map((field) => envField(ctx, ui, field, { required: false, disabled })).join('')}</div></fieldset>`
         : '';
 
+  // L'encadré « Configuration sélectionnée » : les URL connues, testables, et les dépôts.
+  const targets = connectivityTargets(incident, opts.environment);
+  const urlRow = (term: string, role: ConnectivityTarget['role']): string => {
+    const list = targets.filter((target) => target.role === role);
+    const value =
+      list.length === 0
+        ? `<span class="mu">${esc(e.notGiven)}</span>`
+        : `<ul class="plain ws-ux-urls">${list
+            .map((target) => {
+              const result = ui.connectivity?.[target.key];
+              const state = ui.checking
+                ? `<span class="pill mu"><span class="spin sm" aria-hidden="true"></span>${esc(e.checking)}</span>`
+                : result
+                  ? connectivityPill(ctx.lang, result)
+                  : '';
+              return `<li><code title="${esc(target.label)}">${esc(target.url)}</code>${state}</li>`;
+            })
+            .join('')}</ul>`;
+    return `<div><dt>${esc(term)}</dt><dd>${value}</dd></div>`;
+  };
+  const roots = incident.scope.applications.map((app) => app.repository.root);
+  const mount = selected === 'ARO' ? uxFieldValue(incident, ui, 'aro.repositoriesMount').trim() : '';
+  const namespace =
+    selected === 'ARO'
+      ? uxFieldValue(incident, ui, 'aro.namespace').trim()
+      : selected === 'REMOTE'
+        ? uxFieldValue(incident, ui, 'remote.namespace').trim()
+        : '';
+  const config = `<dl class="ws-ux-config-dl">${urlRow(e.urlFrontend, 'FRONTEND')}${urlRow(e.urlBff, 'BFF')}${urlRow(e.urlBackend, 'BACKEND')}<div><dt>${esc(e.repositoriesRow)}</dt><dd>${
+    roots.length === 0
+      ? `<span class="mu">${esc(e.notGivenPlural)}</span>`
+      : `<ul class="plain ws-ux-urls">${roots.map((root) => `<li><code>${esc(root)}</code></li>`).join('')}</ul>`
+  }</dd></div>${selected === 'ARO' ? `<div><dt>${esc(e.mountRow)}</dt><dd>${mount ? `<code>${esc(mount)}</code>` : `<span class="mu">${esc(e.notGiven)}</span>`}</dd></div>` : ''}${
+    selected !== 'LOCAL'
+      ? `<div><dt>${esc(e.namespaceRow)}</dt><dd>${namespace ? `<code>${esc(namespace)}</code>` : `<span class="mu">${esc(e.notGiven)}</span>`}</dd></div>`
+      : ''
+  }</dl>`;
+
   const measuredBlock = capabilities
     ? `<div class="ws-ux-limits"><h3>${esc(e.measuredLimitations(t.targets[capabilities.target]))}</h3>${
         capabilities.limitations.length === 0
@@ -1101,7 +1549,7 @@ export function renderEnvironmentSelector(
           : `<ul class="checks">${capabilities.limitations.map((entry) => `<li class="ko">${icon('alert')}<span>${esc(entry)}</span></li>`).join('')}</ul>`
       }${capabilities.target !== selected ? `<p class="mu">${esc(e.measuredFor(t.targets[capabilities.target]))}</p>` : ''}</div>`
     : '';
-  const limits = `<div class="ws-ux-limits"><h3>${esc(e.limitations)}</h3><ul class="plain tight">${e.known[selected].map((entry) => `<li>${esc(entry)}</li>`).join('')}</ul></div>${measuredBlock}`;
+  const limits = `<details class="ws-ux-limits-d"${capabilities && capabilities.limitations.length > 0 ? ' open' : ''}><summary>${esc(e.knownLimits)}</summary><div class="ws-ux-limits"><h3>${esc(e.limitations)}</h3><ul class="plain tight">${e.known[selected].map((entry) => `<li>${esc(entry)}</li>`).join('')}</ul></div>${measuredBlock}</details>`;
 
   const dirty = environmentDirty(incident, ui);
   const problems =
@@ -1110,38 +1558,185 @@ export function renderEnvironmentSelector(
       : ui.error
         ? `<p class="err" role="alert">${esc(ui.error)}</p>`
         : '';
-  const footer = !runner
+  const checkProblem = ui.checkError
+    ? `<p class="err" role="alert">${esc(e.checkFailed(ui.checkError))}</p>`
+    : '';
+  const canCheck = runner && !ctx.demo && targets.length > 0 && ui.checking !== true;
+  const check = runner
+    ? `<button type="button" class="btn" data-action="ws-ux-check" aria-busy="${String(ui.checking === true)}" aria-describedby="ws-ux-check-h"${canCheck ? '' : ' disabled'}>${icon('refresh')}<span>${esc(e.check)}</span></button>`
+    : '';
+  const next = `<button type="button" class="btn${dirty ? '' : ' primary'}" data-action="ws-ux-stage" data-stage="reproduction" aria-describedby="ws-ux-next-h"${dirty ? ' disabled' : ''}><span>${esc(e.next)}</span>${icon('right')}</button><small id="ws-ux-next-h" class="${dirty ? 'mu' : 'sr'}">${esc(dirty ? e.saveFirst : e.nextHint)}</small>`;
+  const save =
+    runner && dirty
+      ? `<button type="button" class="btn ghost" data-action="ws-ux-target-reset"${ui.saving ? ' disabled' : ''}>${esc(e.reset)}</button><button type="button" class="btn primary" data-action="ws-ux-target-save" aria-busy="${String(ui.saving)}"${disabled ? ' disabled' : ''}>${esc(e.save)}</button>`
+      : '';
+  const notes = !runner
     ? `<p class="note">${icon('info')}<span>${esc(e.readOnly)}</span></p>`
-    : `${problems}${locked ? `<p class="mu">${esc(e.locked(t.states[incident.state]))}</p>` : ''}<div class="form-acts start ws-ux-env-acts">${dirty ? `<span class="mu">${esc(e.dirty)}</span>` : ''}<button type="button" class="btn primary" data-action="ws-ux-target-save" aria-busy="${String(ui.saving)}"${disabled || !dirty ? ' disabled' : ''}>${esc(e.save)}</button>${dirty ? `<button type="button" class="btn ghost" data-action="ws-ux-target-reset"${ui.saving ? ' disabled' : ''}>${esc(e.reset)}</button>` : ''}</div>`;
+    : `${problems}${locked ? `<p class="mu">${esc(e.locked(t.states[incident.state]))}</p>` : ''}`;
+  const configBox = `<section class="ws-ux-config${dirty ? ' ws-ux-config-dirty' : ''}" aria-labelledby="ws-ux-config-t"><div class="ws-ux-config-h"><span class="ws-ux-config-i" aria-hidden="true">${icon('check')}</span><h3 id="ws-ux-config-t">${esc(e.selectedConfig(e.cardTitles[selected]))}</h3>${dirty ? `<span class="pill warn">${esc(e.dirty)}</span>` : ''}</div><div class="ws-ux-config-b">${config}<div class="ws-ux-config-acts">${check}${save}${next}</div></div><small id="ws-ux-check-h" class="mu">${esc(targets.length === 0 ? e.noUrl : e.checkFrom)}</small>${checkProblem}</section>`;
 
-  return `<section class="card ws-ux-env" aria-labelledby="ws-ux-env-t"><h2 id="ws-ux-env-t" class="fl">${esc(e.title)}</h2><p class="mu">${esc(e.sub)}</p><div class="ws-ux-targets" role="radiogroup" aria-labelledby="ws-ux-env-t">${cards}</div>${fields}${limits}${footer}</section>`;
+  return `<section class="card ws-ux-envsel" aria-labelledby="ws-ux-env-t"><h2 id="ws-ux-env-t" class="fl">${esc(e.screenTitle)}</h2><p class="mu">${esc(e.screenSub)}</p><div class="ws-ux-targets" role="radiogroup" aria-labelledby="ws-ux-env-t">${cards}</div>${fields}${notes}${configBox}${limits}</section>`;
 }
 
 // ── Styles ───────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Les styles des écrans « Liste des incidents » (`inc-l-`) et « Création d'un incident » (`inc-cf-`), rendus
+ * par dashboard-incidents.ts : jetons du thème seulement, clair et sombre.
+ */
+export const INCIDENT_FLOW_CSS = `
+.inc-l{gap:10px}
+.inc-l-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.inc-l-search{flex:1 1 280px;min-width:0;display:flex;align-items:center;gap:8px;min-height:var(--qa-control,36px);padding:0 10px;border:1px solid var(--qa-color-border-strong);border-radius:8px;background:var(--qa-color-surface);color:var(--qa-color-muted)}
+.inc-l-search:focus-within{outline:2px solid var(--qa-color-primary);outline-offset:1px;border-color:var(--qa-color-primary)}
+.inc-l-search .ico{width:16px;height:16px;flex:none}
+.inc-l-search input{flex:1 1 auto;min-width:0;border:0;background:transparent;color:var(--qa-color-text);font:inherit;font-size:14px;outline:none;min-height:calc(var(--qa-control,36px) - 2px)}
+.inc-l-search input::placeholder{color:var(--qa-color-muted)}
+.inc-l-icons{display:flex;gap:6px;flex:none}
+.inc-l-tabs{position:relative;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
+.inc-l-tabs button{position:relative;white-space:nowrap;flex:none;display:inline-flex;align-items:center;gap:6px}
+.inc-l-n{display:inline-flex;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);font-size:12px;font-weight:600;align-items:center;justify-content:center;color:var(--qa-color-muted)}
+.inc-l-tabs button[aria-selected="true"] .inc-l-n{background:color-mix(in srgb,var(--qa-color-primary) 12%,var(--qa-color-surface));border-color:color-mix(in srgb,var(--qa-color-primary) 35%,transparent);color:var(--qa-color-primary)}
+.inc-l-shown{margin:0;font-size:12.5px}
+.inc-l-tbl{min-width:720px}
+.inc-l-tbl td{padding:10px 8px}
+.inc-l-row{cursor:pointer}
+.inc-l-row:hover td{background:color-mix(in srgb,var(--qa-color-primary) 5%,var(--qa-color-surface))}
+.inc-l-row:focus-within td{background:color-mix(in srgb,var(--qa-color-primary) 7%,var(--qa-color-surface))}
+.inc-l-id{font-size:12.5px;color:var(--qa-color-primary);white-space:nowrap;background:transparent}
+.inc-l-title .lnk{color:var(--qa-color-text);font-weight:600;min-height:28px}
+.inc-l-title .lnk:hover{color:var(--qa-color-primary)}
+.inc-l-title .lnk:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px;border-radius:4px}
+.inc-sev{display:inline-flex;align-items:center;gap:6px}
+.inc-dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none;background:var(--qa-color-muted)}
+.inc-dot-medium{background:var(--qa-color-warning)}
+.inc-dot-high{background:var(--qa-color-danger)}
+.inc-dot-critical{background:var(--qa-color-danger);box-shadow:0 0 0 2px color-mix(in srgb,var(--qa-color-danger) 30%,transparent)}
+.inc-cf-crumbs ol{list-style:none;margin:0 0 -8px;padding:0;display:flex;align-items:center;gap:6px;font-size:13px;color:var(--qa-color-muted)}
+.inc-cf-crumbs li+li::before{content:"›";margin-right:6px}
+.inc-cf-crumbs .lnk{min-height:24px;font-size:13px}
+.inc-cf{max-width:1040px}
+.inc-cf-form{display:flex;flex-direction:column;gap:12px;min-width:0}
+.inc-cf-f{display:grid;grid-template-columns:150px minmax(0,1fr);gap:4px 14px;align-items:start;min-width:0}
+.inc-cf-l{font-size:13px;font-weight:600;padding-top:8px}
+.inc-cf-l small{font-weight:400}
+.inc-cf-c{display:flex;flex-direction:column;gap:4px;min-width:0}
+.inc-cf-c>input,.inc-cf-c>textarea,.inc-cf-c>select,.inc-cf-sev select{width:100%;min-height:var(--qa-control,36px);border-radius:8px;border:1px solid var(--qa-color-border-strong);padding:6px 10px;background-color:var(--qa-color-surface);color:var(--qa-color-text);font:inherit;font-size:14px}
+.inc-cf-c>select,.inc-cf-sev select{padding-right:32px}
+.inc-cf-c>textarea{resize:vertical;font-size:13.5px;line-height:1.45}
+.inc-cf-c>input:focus-visible,.inc-cf-c>textarea:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px;border-color:var(--qa-color-primary)}
+.inc-cf-c>[aria-invalid="true"]{border-color:var(--qa-color-danger);box-shadow:0 0 0 1px var(--qa-color-danger)}
+.inc-cf-c>small.mu{font-size:12px}
+.inc-cf-err{display:flex;align-items:center;gap:4px;font-size:12.5px;font-weight:500}
+.inc-cf-err .ico{width:14px;height:14px;flex:none}
+.inc-cf-pair{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:12px 20px;align-items:start}
+.inc-cf-pair>.inc-cf-f+datalist+.inc-cf-f,.inc-cf-pair>.inc-cf-f+.inc-cf-f{grid-template-columns:120px minmax(0,1fr)}
+.inc-cf-sev{position:relative;display:flex;align-items:center}
+.inc-cf-sev .inc-dot{position:absolute;left:11px;width:10px;height:10px;pointer-events:none;z-index:1}
+.inc-cf-sev select{padding-left:30px}
+.inc-cf-sev-high select,.inc-cf-sev-critical select{background-color:var(--qa-color-danger-soft);border-color:color-mix(in srgb,var(--qa-color-danger) 45%,var(--qa-color-border-strong));color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text));font-weight:600}
+.inc-cf-sev-medium select{background-color:var(--qa-color-warning-soft);border-color:color-mix(in srgb,var(--qa-color-warning) 45%,var(--qa-color-border-strong))}
+.inc-cf-pick{position:relative;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.inc-cf-file{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
+.inc-cf-file:focus-visible+label{outline:2px solid var(--qa-color-primary);outline-offset:2px}
+.inc-cf-pick label.btn{cursor:pointer}
+.inc-cf-pick label.btn.disabled{opacity:.55;cursor:not-allowed}
+.inc-cf-atts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.inc-cf-atts li{display:flex;align-items:center;gap:8px;min-width:0;padding:4px 4px 4px 8px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface-2);font-size:13px}
+.inc-cf-att-i .ico{width:15px;height:15px;color:var(--qa-color-muted)}
+.inc-cf-att-n{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inc-cf-att-rm{flex:none;width:28px;height:28px;display:inline-grid;place-items:center;border:0;border-radius:6px;background:transparent;color:var(--qa-color-muted);cursor:pointer;padding:0}
+.inc-cf-att-rm:hover{background:var(--qa-color-danger-soft);color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
+.inc-cf-att-rm:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px}
+.inc-cf-att-rm .ico{width:14px;height:14px}
+.inc-cf-rej{display:flex;flex-direction:column;gap:2px;font-size:13px}
+.inc-cf-rej p{margin:0}
+.inc-cf-opts{border:1px solid var(--qa-color-border);border-radius:10px;padding:0 12px;background:var(--qa-color-surface)}
+.inc-cf-opts>summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:40px;cursor:pointer;font-weight:600;font-size:13.5px}
+.inc-cf-opts>summary .ico{width:16px;height:16px;color:var(--qa-color-muted)}
+.inc-cf-opts>summary small{font-weight:400}
+.inc-cf-opts[open]{padding-bottom:12px;display:flex;flex-direction:column;gap:10px}
+.inc-cf-opts>p{margin:0}
+.inc-cf-foot{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;padding-top:4px;border-top:1px solid var(--qa-color-border)}
+.inc-cf-foot>p.err{display:flex;align-items:center;gap:6px;margin:0}
+.inc-cf-foot .ico{width:16px;height:16px}
+.inc-cf-acts{display:flex;gap:8px;margin-left:auto}
+.inc-sc-other{gap:10px}
+.inc-sc-apps-d>summary{cursor:pointer;font-weight:600;font-size:14px;padding:4px 0}
+@media (max-width:760px){
+  .inc-cf-f,.inc-cf-pair>.inc-cf-f+datalist+.inc-cf-f,.inc-cf-pair>.inc-cf-f+.inc-cf-f{grid-template-columns:minmax(0,1fr)}
+  .inc-cf-l{padding-top:0}
+  .inc-cf-pair{grid-template-columns:minmax(0,1fr)}
+  .inc-cf-acts{width:100%;justify-content:flex-end}
+}
+`;
+
 /** Les styles de la structure (s'ajoutent à DASHBOARD_CSS et INCIDENT_PARTS_CSS) : jetons du thème seulement. */
 export const INCIDENT_UX_CSS = `
-.ws-ux-head{display:flex;flex-direction:column;gap:14px;padding:20px;border-radius:var(--qa-radius);background:var(--qa-color-surface);border:1px solid var(--qa-color-border);border-left:4px solid var(--qa-color-primary)}
-.ws-ux-head-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
-.ws-ux-head-t{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 320px}
+.ws-ux-head{display:flex;flex-direction:column;gap:4px;padding:4px 10px;border-radius:12px;background:var(--qa-color-surface);border:1px solid var(--qa-color-border);border-left:4px solid var(--qa-color-primary);min-width:0}
+.ws-ux-head-top{display:flex;align-items:center;gap:4px 10px;flex-wrap:wrap;min-width:0}
+.ws-ux-head-top>.back{flex:none;min-height:32px}
+.ws-ux-head-t{display:flex;align-items:center;gap:6px 8px;min-width:0;flex:1 1 280px;flex-wrap:nowrap}
 .ws-ux-eyebrow{margin:0;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--qa-color-muted);font-weight:600}
-.ws-ux-head h1{margin:0;font-size:24px;line-height:1.25;font-weight:600;overflow-wrap:anywhere}
-.ws-ux-tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.ws-ux-head h1{margin:0;font-size:17px;line-height:1.3;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:8ch;max-width:100%;flex:0 1 auto}
+.ws-ux-tags{display:flex;flex-wrap:nowrap;gap:4px;align-items:center;flex:none}
+.ws-ux-env{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:999px;border:1px solid var(--qa-color-border-strong);font-size:12px}
+.ws-ux-head .acts{gap:6px}
+.ws-ux-head .acts .btn{min-height:32px;padding:0 12px}
+.ws-ux-head .acts .btn.small{min-height:32px}
+.ws-ux-head .acts .btn.icon-only{width:32px;padding:0}
+.ws-ux-head-more{border-top:1px solid var(--qa-color-border);padding-top:8px;max-height:32vh;overflow:auto}
+.ws-ux-demo{display:flex;align-items:center;min-width:0}
+.ws-ux-demo>.ws-demo{flex:1 1 auto;min-width:0;flex-wrap:nowrap;white-space:nowrap;overflow:hidden;padding:2px 10px;gap:8px;font-size:12px;border-radius:8px}
+.ws-ux-demo>.ws-demo>b{flex:none}
+.ws-ux-demo>.ws-demo>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .ws-ux-run{display:inline-flex;align-items:center;gap:6px}
 .ws-ux-meta,.ws-ux-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px 18px;margin:0}
 .ws-ux-meta>div,.ws-ux-dl>div{min-width:0;display:flex;flex-direction:column;gap:2px}
-.ws-ux-dl>div.wide{grid-column:1 / -1}
+.ws-ux-meta>div.wide,.ws-ux-dl>div.wide{grid-column:1 / -1}
 .ws-ux-meta dt,.ws-ux-dl dt{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--qa-color-muted);font-weight:600}
 .ws-ux-meta dd,.ws-ux-dl dd{margin:0;overflow-wrap:anywhere}
 .ws-ux-stepper{display:flex;flex-direction:column;gap:6px;min-width:0;container:ws-ux-steps / inline-size}
-.ws-ux-progress{margin:0;font-size:13px}
-.ws-ux-stepper ol{position:relative;list-style:none;margin:0;padding:0 0 4px;display:flex;gap:4px;overflow-x:auto;background:linear-gradient(to right,var(--qa-color-background) 40%,transparent) left / 28px 100% no-repeat local,linear-gradient(to left,var(--qa-color-background) 40%,transparent) right / 28px 100% no-repeat local,radial-gradient(farthest-side at 0 50%,color-mix(in srgb,var(--qa-color-text) 22%,transparent),transparent) left / 12px 100% no-repeat scroll,radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--qa-color-text) 22%,transparent),transparent) right / 12px 100% no-repeat scroll}
+.ws-ux-step-row{display:flex;align-items:center;gap:4px 12px;flex-wrap:wrap;min-height:30px;font-size:13px;min-width:0}
+.ws-ux-step-toggle{width:30px;height:30px;display:inline-grid;place-items:center;border:1px solid var(--ws-edge,var(--qa-color-border-strong));border-radius:8px;background:var(--qa-color-surface);color:var(--qa-color-muted);cursor:pointer;padding:0;flex:none}
+.ws-ux-step-toggle:hover{border-color:var(--qa-color-primary);color:var(--qa-color-text)}
+.ws-ux-step-toggle .ico{width:15px;height:15px}
+.ws-ux-step-now{display:inline-flex;align-items:center;gap:4px;min-width:0}
+.ws-ux-step-now .ico{width:15px;height:15px;color:var(--qa-color-success)}
+.ws-ux-step-cur{display:inline-flex;align-items:center;gap:4px;min-height:28px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:var(--qa-color-primary);cursor:pointer}
+.ws-ux-step-cur:hover{background:var(--qa-color-surface-2)}
+.ws-ux-step-cur .ico{width:14px;height:14px;color:var(--qa-color-danger)}
+.ws-ux-step-blocked{color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
+.ws-ux-step-n{font-weight:600;font-variant-numeric:tabular-nums}
+.ws-ux-step-bar{display:block;width:120px;height:6px;border-radius:999px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);overflow:hidden;flex:none}
+.ws-ux-step-bar>span{display:block;height:100%;background:var(--qa-color-primary)}
+.ws-ux-step-bar-ko>span{background:var(--qa-color-danger)}
+.ws-ux-progress{margin:0;font-size:12px}
+.ws-ux-stepper-row .ws-ux-step-row{flex-wrap:nowrap;gap:6px}
+.ws-ux-steps-row{list-style:none;margin:0;padding:2px 0;display:flex;align-items:center;gap:0;flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scroll-padding-inline:24px;background:linear-gradient(to right,var(--qa-color-background) 40%,transparent) left / 24px 100% no-repeat local,linear-gradient(to left,var(--qa-color-background) 40%,transparent) right / 24px 100% no-repeat local,radial-gradient(farthest-side at 0 50%,color-mix(in srgb,var(--qa-color-text) 22%,transparent),transparent) left / 10px 100% no-repeat scroll,radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--qa-color-text) 22%,transparent),transparent) right / 10px 100% no-repeat scroll}
+.ws-ux-sr{flex:none;display:flex;align-items:center}
+.ws-ux-sr+.ws-ux-sr::before{content:"";flex:none;width:8px;height:1px;background:var(--qa-color-border-strong)}
+.ws-ux-sr.ws-ux-s-done+.ws-ux-sr::before{background:var(--qa-color-success)}
+.ws-ux-sr button{display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:0 7px 0 3px;border:1px solid transparent;border-radius:999px;background:transparent;color:var(--qa-color-muted);font:inherit;font-size:12.5px;white-space:nowrap;cursor:pointer}
+.ws-ux-sr button:hover{background:var(--qa-color-surface-2);color:var(--qa-color-text)}
+.ws-ux-sn{width:21px;height:21px;border-radius:50%;display:grid;place-items:center;font-size:11.5px;font-weight:700;border:1.5px solid var(--qa-color-border-strong);background:var(--qa-color-surface);color:var(--qa-color-muted);flex:none}
+.ws-ux-sn .ico{width:12px;height:12px;stroke-width:3}
+.ws-ux-sn .spin{width:12px;height:12px}
+.ws-ux-sr.ws-ux-s-todo .ws-ux-sn{border-style:dashed}
+.ws-ux-sr.ws-ux-s-done button{color:var(--qa-color-text)}
+.ws-ux-sr.ws-ux-s-done .ws-ux-sn{border-color:var(--qa-color-success);background:var(--qa-color-success-soft);color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text))}
+.ws-ux-sr button[aria-current="step"]{background:color-mix(in srgb,var(--qa-color-primary) 10%,var(--qa-color-surface));border-color:color-mix(in srgb,var(--qa-color-primary) 40%,transparent);color:var(--qa-color-primary);font-weight:600}
+.ws-ux-sr button[aria-current="step"] .ws-ux-sn{background:var(--qa-color-primary);border-color:var(--qa-color-primary);border-style:solid;color:var(--qa-color-surface)}
+.ws-ux-sr.ws-ux-s-blocked button{color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
+.ws-ux-sr.ws-ux-s-blocked .ws-ux-sn{border-color:var(--qa-color-danger);border-style:dashed;background:var(--qa-color-danger-soft);color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
+.ws-ux-sr.ws-ux-s-running .ws-ux-sn{box-shadow:0 0 0 3px color-mix(in srgb,var(--qa-color-primary) 20%,transparent)}
+.ws-ux-stepper #ws-ux-steps{position:relative;list-style:none;margin:0;padding:0 0 4px;display:flex;gap:4px;overflow-x:auto;background:linear-gradient(to right,var(--qa-color-background) 40%,transparent) left / 28px 100% no-repeat local,linear-gradient(to left,var(--qa-color-background) 40%,transparent) right / 28px 100% no-repeat local,radial-gradient(farthest-side at 0 50%,color-mix(in srgb,var(--qa-color-text) 22%,transparent),transparent) left / 12px 100% no-repeat scroll,radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--qa-color-text) 22%,transparent),transparent) right / 12px 100% no-repeat scroll}
 .ws-ux-stage{flex:0 0 auto;min-width:96px;position:relative}
 .ws-ux-stage+.ws-ux-stage::before{content:"";position:absolute;top:21px;left:-50%;right:50%;border-top:2px solid var(--qa-color-border);z-index:0}
 .ws-ux-stage.ws-ux-s-done+.ws-ux-stage::before{border-top-color:var(--qa-color-success)}
 .ws-ux-stage button{position:relative;z-index:1;width:100%;display:flex;flex-direction:column;align-items:center;gap:6px;padding:4px 2px 6px;min-height:44px;border:0;border-radius:10px;background:transparent;color:var(--qa-color-text);cursor:pointer;text-align:center}
 .ws-ux-stage button:hover{background:var(--qa-color-surface-2)}
-.ws-ux-stage button:focus-visible,.ws-ux-target:focus-visible,.ws-ux-req:focus-visible,.ws-ux-ev:focus-visible{outline:3px solid color-mix(in srgb,var(--qa-color-primary) 60%,transparent);outline-offset:2px}
+.ws-ux-stage button:focus-visible,.ws-ux-target:focus-visible,.ws-ux-req:focus-visible,.ws-ux-ev:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px}
 .ws-ux-dot{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-weight:600;font-size:13px;border:2px solid var(--qa-color-border-strong);background:var(--qa-color-surface);color:var(--qa-color-muted)}
 .ws-ux-dot .ico{width:16px;height:16px}
 .ws-ux-stage-t{display:flex;flex-direction:column;gap:1px;min-width:0}
@@ -1154,11 +1749,16 @@ export const INCIDENT_UX_CSS = `
 .ws-ux-s-blocked .ws-ux-stage-t small{color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text));font-weight:600}
 .ws-ux-s-todo .ws-ux-dot{border-style:dashed}
 .ws-ux-s-running .ws-ux-dot{box-shadow:0 0 0 4px color-mix(in srgb,var(--qa-color-primary) 20%,transparent)}
-.ws-ux-tabs{position:relative;flex-wrap:wrap;row-gap:0}
-.ws-ux-tabs button{position:relative;white-space:nowrap}
+.ws-ux-tabbar{display:flex;align-items:flex-end;justify-content:space-between;gap:4px 12px;min-width:0;border-bottom:1px solid var(--qa-color-border)}
+.ws-ux-tabbar>.ws-ux-tabs{flex:1 1 auto;min-width:0;border-bottom:0}
+.ws-ux-tabtools{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:nowrap;padding:2px 0 4px;min-width:0;flex:none}
+.ws-ux-tabs{position:relative;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;row-gap:0}
+.ws-ux-tabs button{position:relative;white-space:nowrap;min-height:38px;flex:none}
+.ws-ux-subtabs button{min-height:32px;padding:0 12px;font-size:13px}
+.ws-ux-subbar{border-bottom-style:dashed}
 .ws-ux-count{display:inline-flex;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);font-size:12px;align-items:center;justify-content:center;font-weight:600}
 .ws-ux-panel{display:flex;flex-direction:column;gap:16px;min-width:0}
-.ws-ux-panel:focus-visible{outline:3px solid color-mix(in srgb,var(--qa-color-primary) 45%,transparent);outline-offset:4px;border-radius:8px}
+.ws-ux-panel:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:4px;border-radius:8px}
 .ws-ux-overview{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;align-items:start}
 .ws-ux-overview>.ws-demo,.ws-ux-next{grid-column:1 / -1}
 .ws-ux-card p{margin:0}
@@ -1174,15 +1774,50 @@ export const INCIDENT_UX_CSS = `
 .ws-ux-cause-inconclusive{background:var(--qa-color-surface-2);border-style:dotted}
 .ws-ux-counts{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px 16px}
 .ws-ux-counts li{display:flex;align-items:center;gap:6px}
-.ws-ux-targets{display:flex;flex-wrap:wrap;gap:12px}
-.ws-ux-target{flex:1 1 220px;min-width:0;display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:14px;border:1px solid var(--qa-color-border-strong);border-radius:12px;background:var(--qa-color-surface);color:var(--qa-color-text);cursor:pointer;text-align:left}
+.ws-ux-targets{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.ws-ux-target{position:relative;min-width:0;display:flex;flex-direction:column;align-items:stretch;gap:10px;padding:14px 16px;border:1px solid var(--qa-color-border-strong);border-radius:12px;background:var(--qa-color-surface);color:var(--qa-color-text);font:inherit;cursor:pointer;text-align:left}
 .ws-ux-target:hover{border-color:var(--qa-color-primary)}
-.ws-ux-target[aria-checked="true"]{border:2px solid var(--qa-color-primary);padding:13px;background:color-mix(in srgb,var(--qa-color-primary) 6%,var(--qa-color-surface))}
-.ws-ux-target-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.ws-ux-radio{width:20px;height:20px;border-radius:50%;border:2px solid var(--qa-color-border-strong);display:grid;place-items:center;flex:none;color:var(--qa-color-primary)}
-.ws-ux-target[aria-checked="true"] .ws-ux-radio{border-color:var(--qa-color-primary)}
-.ws-ux-radio .ico{width:12px;height:12px;stroke-width:3}
-.ws-ux-cap{display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px;font-size:13px}
+.ws-ux-target[aria-checked="true"]{border:2px solid var(--qa-color-primary);padding:13px 15px;background:color-mix(in srgb,var(--qa-color-primary) 6%,var(--qa-color-surface))}
+.ws-ux-tg-top{display:flex;flex-direction:column;align-items:center;gap:2px;text-align:center}
+.ws-ux-tg-ico{width:30px;height:30px;color:var(--qa-color-primary);stroke-width:1.6;margin-bottom:2px}
+.ws-ux-tg-t{font-size:15px;letter-spacing:.02em}
+.ws-ux-tg-top>small{font-size:12px}
+.ws-ux-target-h{display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap;margin-top:4px}
+.ws-ux-target-h:empty{display:none}
+.ws-ux-radio{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;border:2px solid var(--qa-color-border-strong);display:grid;place-items:center;flex:none;color:var(--qa-color-surface);background:var(--qa-color-surface)}
+.ws-ux-target[aria-checked="true"] .ws-ux-radio{border-color:var(--qa-color-primary);background:var(--qa-color-primary)}
+.ws-ux-radio .ico{width:12px;height:12px;stroke-width:3.5}
+.ws-ux-caps{display:flex;flex-direction:column;gap:5px}
+.ws-ux-cap{display:flex;align-items:flex-start;gap:8px;font-size:13px;min-width:0}
+.ws-ux-cap>span:last-child{min-width:0;overflow-wrap:anywhere}
+.ws-ux-cap-i{flex:none;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;margin-top:2px}
+.ws-ux-cap-ok{background:var(--qa-color-success);color:var(--qa-color-surface)}
+.ws-ux-cap-ko{background:var(--qa-color-danger-soft);color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text));border:1px solid color-mix(in srgb,var(--qa-color-danger) 45%,transparent)}
+.ws-ux-cap-gen{border:1.5px solid var(--qa-color-border-strong);width:12px;height:12px;margin:4px 2px 0}
+.ws-ux-cap-i .ico{width:10px;height:10px;stroke-width:3.5}
+.ws-ux-gen{font-size:12px;font-style:italic}
+.ws-ux-config{border:1px solid color-mix(in srgb,var(--qa-color-success) 35%,var(--qa-color-border));background:color-mix(in srgb,var(--qa-color-success) 7%,var(--qa-color-surface));border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.ws-ux-config-dirty{border-color:color-mix(in srgb,var(--qa-color-warning) 45%,var(--qa-color-border));background:color-mix(in srgb,var(--qa-color-warning) 6%,var(--qa-color-surface))}
+.ws-ux-config-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ws-ux-config-h h3{margin:0;font-size:14px}
+.ws-ux-config-i{width:22px;height:22px;border-radius:50%;background:var(--qa-color-success);color:var(--qa-color-surface);display:grid;place-items:center;flex:none}
+.ws-ux-config-i .ico{width:13px;height:13px;stroke-width:3}
+.ws-ux-config-b{display:flex;gap:12px 20px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;min-width:0}
+.ws-ux-config-dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;margin:0;font-size:13px;flex:1 1 360px;min-width:0}
+.ws-ux-config-dl>div{display:contents}
+.ws-ux-config-dl dt{color:var(--qa-color-muted);font-weight:600}
+.ws-ux-config-dl dd{margin:0;min-width:0}
+.ws-ux-urls{display:flex;flex-direction:column;gap:2px;margin:0}
+.ws-ux-urls li{display:flex;align-items:center;gap:4px 8px;flex-wrap:wrap;min-width:0}
+.ws-ux-urls code{overflow-wrap:anywhere}
+.ws-ux-urls .pill{display:inline-flex;align-items:center;gap:4px;white-space:normal}
+.ws-ux-urls .pill .ico{width:12px;height:12px;stroke-width:3}
+.ws-ux-config-acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}
+.ws-ux-config-acts .btn .ico{width:16px;height:16px}
+.ws-ux-config-acts small.mu{flex-basis:100%;text-align:right;font-size:12px}
+.ws-ux-limits-d>summary{cursor:pointer;color:var(--qa-color-primary);font-size:13px;padding:2px 0}
+.ws-ux-limits-d[open]>summary{margin-bottom:6px}
+.ws-ux-target:focus-visible,.ws-ux-sr button:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px}
 .ws-ux-fields{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;min-width:0}
 .ws-ux-fields legend{font-weight:600;padding:0;margin-bottom:8px}
 .ws-ux-limits{display:flex;flex-direction:column;gap:6px}
@@ -1192,32 +1827,30 @@ export const INCIDENT_UX_CSS = `
 .ws-ux-field-err{display:inline-flex;align-items:center;gap:4px;font-size:13px;font-weight:500}
 .ws-ux-field-err .ico{width:14px;height:14px;flex:none}
 @container ws-ux-steps (min-width:600px){
-  .ws-ux-stepper ol{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));row-gap:10px;overflow:visible;background:none}
+  .ws-ux-stepper #ws-ux-steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));row-gap:10px;overflow:visible;background:none}
   .ws-ux-stage{min-width:0}
   .ws-ux-stage:nth-child(5n+1)::before{display:none}
 }
 @container ws-ux-steps (min-width:1040px){
-  .ws-ux-stepper ol{grid-template-columns:repeat(10,minmax(0,1fr))}
+  .ws-ux-stepper #ws-ux-steps{grid-template-columns:repeat(10,minmax(0,1fr))}
   .ws-ux-stage:nth-child(5n+1)::before{display:block}
 }
-.ws-ux-shell{display:grid;gap:16px;grid-template-columns:minmax(0,1fr);grid-template-areas:"main" "graph" "aside"}
-.ws-ux-main{grid-area:main;min-width:0}
-.ws-ux-graph{grid-area:graph;min-width:0;overflow:auto}
-.ws-ux-graph .ws-graph-canvas{max-height:clamp(320px,50vh,420px)}
-.ws-ux-aside{grid-area:aside;min-width:0}
-@container (min-width:960px){
-  .ws-ux-shell{grid-template-areas:"graph" "main" "aside"}
-}
-@container (min-width:1280px){
-  .ws-ux-shell{grid-template-columns:minmax(0,1fr) 340px;grid-template-areas:"graph graph" "main aside"}
-  .ws-ux-aside{position:sticky;top:16px;align-self:start;max-height:calc(100vh - 32px);overflow:auto}
+@container ws-root (max-width:1100px){
+  .ws-ux-head-top>.back>span:not(.ico),.ws-ux-more>span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .ws-ux-head-top>.back{min-width:32px;justify-content:center}
+  .ws-ux-more{padding:0 8px}
 }
 @container (max-width:600px){
-  .ws-ux-head{padding:14px}
-  .ws-ux-head h1{font-size:20px}
+  .ws-ux-head{padding:6px 8px}
+  .ws-ux-head-t{flex-wrap:wrap}
+  .ws-ux-tags{flex-wrap:wrap;flex:1 1 auto;min-width:0}
+  .ws-ux-head h1{font-size:16px;white-space:normal;overflow-wrap:anywhere}
   .ws-ux-tabs button{padding:0 10px}
-  .ws-ux-cap{grid-template-columns:minmax(0,1fr);gap:0}
+  .ws-ux-step-bar,.ws-ux-progress{display:none}
+  .ws-ux-config-dl{grid-template-columns:minmax(0,1fr);gap:0}
+  .ws-ux-config-dl dd{margin-bottom:6px}
   .ws-ux-overview{grid-template-columns:minmax(0,1fr)}
 }
-@media (prefers-reduced-motion:reduce){.ws-ux-s-running .ws-ux-dot{box-shadow:none}}
-`;
+@media (prefers-reduced-motion:reduce){.ws-ux-s-running .ws-ux-dot,.ws-ux-s-running .ws-ux-sn{box-shadow:none}}
+${INCIDENT_SCOPE_CSS}
+${INCIDENT_FLOW_CSS}`;

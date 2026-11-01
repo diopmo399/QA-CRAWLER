@@ -179,6 +179,8 @@ const TEXT = {
     to: 'À (secondes depuis le début)',
     onlyRelated: 'Seulement ce qui est relié à la sélection',
     reset: 'Tout afficher',
+    criteria: 'Critères d’affichage',
+    criteriaHint: 'couches, étapes, statuts, reproduction, période',
     count: (shown: number, total: number) => `${String(shown)} événement(s) sur ${String(total)}`,
     noTimeline:
       'La chronologie n’est pas encore calculée : elle apparaît après une reproduction de l’incident.',
@@ -270,6 +272,8 @@ const TEXT = {
       'Aucun en-tête gardé : seuls ceux de la liste blanche (type, longueur, cache, redirection, identifiants de corrélation) le sont, avec network.captureBodies.',
     headerName: 'Nom',
     headerValue: 'Valeur (masquée)',
+    headerCount: (count: number) => `${String(count)} gardé(s)`,
+    notCaptured: 'non capturé',
     graphNodes: 'Nœuds du graphe reliés',
     noGraphNodes: 'Aucun nœud du graphe ne cite cette requête.',
     // Journaux
@@ -321,6 +325,8 @@ const TEXT = {
     to: 'To (seconds since start)',
     onlyRelated: 'Only what is related to the selection',
     reset: 'Show everything',
+    criteria: 'Display criteria',
+    criteriaHint: 'layers, steps, statuses, reproduction, period',
     count: (shown: number, total: number) => `${String(shown)} of ${String(total)} event(s)`,
     noTimeline: 'The timeline is not computed yet: it appears after a reproduction of the incident.',
     noVisible: 'No event matches these display criteria.',
@@ -409,6 +415,8 @@ const TEXT = {
       'No header kept: only allowlisted ones (type, length, cache, redirect, correlation identifiers) are, with network.captureBodies.',
     headerName: 'Name',
     headerValue: 'Value (masked)',
+    headerCount: (count: number) => `${String(count)} kept`,
+    notCaptured: 'not captured',
     graphNodes: 'Related graph nodes',
     noGraphNodes: 'No graph node cites this request.',
     logsTitle: 'Logs',
@@ -556,7 +564,8 @@ export function visibleEvents(ctx: WorkspaceContext, ui: TimelineUi): TimelineEv
 
 // ── Mise en forme ────────────────────────────────────────────────────────────────────────────
 
-function clock(lang: Lang, at: string): string {
+/** L'heure d'un instant (hh:mm:ss.mmm), dans la langue de l'interface. */
+export function clock(lang: Lang, at: string): string {
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return at;
   return date.toLocaleTimeString(textOf(lang).locale, {
@@ -571,7 +580,8 @@ function formatSeconds(lang: Lang, ms: number): string {
   return `+${(ms / 1000).toLocaleString(textOf(lang).locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} s`;
 }
 
-function formatDuration(lang: Lang, ms: number): string {
+/** Une durée mesurée : « 85 ms », « 1,2 s ». */
+export function formatDuration(lang: Lang, ms: number): string {
   return ms < 1000
     ? `${String(Math.round(ms))} ms`
     : `${(ms / 1000).toLocaleString(textOf(lang).locale, { maximumFractionDigits: 2 })} s`;
@@ -586,6 +596,11 @@ function httpPill(request: Pick<HttpExchange, 'status' | 'failure'>, t: Text): s
   return `<span class="pill ${tone}">${String(request.status)}</span>`;
 }
 
+/** La pastille du statut HTTP d'un échange (5xx, 4xx, 2xx-3xx, sans réponse, échec réseau). */
+export function statusPill(lang: Lang, request: Pick<HttpExchange, 'status' | 'failure'>): string {
+  return httpPill(request, textOf(lang));
+}
+
 function timeCell(lang: Lang, event: TimelineEvent, origin: number | undefined): string {
   const t = textOf(lang);
   if (!event.at) return `<span class="ws-timeline-time mu">${esc(t.noTime)}</span>`;
@@ -594,7 +609,8 @@ function timeCell(lang: Lang, event: TimelineEvent, origin: number | undefined):
   return `<span class="ws-timeline-time"><time datetime="${esc(event.at)}">${event.estimated ? `<span class="ws-timeline-est" title="${esc(t.estimated)}" aria-label="${esc(t.estimated)}">≈</span>` : ''}${esc(clock(lang, event.at))}</time>${offset ? `<small class="mu">${esc(offset)}</small>` : ''}</span>`;
 }
 
-function findRequest(
+/** Un échange des reproductions de l'incident, et sa reproduction. */
+export function findRequest(
   ctx: WorkspaceContext,
   requestId: string,
 ): { request: HttpExchange; run: ReproductionRun } | undefined {
@@ -619,7 +635,12 @@ function controlGroup(legend: string, body: string): string {
 
 // ── « Chronologie » ──────────────────────────────────────────────────────────────────────────
 
-function renderControls(ctx: WorkspaceContext, ui: TimelineUi, events: readonly TimelineEvent[]): string {
+function renderControls(
+  ctx: WorkspaceContext,
+  ui: TimelineUi,
+  events: readonly TimelineEvent[],
+  count: string,
+): string {
   const t = textOf(ctx.lang);
   const parts = partsText(ctx.lang);
   const layers = LAYERS.filter((layer) => events.some((event) => event.layer === layer));
@@ -696,7 +717,14 @@ function renderControls(ctx: WorkspaceContext, ui: TimelineUi, events: readonly 
   const related = ctx.selection
     ? `<label class="ws-timeline-rel"><input type="checkbox" data-action="ws-timeline-related"${ui.onlyRelated ? ' checked' : ''}> ${esc(t.onlyRelated)}</label>`
     : '';
-  return `<div class="ws-timeline-ctl"><p class="ws-timeline-show">${esc(t.show)}</p>${groups.join('')}<div class="ws-timeline-row">${related}<button type="button" class="btn small ghost" data-action="ws-timeline-reset">${esc(t.reset)}</button></div></div>`;
+  // Replié par défaut pour laisser la place à la liste ; ouvert dès qu'un critère restreint l'affichage.
+  const active =
+    ui.layers.length > 0 ||
+    ui.steps.length > 0 ||
+    ui.statuses.length > 0 ||
+    ui.origin !== 'ALL' ||
+    ui.period !== 'ALL';
+  return `<div class="ws-timeline-row ws-timeline-bar">${count}${related}<button type="button" class="btn small ghost" data-action="ws-timeline-reset">${esc(t.reset)}</button></div><details class="ws-timeline-ctl" data-ws-details="timeline-criteria"${active ? ' open' : ''}><summary><span class="ws-timeline-show">${esc(t.show)}</span> ${esc(t.criteria)} <small class="mu">${esc(t.criteriaHint)}</small></summary><div class="ws-timeline-ctl-b">${groups.join('')}</div></details>`;
 }
 
 function groupHeader(ctx: WorkspaceContext, event: TimelineEvent, reference: string | undefined): string {
@@ -765,12 +793,13 @@ export function renderTimeline(ctx: WorkspaceContext, ui: TimelineUi): string {
     flush(header);
     body = `<ol class="ws-timeline-groups">${groups.join('')}</ol>`;
   }
-  return `<section class="ws-timeline">${demoBanner(ctx)}${head}${renderControls(ctx, ui, events)}<p class="ws-timeline-count mu">${esc(t.count(visible.length, events.length))}</p>${notes.map((note) => `<p class="ws-timeline-note" role="note">${esc(note)}</p>`).join('')}${body}</section>`;
+  return `<section class="ws-timeline ws-timeline-pane">${demoBanner(ctx)}${head}<div class="ws-timeline-top">${renderControls(ctx, ui, events, `<p class="ws-timeline-count mu">${esc(t.count(visible.length, events.length))}</p>`)}${notes.map((note) => `<p class="ws-timeline-note" role="note">${esc(note)}</p>`).join('')}</div><div class="ws-timeline-scroll">${body}</div></section>`;
 }
 
 // ── « Requêtes HTTP » ────────────────────────────────────────────────────────────────────────
 
-const isFailing = (request: HttpExchange): boolean =>
+/** Un échange en erreur : réponse ≥ 400 ou échec réseau. */
+export const isFailing = (request: Pick<HttpExchange, 'status' | 'failure'>): boolean =>
   request.failure !== undefined || (request.status ?? 0) >= 400;
 
 /** L'onglet « Requêtes HTTP » : les échanges de la reproduction de référence, sélectionnables. */
@@ -779,7 +808,7 @@ export function renderRequests(ctx: WorkspaceContext, ui: TimelineUi): string {
   const head = `<header class="ws-timeline-head"><h2>${esc(t.requestsTitle)}</h2><p class="mu">${esc(t.requestsSub)}</p></header>`;
   const reference = incidentReproduction(ctx.incident);
   if (!reference)
-    return `<section class="ws-timeline">${demoBanner(ctx)}${head}${panelState(ctx.lang, 'empty', t.noReproduction)}</section>`;
+    return `<section class="ws-timeline ws-timeline-pane">${demoBanner(ctx)}${head}${panelState(ctx.lang, 'empty', t.noReproduction)}</section>`;
   const requests = [...reference.requests].sort(
     (left, right) =>
       (left.step ?? Number.MAX_SAFE_INTEGER) - (right.step ?? Number.MAX_SAFE_INTEGER) ||
@@ -789,7 +818,7 @@ export function renderRequests(ctx: WorkspaceContext, ui: TimelineUi): string {
   const toggleErrors = `<label class="ws-timeline-rel"><input type="checkbox" data-action="ws-timeline-req-errors"${ui.requestErrorsOnly ? ' checked' : ''}> ${esc(t.requestErrorsOnly)}</label>`;
   const note = `<p class="ws-timeline-note" role="note">${esc(t.hostNote)}</p>`;
   if (requests.length === 0)
-    return `<section class="ws-timeline">${demoBanner(ctx)}${head}${panelState(ctx.lang, 'empty', t.noRequests)}${note}</section>`;
+    return `<section class="ws-timeline ws-timeline-pane">${demoBanner(ctx)}${head}${panelState(ctx.lang, 'empty', t.noRequests)}${note}</section>`;
   const c = t.columns;
   const rows = shown
     .map((request) => {
@@ -802,9 +831,9 @@ export function renderRequests(ctx: WorkspaceContext, ui: TimelineUi): string {
     .join('');
   const table =
     shown.length === 0
-      ? panelState(ctx.lang, 'empty', t.noErrorRequests)
-      : `<div class="tw"><table class="tbl ws-timeline-tbl"><caption class="ws-timeline-sr">${esc(t.requestsCaption)}</caption><thead><tr><th scope="col">${esc(c.method)}</th><th scope="col">${esc(c.path)}</th><th scope="col">${esc(c.status)}</th><th scope="col" class="ws-timeline-dur">${esc(c.duration)}</th><th scope="col" class="ws-timeline-dur">${esc(c.step)}</th><th scope="col">${esc(c.correlation)}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-  return `<section class="ws-timeline">${demoBanner(ctx)}${head}<div class="ws-timeline-row">${toggleErrors}<span class="mu">${esc(t.requestCount(shown.length, requests.length))}</span></div>${table}${note}</section>`;
+      ? `<div class="ws-timeline-scroll">${panelState(ctx.lang, 'empty', t.noErrorRequests)}</div>`
+      : `<div class="tw ws-timeline-scroll"><table class="tbl ws-timeline-tbl ws-timeline-dense"><caption class="ws-timeline-sr">${esc(t.requestsCaption)}</caption><thead><tr><th scope="col">${esc(c.method)}</th><th scope="col">${esc(c.path)}</th><th scope="col">${esc(c.status)}</th><th scope="col" class="ws-timeline-dur">${esc(c.duration)}</th><th scope="col" class="ws-timeline-dur">${esc(c.step)}</th><th scope="col">${esc(c.correlation)}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<section class="ws-timeline ws-timeline-pane">${demoBanner(ctx)}${head}<div class="ws-timeline-row ws-timeline-bar">${toggleErrors}<span class="mu">${esc(t.requestCount(shown.length, requests.length))}</span></div>${table}${note}</section>`;
 }
 
 // ── Détail d'une requête ─────────────────────────────────────────────────────────────────────
@@ -815,9 +844,13 @@ const SENSITIVE_KEY =
 const SENSITIVE_HEADER =
   /authorization|cookie|^proxy-|api[-_]?key|secret|token|session|credential|passw|auth/i;
 const MASK = '[REDACTED]';
+
+/** Un en-tête jamais affiché (authentification, cookie, jeton), même si le moteur l'avait gardé. */
+export const isSensitiveHeader = (name: string): boolean => SENSITIVE_HEADER.test(name);
 const TRUNCATED = '…[truncated]';
 
-function maskJson(value: unknown): unknown {
+/** Masque les valeurs des clés JSON sensibles (défense en profondeur, en plus du serveur). */
+export function maskJson(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(maskJson);
   if (value !== null && typeof value === 'object')
     return Object.fromEntries(
@@ -829,7 +862,8 @@ function maskJson(value: unknown): unknown {
   return value;
 }
 
-function maskText(text: string): string {
+/** Masque les jetons et mots de passe reconnaissables d'un texte (défense en profondeur). */
+export function maskText(text: string): string {
   return text
     .replace(/\b(bearer|basic)\s+[a-z0-9._~+/=-]{6,}/gi, `$1 ${MASK}`)
     .replace(
@@ -854,7 +888,7 @@ export function prettyBody(text: string): { text: string; json: boolean; truncat
 function payload(ctx: WorkspaceContext, title: string, body: string | undefined, open: boolean): string {
   const t = textOf(ctx.lang);
   if (body === undefined)
-    return `<div class="ws-timeline-pl"><h4>${esc(title)}</h4><p class="mu">${esc(t.noPayload)}</p></div>`;
+    return `<div class="ws-timeline-pl ws-timeline-pl-none"><h4>${esc(title)} <small class="mu">${esc(t.notCaptured)}</small></h4><p class="mu">${esc(t.noPayload)}</p></div>`;
   const pretty = prettyBody(body);
   return `<details class="ws-timeline-pl"${open ? ' open' : ''}><summary>${esc(title)}${pretty.json ? ` <small class="mu">${esc(t.prettyJson)}</small>` : ''}</summary><pre class="ws-timeline-pre">${esc(pretty.text)}</pre>${pretty.truncated ? `<p class="mu">${esc(t.truncated)}</p>` : ''}</details>`;
 }
@@ -868,17 +902,20 @@ function headersBlock(
   const entries = Object.entries(headers ?? {})
     .filter(([name]) => !SENSITIVE_HEADER.test(name))
     .sort(([left], [right]) => left.localeCompare(right));
+  // Toujours repliés : leur nombre est dans le titre ; le détail (ou la raison de leur absence) au clic.
+  const summary = `<summary>${esc(title)} <small class="mu">${esc(t.headerCount(entries.length))}</small></summary>`;
   if (entries.length === 0)
-    return `<div class="ws-timeline-hd"><h4>${esc(title)}</h4><p class="mu">${esc(t.noHeaders)}</p></div>`;
-  return `<div class="ws-timeline-hd"><h4>${esc(title)}</h4><dl class="ws-timeline-dl">${entries
+    return `<details class="ws-timeline-hd">${summary}<p class="mu">${esc(t.noHeaders)}</p></details>`;
+  return `<details class="ws-timeline-hd">${summary}<dl class="ws-timeline-dl ws-timeline-hdl">${entries
     .map(
       ([name, value]) =>
         `<div><dt><code>${esc(name)}</code></dt><dd><code>${esc(maskText(value))}</code></dd></div>`,
     )
-    .join('')}</dl></div>`;
+    .join('')}</dl></details>`;
 }
 
-function linkedNodes(ctx: WorkspaceContext, requestId: string): GraphNode[] {
+/** Les nœuds du graphe qui citent une requête (ou lui sont reliés). */
+export function linkedNodes(ctx: WorkspaceContext, requestId: string): GraphNode[] {
   const key = `request:${requestId}`;
   const keys = new Set<string>(ctx.links.neighbors.get(key) ?? []);
   const selected = ctx.selection ? `${ctx.selection.kind}:${ctx.selection.id}` : undefined;
@@ -899,7 +936,7 @@ export function renderRequestDetail(ctx: WorkspaceContext, requestId: string): s
   const start = timeOf(request.startedAt);
   const end =
     Number.isFinite(start) && request.durationMs !== undefined ? start + request.durationMs : Number.NaN;
-  const timing = `<dl class="ws-timeline-dl">${
+  const timing = `<dl class="ws-timeline-dl ws-timeline-facts">${
     request.startedAt
       ? `<div><dt>${esc(t.startedAt)}</dt><dd><time datetime="${esc(request.startedAt)}">${esc(clock(ctx.lang, request.startedAt))}</time></dd></div>`
       : ''
@@ -1004,7 +1041,7 @@ export function renderLogs(ctx: WorkspaceContext): string {
     const denied = !ctx.incident.scope.permissions.readLogs
       ? `<p class="ws-timeline-note" role="note">${esc(t.logsDenied)}</p>`
       : '';
-    return `<section class="ws-timeline">${demoBanner(ctx)}${head}${experimentsList}${panelState(ctx.lang, 'empty', t.noLogs)}${denied}</section>`;
+    return `<section class="ws-timeline ws-timeline-pane">${demoBanner(ctx)}${head}${experimentsList}${panelState(ctx.lang, 'empty', t.noLogs)}${denied}</section>`;
   }
   const c = t.logColumns;
   const body = rows
@@ -1014,10 +1051,14 @@ export function renderLogs(ctx: WorkspaceContext): string {
       return `<tr class="${selectionClass(ctx, 'evidence', evidence.id)}"><td>${at ? `<time datetime="${esc(at)}">${esc(clock(ctx.lang, at))}</time>` : `<span class="mu">${esc(t.noTime)}</span>`}</td><td>${logSource(ctx.lang, evidence)}</td><td><code>${esc(pattern)}</code></td><td><button type="button" class="ws-timeline-logline" ${selectable(ctx, 'evidence', evidence.id)}><code>${esc(evidence.summary)}</code></button></td><td>${experiment ? `<button type="button" class="lnk ${selectionClass(ctx, 'experiment', experiment.id)}" ${selectable(ctx, 'experiment', experiment.id)}>${esc(experiment.id)}</button>` : '—'}</td></tr>`;
     })
     .join('');
-  return `<section class="ws-timeline">${demoBanner(ctx)}${head}${experimentsList}<div class="tw"><table class="tbl ws-timeline-tbl"><caption class="ws-timeline-sr">${esc(t.logsCaption)}</caption><thead><tr><th scope="col">${esc(c.at)}</th><th scope="col">${esc(c.source)}</th><th scope="col">${esc(c.pattern)}</th><th scope="col">${esc(c.line)}</th><th scope="col">${esc(c.experiment)}</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
+  return `<section class="ws-timeline ws-timeline-pane">${demoBanner(ctx)}${head}${experimentsList}<div class="tw ws-timeline-scroll"><table class="tbl ws-timeline-tbl ws-timeline-dense"><caption class="ws-timeline-sr">${esc(t.logsCaption)}</caption><thead><tr><th scope="col">${esc(c.at)}</th><th scope="col">${esc(c.source)}</th><th scope="col">${esc(c.pattern)}</th><th scope="col">${esc(c.line)}</th><th scope="col">${esc(c.experiment)}</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
 }
 
 // ── Capture d'écran ──────────────────────────────────────────────────────────────────────────
+
+/** Une image `data:` affichable (la CSP du Dashboard n'autorise que celles-là). */
+export const isDataImage = (url: string): boolean =>
+  /^data:image\/(png|jpe?g|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(url);
 
 /**
  * Une capture d'écran (preuve SCREENSHOT) : l'image quand le contrôleur a obtenu son URL data:, un état
@@ -1026,8 +1067,7 @@ export function renderLogs(ctx: WorkspaceContext): string {
 export function renderScreenshot(ctx: WorkspaceContext, dataUrl: string | undefined, label: string): string {
   const t = textOf(ctx.lang);
   if (dataUrl === undefined) return panelState(ctx.lang, 'loading', t.screenshotLoading(label));
-  if (!/^data:image\/(png|jpe?g|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(dataUrl))
-    return panelState(ctx.lang, 'error', t.screenshotInvalid);
+  if (!isDataImage(dataUrl)) return panelState(ctx.lang, 'error', t.screenshotInvalid);
   return `<figure class="ws-timeline-shot"><img src="${esc(dataUrl)}" alt="${esc(label)}" loading="lazy" decoding="async"><figcaption class="mu">${esc(label)}</figcaption></figure>`;
 }
 
@@ -1035,10 +1075,13 @@ export function renderScreenshot(ctx: WorkspaceContext, dataUrl: string | undefi
 
 export const INCIDENT_TIMELINE_CSS = `
 .ws-timeline{display:flex;flex-direction:column;gap:12px;min-width:0}
-.ws-timeline-head h2{margin:0;font-size:18px}
-.ws-timeline-head p{margin:4px 0 0}
+.ws-timeline-head h2{margin:0;font-size:16px}
+.ws-timeline-head p{margin:2px 0 0;font-size:13px}
 .ws-timeline-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-.ws-timeline-ctl{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface)}
+.ws-timeline-ctl{padding:4px 10px;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface)}
+.ws-timeline-ctl summary{cursor:pointer;min-height:32px;display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px;font-size:13px}
+.ws-timeline-ctl summary small{font-size:12px}
+.ws-timeline-ctl-b{display:flex;flex-direction:column;gap:8px;padding:4px 0 8px}
 .ws-timeline-show{margin:0;font-weight:600}
 .ws-timeline-grp{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
 .ws-timeline-lbl{font-size:12px;color:var(--qa-color-muted);font-weight:600;min-width:90px}
@@ -1046,7 +1089,7 @@ export const INCIDENT_TIMELINE_CSS = `
 .ws-timeline-tog{min-height:32px;padding:2px 10px;border-radius:999px;border:1px solid var(--qa-color-border-strong);background:var(--qa-color-surface);color:var(--qa-color-text);font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
 .ws-timeline-tog:hover{border-color:var(--qa-color-primary)}
 .ws-timeline-tog[aria-pressed="true"]{border-color:var(--qa-color-primary);background:color-mix(in srgb,var(--qa-color-primary) 14%,var(--qa-color-surface));font-weight:600}
-.ws-timeline-tog:focus-visible,.ws-timeline-main:focus-visible,.ws-timeline-logline:focus-visible,.ws-timeline .lnk:focus-visible,.ws-timeline-detail .lnk:focus-visible,.ws-timeline-pl summary:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px}
+.ws-timeline-tog:focus-visible,.ws-timeline-main:focus-visible,.ws-timeline-logline:focus-visible,.ws-timeline .lnk:focus-visible,.ws-timeline-detail .lnk:focus-visible,.ws-timeline-pl summary:focus-visible,.ws-timeline-hd summary:focus-visible,.ws-timeline-ctl summary:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px}
 .ws-timeline-num{display:inline-flex;flex-direction:column;gap:2px;font-size:12px;color:var(--qa-color-muted)}
 .ws-timeline-num input{width:110px;min-height:32px;border:1px solid var(--qa-color-border-strong);border-radius:8px;background:var(--qa-color-surface);color:var(--qa-color-text);padding:0 8px}
 .ws-timeline-num input:focus-visible,.ws-timeline-rel input:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px}
@@ -1086,7 +1129,7 @@ export const INCIDENT_TIMELINE_CSS = `
 .ws-timeline-tr-ko td:first-child{box-shadow:inset 3px 0 0 var(--qa-color-danger)}
 .ws-timeline-path{min-height:32px;overflow-wrap:anywhere}
 .ws-timeline-logline{border:0;background:none;color:var(--qa-color-text);text-align:left;cursor:pointer;padding:4px 0;min-height:32px;overflow-wrap:anywhere;font:inherit}
-.ws-timeline-detail{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ws-timeline-detail{display:flex;flex-direction:column;gap:8px;min-width:0}
 .ws-timeline-detail h3{margin:0;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:15px;overflow-wrap:anywhere}
 .ws-timeline-detail h4{margin:0 0 4px;font-size:13px;color:var(--qa-color-muted)}
 .ws-timeline-detail section p,.ws-timeline-detail header p{margin:0}
@@ -1094,13 +1137,36 @@ export const INCIDENT_TIMELINE_CSS = `
 .ws-timeline-dl div{min-width:0}
 .ws-timeline-dl dt{font-size:12px;color:var(--qa-color-muted)}
 .ws-timeline-dl dd{margin:0;overflow-wrap:anywhere}
-.ws-timeline-pl summary{cursor:pointer;font-weight:600;min-height:32px;display:flex;align-items:center;gap:6px}
+.ws-timeline-pl summary,.ws-timeline-hd summary{cursor:pointer;font-weight:600;font-size:13px;min-height:32px;display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px}
 .ws-timeline-pl h4{margin:0 0 4px}
+.ws-timeline-pl,.ws-timeline-hd{border-top:1px solid var(--qa-color-border);padding-top:2px}
+.ws-timeline-pl-none p{margin:0;font-size:12px}
+.ws-timeline-hd .ws-timeline-hdl,.ws-timeline-hd>p{margin:4px 0 6px}
+.ws-timeline-facts{grid-template-columns:repeat(auto-fill,minmax(96px,1fr))}
+.ws-timeline-hdl{grid-template-columns:minmax(0,1fr)}
+.ws-timeline-hdl div{display:flex;flex-wrap:wrap;gap:0 8px;align-items:baseline}
+.ws-timeline-pl summary,.ws-timeline-hd summary,.ws-timeline-ctl summary{list-style:none}
+.ws-timeline-pl summary::-webkit-details-marker,.ws-timeline-hd summary::-webkit-details-marker,.ws-timeline-ctl summary::-webkit-details-marker{display:none}
+.ws-timeline-pl summary::before,.ws-timeline-hd summary::before,.ws-timeline-ctl summary::before{content:"";flex:none;width:0;height:0;border-left:6px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+.ws-timeline-pl[open]>summary::before,.ws-timeline-hd[open]>summary::before,.ws-timeline-ctl[open]>summary::before{transform:rotate(90deg)}
 .ws-timeline-pre{margin:4px 0 0;padding:10px;max-height:320px;overflow:auto;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface-2);color:var(--qa-color-text);font:12px/1.5 var(--qa-font-family-mono);white-space:pre-wrap;overflow-wrap:anywhere}
 .ws-timeline-nodes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
 .ws-timeline-exps h3{margin:0 0 4px;font-size:14px}
 .ws-timeline-exps ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
 .ws-timeline-shot{margin:0;display:flex;flex-direction:column;gap:6px}
 .ws-timeline-shot img{max-width:100%;height:auto;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface-2)}
+.ws-timeline-pane{height:100%;min-height:0;gap:8px}
+.ws-timeline-pane>*{flex:none}
+.ws-timeline-top{display:flex;flex-direction:column;gap:6px;position:sticky;top:0;z-index:2;background:var(--qa-color-surface);padding-bottom:2px}
+.ws-timeline-pane>.ws-timeline-top{max-height:55%;overflow:auto}
+.ws-timeline-pane>.ws-timeline-scroll{flex:1 1 auto;min-height:0;overflow:auto}
+.ws-timeline-pane>.ws-timeline-exps{max-height:30%;overflow:auto}
+.ws-timeline-bar{gap:6px 12px;font-size:13px}
+.ws-timeline-top .ws-timeline-note{padding:4px 10px;font-size:12px}
+.ws-timeline-dense{font-size:13px}
+.ws-timeline-dense td{padding:3px 8px}
+.ws-timeline-dense thead th{position:sticky;top:0;z-index:1;padding:6px 8px;background:var(--qa-color-surface);box-shadow:inset 0 -1px 0 var(--qa-color-border)}
+.ws-timeline-dense .ws-timeline-path,.ws-timeline-dense .ws-timeline-logline{min-height:28px;padding:2px 0}
+@media (prefers-reduced-motion:reduce){.ws-timeline-pl summary::before,.ws-timeline-hd summary::before,.ws-timeline-ctl summary::before{transition:none}}
 @media (max-width:640px){.ws-timeline-lbl{min-width:0;width:100%}.ws-timeline-time,.ws-timeline-kind{min-width:0}}
 `;

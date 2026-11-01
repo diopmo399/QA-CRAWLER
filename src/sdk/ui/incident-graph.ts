@@ -150,6 +150,31 @@ export function displayStatus(edge: GraphEdge, nodes: ReadonlyMap<string, GraphN
   return edge.status;
 }
 
+/** Les vues restreintes à une couche (sous-onglets Frontend, BFF, Backend de la Traçabilité). */
+export const GRAPH_FOCUSES = ['FRONTEND', 'BFF', 'BACKEND'] as const;
+export type GraphFocus = (typeof GRAPH_FOCUSES)[number];
+
+/** Les couches dessinées par une vue restreinte (en plus des requêtes HTTP et du contexte). */
+const FOCUS_GROUPS: Record<GraphFocus, readonly GraphGroup[]> = {
+  FRONTEND: ['FRONTEND'],
+  BFF: ['BFF'],
+  BACKEND: ['BACKEND', 'DATA'],
+};
+
+const isFocus = (value: string | undefined): value is GraphFocus =>
+  (GRAPH_FOCUSES as readonly string[]).includes(value ?? '');
+
+/**
+ * Les couches masquées pour le dessin : celles de « Afficher : » (`hidden`), plus, dans une vue restreinte
+ * (`focus`), toutes celles qui n'en font pas partie. Le réseau (requêtes HTTP) et le contexte restent
+ * dessinés. `hidden` n'est pas modifié : revenir à la vue Full Stack retrouve les couches choisies. Une
+ * valeur de `focus` inconnue (par exemple lue sur `data-focus`) est ignorée.
+ */
+export function graphHidden(hidden: readonly GraphGroup[], focus?: string): GraphGroup[] {
+  const kept = isFocus(focus) ? FOCUS_GROUPS[focus] : GRAPH_GROUPS;
+  return GRAPH_GROUPS.filter((group) => hidden.includes(group) || !kept.includes(group));
+}
+
 /** Le graphe sans les couches masquées : leurs nœuds et toutes les relations qui les touchent. */
 export function visibleGraph(graph: InvestigationGraph, hidden: readonly GraphGroup[]): InvestigationGraph {
   if (hidden.length === 0) return graph;
@@ -162,6 +187,27 @@ export function visibleGraph(graph: InvestigationGraph, hidden: readonly GraphGr
 }
 
 // ── Disposition ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Les deux dispositions du graphe (« Disposition ») : `columns`, une colonne par genre de nœud (la vue
+ * historique) ; `lanes`, un couloir horizontal par couche (Frontend, BFF, Backend, Données), le flux allant
+ * de gauche à droite et le titre du couloir à gauche. Mêmes nœuds, mêmes relations, mêmes statuts.
+ */
+export const GRAPH_LAYOUTS = ['columns', 'lanes'] as const;
+export type GraphLayoutMode = (typeof GRAPH_LAYOUTS)[number];
+
+/** Une valeur de disposition valable (lue sur un `<select>` ou dans les préférences). */
+export const isGraphLayout = (value: unknown): value is GraphLayoutMode =>
+  typeof value === 'string' && (GRAPH_LAYOUTS as readonly string[]).includes(value);
+
+/**
+ * Le couloir d'un nœud : sa couche d'affichage ; l'incident, le scénario et les requêtes HTTP (vues par le
+ * navigateur) vont dans le couloir Frontend, d'où part le parcours.
+ */
+export function laneOf(node: Pick<GraphNode, 'kind' | 'layer'>): GraphGroup {
+  const group = groupOf(node);
+  return group === 'CONTEXT' || group === 'HTTP' ? 'FRONTEND' : group;
+}
 
 export const NODE_W = 176;
 export const NODE_H = 46;
@@ -176,16 +222,61 @@ const FRAME_RATIO = 0.3;
  * moins 10 px. La vue ajustée ne descend jamais en dessous : le cadre défile plutôt que de rétrécir.
  */
 export const READABLE_GRAPH_SCALE = 0.85;
-/** La largeur visée (px) par la vue ajustée d'un petit graphe : jamais au-delà de 100 %. */
+/** La largeur visée (px) par la vue ajustée d'un petit graphe, quand la taille du cadre n'est pas connue. */
 const FIT_TARGET_PX = 960;
 
+/** La taille affichée (px) du cadre du graphe, mesurée par le contrôleur (`ws-graph-viewport`). */
+export interface GraphViewport {
+  width: number;
+  height: number;
+}
+
+/** Sous ce changement (px, en largeur comme en hauteur), une nouvelle mesure du cadre est ignorée. */
+export const GRAPH_VIEWPORT_STEP = 8;
+
+const usableViewport = (viewport: GraphViewport | undefined): viewport is GraphViewport =>
+  viewport !== undefined &&
+  Number.isFinite(viewport.width) &&
+  Number.isFinite(viewport.height) &&
+  viewport.width > 0 &&
+  viewport.height > 0;
+
 /**
- * L'échelle réelle de la vue ajustée (zoom 1) : le graphe tient dans FIT_TARGET_PX quand c'est possible,
- * sans dépasser 100 % (1 unité par pixel) ni descendre sous l'échelle lisible.
+ * L'échelle réelle de la vue ajustée (zoom 1), jamais au-delà de 100 % (1 unité par pixel) ni sous
+ * l'échelle lisible. Avec la taille du cadre (`viewport`), le graphe y tient en largeur ET en hauteur quand
+ * c'est possible ; sinon le cadre défile. Sans elle, le graphe vise FIT_TARGET_PX de large.
  */
-export function fitScale(width: number): number {
+export function fitScale(width: number, height?: number, viewport?: GraphViewport): number {
   if (!(width > 0)) return 1;
+  if (usableViewport(viewport)) {
+    const across = viewport.width / width;
+    const down = height !== undefined && height > 0 ? viewport.height / height : across;
+    return Math.min(1, Math.max(READABLE_GRAPH_SCALE, Math.min(across, down)));
+  }
   return Math.min(1, Math.max(READABLE_GRAPH_SCALE, FIT_TARGET_PX / width));
+}
+
+/**
+ * Le cadre (unités du graphe) et l'échelle ajustée. Avec la taille du cadre, il couvre au moins le
+ * cadre affiché (le SVG remplit le panneau) ; sans elle, il garde au moins FRAME_RATIO de haut.
+ */
+function frameOf(
+  width: number,
+  height: number,
+  viewport: GraphViewport | undefined,
+): { fit: number; frameWidth: number; frameHeight: number } {
+  if (!usableViewport(viewport))
+    return {
+      fit: fitScale(width),
+      frameWidth: width,
+      frameHeight: Math.max(height, Math.round(width * FRAME_RATIO)),
+    };
+  const fit = fitScale(width, height, viewport);
+  return {
+    fit,
+    frameWidth: Math.max(width, viewport.width / fit),
+    frameHeight: Math.max(height, viewport.height / fit),
+  };
 }
 
 export interface LaidNode {
@@ -213,6 +304,17 @@ export interface GraphLayout2 {
   bands: { key: BandKey; x: number; width: number }[];
   /** Les relations dont une extrémité manque au graphe : listées dans le tableau, jamais dessinées vers le vide. */
   dangling: number;
+  /** La disposition qui a produit ces positions (`columns` par défaut). */
+  mode?: GraphLayoutMode;
+  /** Les couloirs horizontaux (disposition `lanes` seulement), de haut en bas. */
+  lanes?: LaidLane[];
+}
+
+/** Un couloir horizontal : sa couche, sa position verticale et sa hauteur (unités du graphe). */
+export interface LaidLane {
+  key: GraphGroup;
+  y: number;
+  height: number;
 }
 
 const num = (value: number): string => String(Math.round(value * 10) / 10);
@@ -286,24 +388,7 @@ export function graphLayout2(graph: InvestigationGraph): GraphLayout2 {
     }
   }
   const nodes = graph.nodes.map((node) => placed.get(node.id)).filter((n): n is LaidNode => n !== undefined);
-  const byId = new Map(graph.nodes.map((node) => [node.id, node]));
-  let dangling = 0;
-  const edges: LaidEdge[] = [];
-  for (const edge of graph.edges) {
-    const a = placed.get(edge.from);
-    const b = placed.get(edge.to);
-    if (!a || !b) {
-      dangling += 1;
-      continue;
-    }
-    if (a === b) continue;
-    edges.push({
-      edge,
-      id: edgeId(edge.from, edge.to),
-      status: displayStatus(edge, byId),
-      d: edgePath(a, b),
-    });
-  }
+  const { edges, dangling } = laidEdges(graph, placed);
   const bands: GraphLayout2['bands'] = [];
   for (const band of BANDS) {
     const slots = present
@@ -322,7 +407,169 @@ export function graphLayout2(graph: InvestigationGraph): GraphLayout2 {
     edges,
     bands,
     dangling,
+    mode: 'columns',
   };
+}
+
+/** Un trait vertical entre deux nœuds de même abscisse (de `a` vers `b`, vers le bas ou vers le haut). */
+function dropPath(a: LaidNode, b: LaidNode): string {
+  const x = a.x + NODE_W / 2;
+  const down = b.y > a.y;
+  const y1 = down ? a.y + NODE_H : a.y;
+  const y2 = down ? b.y - 1 : b.y + NODE_H + 1;
+  const bend = (y2 - y1) / 2;
+  return `M${num(x)},${num(y1)} C${num(x)},${num(y1 + bend)} ${num(x)},${num(y2 - bend)} ${num(x)},${num(y2)}`;
+}
+
+/** Les relations dessinables (deux extrémités placées, distinctes) et le compte de celles vers le vide. */
+function laidEdges(
+  graph: InvestigationGraph,
+  placed: ReadonlyMap<string, LaidNode>,
+): { edges: LaidEdge[]; dangling: number } {
+  const byId = new Map(graph.nodes.map((node) => [node.id, node]));
+  let dangling = 0;
+  const edges: LaidEdge[] = [];
+  for (const edge of graph.edges) {
+    const a = placed.get(edge.from);
+    const b = placed.get(edge.to);
+    if (!a || !b) {
+      dangling += 1;
+      continue;
+    }
+    if (a === b) continue;
+    edges.push({
+      edge,
+      id: edgeId(edge.from, edge.to),
+      status: displayStatus(edge, byId),
+      d: edgePath(a, b),
+    });
+  }
+  return { edges, dangling };
+}
+
+/** La largeur réservée à gauche aux titres des couloirs (unités du graphe). */
+export const LANE_HEAD = 168;
+const LANE_PAD = 14;
+const LANE_GAP = 8;
+const LANE_TOP = 6;
+
+/**
+ * LA DISPOSITION EN COULOIRS, déterministe : un couloir horizontal par couche (Frontend, BFF, Backend,
+ * Données — couloirs vides retirés), titre à gauche. En abscisse, l'ordre des genres de la disposition en
+ * colonnes, compacté par couloir : une colonne du couloir vient après la précédente du même couloir et
+ * jamais à gauche d'un prédécesseur d'un autre couloir — le parcours va de gauche à droite et descend d'un
+ * couloir au suivant. Dans un couloir, les nœuds d'une colonne suivent la hauteur moyenne de leurs
+ * prédécesseurs du même couloir déjà placés, puis l'ordre du graphe.
+ */
+export function graphLanesLayout(graph: InvestigationGraph): GraphLayout2 {
+  const present = [...new Set(graph.nodes.map((node) => columnOf(node)))].sort((a, b) => a - b);
+  const incoming = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    const list = incoming.get(edge.to) ?? [];
+    list.push(edge.from);
+    incoming.set(edge.to, list);
+  }
+  interface Rel {
+    node: GraphNode;
+    lane: GraphGroup;
+    column: number;
+    slot: number;
+    y: number;
+  }
+  const relative = new Map<string, Rel>();
+  const extent = new Map<GraphGroup, number>();
+  const lastSlot = new Map<GraphGroup, number>();
+  let maxSlot = 0;
+  for (const column of present) {
+    for (const lane of GRAPH_GROUPS) {
+      const members = graph.nodes
+        .map((node, index) => ({ node, index }))
+        .filter((entry) => columnOf(entry.node) === column && laneOf(entry.node) === lane);
+      if (members.length === 0) continue;
+      const preds = members.flatMap((entry) =>
+        (incoming.get(entry.node.id) ?? [])
+          .map((from) => relative.get(from))
+          .filter((rel): rel is Rel => rel !== undefined && rel.column < column),
+      );
+      // La colonne du couloir : après la précédente du même couloir, et jamais à gauche d'un prédécesseur
+      // d'un autre couloir (même abscisse permise : le parcours descend d'un couloir au suivant).
+      const slot = Math.max(
+        (lastSlot.get(lane) ?? -1) + 1,
+        ...preds.filter((rel) => rel.lane !== lane).map((rel) => rel.slot),
+      );
+      lastSlot.set(lane, slot);
+      maxSlot = Math.max(maxSlot, slot);
+      const entries = members.map((entry) => {
+        const ys = (incoming.get(entry.node.id) ?? [])
+          .map((from) => relative.get(from))
+          .filter((rel): rel is Rel => rel !== undefined && rel.lane === lane && rel.column < column)
+          .map((rel) => rel.y);
+        const bary = ys.length > 0 ? ys.reduce((sum, y) => sum + y, 0) / ys.length : undefined;
+        return { ...entry, bary };
+      });
+      entries.sort(
+        (a, b) =>
+          (a.bary ?? Number.POSITIVE_INFINITY) - (b.bary ?? Number.POSITIVE_INFINITY) || a.index - b.index,
+      );
+      let next = 0;
+      for (const entry of entries) {
+        const y = Math.round(Math.max(next, entry.bary ?? next));
+        next = y + ROW_H;
+        relative.set(entry.node.id, { node: entry.node, lane, column, slot, y });
+        extent.set(lane, Math.max(extent.get(lane) ?? 0, y + NODE_H));
+      }
+    }
+  }
+  const lanes: LaidLane[] = [];
+  let top = LANE_TOP;
+  for (const lane of GRAPH_GROUPS) {
+    const inner = extent.get(lane);
+    if (inner === undefined) continue;
+    const height = LANE_PAD * 2 + inner;
+    lanes.push({ key: lane, y: top, height });
+    top += height + LANE_GAP;
+  }
+  const laneTop = new Map(lanes.map((lane) => [lane.key, lane.y]));
+  const placed = new Map<string, LaidNode>();
+  for (const rel of relative.values())
+    placed.set(rel.node.id, {
+      node: rel.node,
+      x: LANE_HEAD + PAD + rel.slot * COL_W,
+      y: (laneTop.get(rel.lane) ?? 0) + LANE_PAD + rel.y,
+      column: rel.column,
+      group: groupOf(rel.node),
+    });
+  const nodes = graph.nodes.map((node) => placed.get(node.id)).filter((n): n is LaidNode => n !== undefined);
+  const laid = laidEdges(graph, placed);
+  // Une descente d'un couloir au suivant (même abscisse) : un trait vertical du bas du nœud au haut du
+  // suivant, quand aucun nœud ne se trouve entre les deux ; sinon la courbe de côté.
+  const edges = laid.edges.map((entry) => {
+    const a = placed.get(entry.edge.from);
+    const b = placed.get(entry.edge.to);
+    if (!a || !b || a.x !== b.x || laneOf(a.node) === laneOf(b.node)) return entry;
+    const [upper, lower] = a.y < b.y ? [a, b] : [b, a];
+    const blocked = nodes.some(
+      (other) => other !== a && other !== b && other.x === a.x && other.y > upper.y && other.y < lower.y,
+    );
+    return blocked ? entry : { ...entry, d: dropPath(a, b) };
+  });
+  const dangling = laid.dangling;
+  const last = lanes.at(-1);
+  return {
+    width: LANE_HEAD + PAD * 2 + maxSlot * COL_W + NODE_W + 24,
+    height: last ? last.y + last.height + LANE_TOP : TOP + NODE_H,
+    nodes,
+    edges,
+    bands: [],
+    dangling,
+    mode: 'lanes',
+    lanes,
+  };
+}
+
+/** La disposition choisie (« Colonnes » ou « Couloirs horizontaux »). */
+export function layoutGraph(graph: InvestigationGraph, mode: GraphLayoutMode = 'columns'): GraphLayout2 {
+  return mode === 'lanes' ? graphLanesLayout(graph) : graphLayout2(graph);
 }
 
 // ── Chemin d'erreur ──────────────────────────────────────────────────────────────────────────
@@ -462,6 +709,13 @@ export interface GraphUi {
   hidden: GraphGroup[];
   /** Mettre en évidence le chemin d'erreur. */
   errorPath: boolean;
+  /** La disposition (« Colonnes » ou « Couloirs horizontaux ») : une préférence, gardée par « Réinitialiser ». */
+  layout: GraphLayoutMode;
+  /**
+   * La taille affichée du cadre (px), mesurée par le contrôleur : la vue ajustée y tient le graphe en
+   * largeur et en hauteur. Absente : la vue ajustée vise une largeur fixe.
+   */
+  viewport?: GraphViewport;
 }
 
 export const emptyGraphUi = (): GraphUi => ({
@@ -470,6 +724,7 @@ export const emptyGraphUi = (): GraphUi => ({
   offsetY: 0,
   hidden: [],
   errorPath: false,
+  layout: 'columns',
 });
 
 export const MIN_GRAPH_ZOOM = 0.5;
@@ -498,7 +753,13 @@ const clampOffset = (value: number, extent: number | undefined): number =>
  *   convertit les pixels : × data-w / largeur affichée du SVG) ; borné par `data-w` / `data-h` ;
  * - `ws-graph-fit` (vue ajustée, zoom 1), `ws-graph-reset` (vue, couches et chemin d'erreur d'origine) ;
  * - `ws-graph-layer` : `data-layer` (FRONTEND, BFF, BACKEND, DATA) affiché ou masqué ;
- * - `ws-graph-errors` : le chemin d'erreur, mis en évidence ou non.
+ * - `ws-graph-errors` : le chemin d'erreur, mis en évidence ou non ;
+ * - `ws-graph-layout` : `data-layout` (ou `data-value`, la valeur du `<select>` « Disposition ») :
+ *   `columns` ou `lanes` ; la vue repart de la vue ajustée ; une valeur inconnue ne change rien ;
+ * - `ws-graph-viewport` : `data-w` / `data-h`, ici la taille affichée du cadre en pixels (mesurée par le
+ *   contrôleur) ; le même objet est rendu quand elle change de moins de GRAPH_VIEWPORT_STEP px dans les
+ *   deux sens (rien à redessiner) ou quand elle n'est pas valable.
+ * La réinitialisation garde la taille du cadre (une mesure) et la disposition (une préférence).
  */
 export function reduceGraph(
   ui: GraphUi,
@@ -527,12 +788,12 @@ export function reduceGraph(
         f === undefined || extent === undefined
           ? 0
           : (f - 0.5) * extent * (1 / magnification(ui.zoom) - 1 / magnification(zoom));
-      const frameH = w !== undefined && h !== undefined ? Math.max(h, w * FRAME_RATIO) : undefined;
+      const frame = w !== undefined && h !== undefined ? frameOf(w, h, ui.viewport) : undefined;
       return {
         ...ui,
         zoom,
-        offsetX: clampOffset(ui.offsetX + shift(fx, w), w),
-        offsetY: clampOffset(ui.offsetY + shift(fy, frameH), h),
+        offsetX: clampOffset(ui.offsetX + shift(fx, frame?.frameWidth), w),
+        offsetY: clampOffset(ui.offsetY + shift(fy, frame?.frameHeight), h),
       };
     }
     case 'ws-graph-pan': {
@@ -547,8 +808,17 @@ export function reduceGraph(
     }
     case 'ws-graph-fit':
       return { ...ui, zoom: 1, offsetX: 0, offsetY: 0 };
-    case 'ws-graph-reset':
-      return emptyGraphUi();
+    case 'ws-graph-reset': {
+      const reset = { ...emptyGraphUi(), layout: isGraphLayout(ui.layout) ? ui.layout : 'columns' };
+      return ui.viewport ? { ...reset, viewport: ui.viewport } : reset;
+    }
+    case 'ws-graph-layout': {
+      const layout = dataset.layout ?? dataset.value;
+      if (!isGraphLayout(layout)) return ui;
+      if (layout === ui.layout) return ui;
+      // Les positions changent : la vue repart de la vue ajustée (un décalage n'a plus de sens).
+      return { ...ui, layout, zoom: 1, offsetX: 0, offsetY: 0 };
+    }
     case 'ws-graph-layer': {
       const layer = GRAPH_GROUPS.find((group) => group === dataset.layer);
       if (!layer) return ui;
@@ -559,6 +829,18 @@ export function reduceGraph(
     }
     case 'ws-graph-errors':
       return { ...ui, errorPath: !ui.errorPath };
+    case 'ws-graph-viewport': {
+      if (w === undefined || h === undefined || w <= 0 || h <= 0) return ui;
+      const viewport = { width: Math.round(w), height: Math.round(h) };
+      const previous = ui.viewport;
+      if (
+        previous &&
+        Math.abs(previous.width - viewport.width) < GRAPH_VIEWPORT_STEP &&
+        Math.abs(previous.height - viewport.height) < GRAPH_VIEWPORT_STEP
+      )
+        return ui;
+      return { ...ui, viewport };
+    }
     default:
       return undefined;
   }
@@ -602,7 +884,7 @@ export interface GraphView {
   y: number;
   width: number;
   height: number;
-  /** Le cadre en unités du graphe (au moins FRAME_RATIO de haut). */
+  /** Le cadre en unités du graphe (au moins FRAME_RATIO de haut, ou au moins le cadre affiché). */
   frameWidth: number;
   frameHeight: number;
   /** L'échelle réelle : pixels affichés par unité du graphe (1 = 100 %). */
@@ -614,18 +896,17 @@ export interface GraphView {
 
 /**
  * La vue : le viewBox (le cadre divisé par le grossissement, centré et décalé) et la taille affichée du
- * SVG en pixels. Au zoom 1, tout le graphe à l'échelle `fitScale` ; au-dessus, le viewBox se resserre
- * dans un cadre de même taille ; en dessous, le cadre rétrécit (vue d'ensemble réduite). L'échelle réelle
- * vaut donc toujours pixelWidth / width = fitScale × zoom.
+ * SVG en pixels. Au zoom 1, tout le graphe à l'échelle `fitScale` (ajustée au cadre affiché quand
+ * `ui.viewport` est connu : le SVG remplit alors le panneau) ; au-dessus, le viewBox se resserre dans un
+ * cadre de même taille ; en dessous, le cadre rétrécit (vue d'ensemble réduite). L'échelle réelle vaut
+ * donc toujours pixelWidth / width = fitScale × zoom.
  */
 export function graphViewBox(
   layout: Pick<GraphLayout2, 'width' | 'height'>,
-  ui: Pick<GraphUi, 'zoom' | 'offsetX' | 'offsetY'>,
+  ui: Pick<GraphUi, 'zoom' | 'offsetX' | 'offsetY'> & { viewport?: GraphViewport | undefined },
 ): GraphView {
-  const frameWidth = layout.width;
-  const frameHeight = Math.max(layout.height, Math.round(layout.width * FRAME_RATIO));
+  const { fit, frameWidth, frameHeight } = frameOf(layout.width, layout.height, ui.viewport);
   const zoom = clampZoom(ui.zoom);
-  const fit = fitScale(layout.width);
   const shrink = Math.min(1, zoom);
   const width = frameWidth / magnification(zoom);
   const height = frameHeight / magnification(zoom);
@@ -692,6 +973,9 @@ const TEXT = {
     reset: 'Réinitialiser',
     show: 'Afficher :',
     showLayer: (layer: string, shown: boolean) => `${shown ? 'Masquer' : 'Afficher'} la couche ${layer}`,
+    layersMenu: (shown: number, offered: number) => `Couches (${String(shown)}/${String(offered)})`,
+    layersHint: 'Choisir les couches dessinées dans le graphe',
+    layersGroup: 'Couches dessinées',
     errorPath: 'Chemin d’erreur',
     errorPathHint: 'Mettre en évidence le chemin depuis la requête en échec',
     canvas: 'Graphe full-stack : nœuds et relations',
@@ -705,6 +989,7 @@ const TEXT = {
     pathNone:
       'Aucune requête en échec (statut 5xx ou échec réseau) de la reproduction n’est reliée au graphe.',
     hiddenCount: (count: number) => `${String(count)} nœud(s) masqué(s) par « Afficher : ».`,
+    hiddenByMenu: (count: number) => `${String(count)} nœud(s) masqué(s) par le menu « Couches ».`,
     allHidden: 'Toutes les couches sont masquées : choisissez une couche à afficher.',
     dangling: (count: number) =>
       `${String(count)} relation(s) vers un nœud absent du graphe : voir le tableau des relations.`,
@@ -745,6 +1030,33 @@ const TEXT = {
     tableEmpty: 'Aucune relation pour l’instant.',
     selectEdge: (from: string, to: string) => `Sélectionner la relation ${from} → ${to}`,
     selectNode: (label: string) => `Sélectionner le nœud ${label}`,
+    fullscreen: 'Plein écran',
+    fullscreenHint: 'Afficher le graphe sur tout l’espace de travail (Échap pour revenir)',
+    exitFullscreenHint: 'Rendre au graphe sa place dans l’espace de travail',
+    more: 'Légende et aide',
+    summary: (nodes: number, edges: number) => `${String(nodes)} nœud(s) · ${String(edges)} relation(s)`,
+    focusTitle: (layer: string) => `Traçabilité ${layer}`,
+    focusNote: (layers: string, count: number) =>
+      `Vue restreinte : seules les couches ${layers}, les requêtes HTTP et l’incident sont dessinés${count > 0 ? ` (${String(count)} nœud(s) des autres couches sont dans la vue Full Stack)` : ''}.`,
+    layoutLabel: 'Disposition',
+    layoutHint:
+      'Choisir la disposition du graphe : une colonne par genre de nœud, ou un couloir horizontal par couche',
+    layouts: { columns: 'Colonnes', lanes: 'Couloirs horizontaux' } as Record<GraphLayoutMode, string>,
+    lanes: {
+      FRONTEND: 'Frontend',
+      BFF: 'BFF (Java)',
+      BACKEND: 'Backend (Spring Boot)',
+      DATA: 'Données',
+    } as Record<GraphGroup, string>,
+    laneData: 'accès lus dans le code',
+    legendInline: {
+      OBSERVED: 'Observé',
+      STATICALLY_RESOLVED: 'Résolu statiquement',
+      INFERRED: 'Inféré',
+      UNKNOWN: 'Inconnu',
+    } as Record<RelationStatus, string>,
+    legendLabel: 'Légende des relations',
+    canvasLanes: 'Graphe full-stack en couloirs : un couloir par couche, parcours de gauche à droite',
   },
   en: {
     title: 'Full-stack traceability',
@@ -788,6 +1100,9 @@ const TEXT = {
     reset: 'Reset',
     show: 'Show:',
     showLayer: (layer: string, shown: boolean) => `${shown ? 'Hide' : 'Show'} the ${layer} layer`,
+    layersMenu: (shown: number, offered: number) => `Layers (${String(shown)}/${String(offered)})`,
+    layersHint: 'Choose the layers drawn in the graph',
+    layersGroup: 'Drawn layers',
     errorPath: 'Error path',
     errorPathHint: 'Highlight the path starting at the failing request',
     canvas: 'Full-stack graph: nodes and relations',
@@ -801,6 +1116,7 @@ const TEXT = {
     pathNone:
       'No failing request (5xx status or network failure) of the reproduction is linked to the graph.',
     hiddenCount: (count: number) => `${String(count)} node(s) hidden by “Show:”.`,
+    hiddenByMenu: (count: number) => `${String(count)} node(s) hidden by the “Layers” menu.`,
     allHidden: 'Every layer is hidden: choose a layer to show.',
     dangling: (count: number) =>
       `${String(count)} relation(s) towards a node missing from the graph: see the relations table.`,
@@ -839,6 +1155,32 @@ const TEXT = {
     tableEmpty: 'No relation yet.',
     selectEdge: (start: string, end: string) => `Select the relation ${start} → ${end}`,
     selectNode: (label: string) => `Select the node ${label}`,
+    fullscreen: 'Full screen',
+    fullscreenHint: 'Show the graph over the whole workspace (Escape to come back)',
+    exitFullscreenHint: 'Give the graph its place back in the workspace',
+    more: 'Legend and help',
+    summary: (nodes: number, edges: number) => `${String(nodes)} node(s) · ${String(edges)} relation(s)`,
+    focusTitle: (layer: string) => `${layer} traceability`,
+    focusNote: (layers: string, count: number) =>
+      `Restricted view: only the ${layers} layers, the HTTP requests and the incident are drawn${count > 0 ? ` (${String(count)} node(s) of the other layers are in the Full Stack view)` : ''}.`,
+    layoutLabel: 'Layout',
+    layoutHint: 'Choose the graph layout: one column per node kind, or one horizontal lane per layer',
+    layouts: { columns: 'Columns', lanes: 'Horizontal lanes' } as Record<GraphLayoutMode, string>,
+    lanes: {
+      FRONTEND: 'Frontend',
+      BFF: 'BFF (Java)',
+      BACKEND: 'Backend (Spring Boot)',
+      DATA: 'Data',
+    } as Record<GraphGroup, string>,
+    laneData: 'accesses read in the code',
+    legendInline: {
+      OBSERVED: 'Observed',
+      STATICALLY_RESOLVED: 'Statically resolved',
+      INFERRED: 'Inferred',
+      UNKNOWN: 'Unknown',
+    } as Record<RelationStatus, string>,
+    legendLabel: 'Relation legend',
+    canvasLanes: 'Full-stack graph in lanes: one lane per layer, flowing left to right',
   },
 };
 
@@ -875,6 +1217,17 @@ function sourceOfNode(ctx: WorkspaceContext, node: GraphNode): SourceLocation | 
 
 const STATUSES: readonly RelationStatus[] = ['OBSERVED', 'STATICALLY_RESOLVED', 'INFERRED', 'UNKNOWN'];
 
+/** Les icônes des commandes (trait `currentColor`, décoratives : le bouton porte son nom). */
+const ICONS: Record<'fit' | 'reset' | 'max' | 'restore', string> = {
+  fit: '<path d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5"/><rect x="5" y="5" width="6" height="6" rx="1"/>',
+  reset: '<path d="M3.2 6.2A5 5 0 1 1 3 9.5"/><path d="M2.5 2.5v3.8h3.8"/>',
+  max: '<path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"/>',
+  restore: '<path d="M13.5 6.5h-4v-4M9.5 6.5 14 2M2.5 9.5h4v4M6.5 9.5 2 14"/>',
+};
+function icon(key: keyof typeof ICONS): string {
+  return `<svg class="ws-graph-i" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">${ICONS[key]}</svg>`;
+}
+
 function markers(): string {
   return STATUSES.map(
     (status) =>
@@ -895,23 +1248,93 @@ function nodeTitle(t: (typeof TEXT)['fr'], node: GraphNode, source: SourceLocati
     .join(' · ');
 }
 
+/** Le choix « Disposition » (`ws-graph-layout`, valeur lue sur l'événement `change`). */
+function layoutSelect(t: (typeof TEXT)['fr'], mode: GraphLayoutMode): string {
+  const options = GRAPH_LAYOUTS.map(
+    (value) =>
+      `<option value="${value}"${value === mode ? ' selected' : ''}>${esc(t.layouts[value])}</option>`,
+  ).join('');
+  return `<label class="ws-graph-disp" title="${esc(t.layoutHint)}"><span class="ws-graph-disp-t">${esc(t.layoutLabel)}</span><select class="ws-graph-sel" data-action="ws-graph-layout" data-ws-graph="layout">${options}</select></label>`;
+}
+
+/**
+ * La légende en ligne (sous la barre) : les quatre statuts de relation avec le même motif de trait que le
+ * dessin — la couleur n'est jamais le seul repère.
+ */
+function inlineLegend(lang: Lang): string {
+  const t = text(lang);
+  const hints = partsText(lang).relationHints;
+  return `<ul class="ws-graph-legend" aria-label="${esc(t.legendLabel)}">${STATUSES.map(
+    (status) =>
+      `<li title="${esc(hints[status])}"><span class="ws-graph-legline ws-ge-${status.toLowerCase()}" aria-hidden="true"></span>${esc(t.legendInline[status])}</li>`,
+  ).join('')}</ul>`;
+}
+
+/** Un couloir : fond, liseré de couleur de la couche, titre à gauche et applications du périmètre. */
+function laneHtml(ctx: WorkspaceContext, lane: LaidLane, width: number): string {
+  const t = text(ctx.lang);
+  const names =
+    lane.key === 'DATA'
+      ? t.laneData
+      : ctx.incident.scope.applications
+          .filter(
+            (application) =>
+              application.layer === lane.key &&
+              application.name.trim().toLowerCase() !== t.groups[lane.key].toLowerCase(),
+          )
+          .map((application) => application.name)
+          .join(', ');
+  const key = lane.key.toLowerCase();
+  return `<g class="ws-graph-lane ws-gl-${key}"><title>${esc(names ? `${t.lanes[lane.key]} · ${names}` : t.lanes[lane.key])}</title><rect class="ws-graph-lane-bg" x="6" y="${num(lane.y)}" width="${num(width - 12)}" height="${num(lane.height)}" rx="10"/><rect class="ws-graph-lane-head" x="6" y="${num(lane.y)}" width="${String(LANE_HEAD - 10)}" height="${num(lane.height)}" rx="10"/><rect class="ws-graph-lane-bar" x="6" y="${num(lane.y)}" width="5" height="${num(lane.height)}" rx="2"/><text class="ws-graph-lane-t" x="20" y="${num(lane.y + 24)}">${esc(t.lanes[lane.key])}</text>${names ? `<text class="ws-graph-lane-s" x="20" y="${num(lane.y + 41)}">${esc(truncate(names, 22))}</text>` : ''}</g>`;
+}
+
 // ── Rendu du graphe ──────────────────────────────────────────────────────────────────────────
 
-/** Le graphe interactif : commandes (zoom, tout voir, couches, chemin d'erreur), cadre SVG, légende. */
-export function renderGraph(ctx: WorkspaceContext, ui: GraphUi): string {
+/** Les options de rendu du graphe. */
+export interface GraphRenderOptions {
+  /**
+   * Le rendu d'un panneau de l'espace de travail : commandes sur une ligne (avec « Plein écran »), cadre
+   * qui remplit la hauteur du panneau, légende, aide et note statique dans « Légende et aide » (replié).
+   */
+  compact?: boolean;
+  /** La vue restreinte à une couche (+ requêtes HTTP, + données pour le backend), sans toucher `ui.hidden`. */
+  focus?: GraphFocus;
+  /** Le panneau du graphe est en plein écran : le bouton propose d'en sortir (`data-op="restore"`). */
+  maximized?: boolean;
+}
+
+/**
+ * Le graphe interactif : commandes (zoom, ajuster, couches, chemin d'erreur), cadre SVG, légende. En mode
+ * `compact`, le rendu d'un panneau sans défilement de page (voir GraphRenderOptions).
+ */
+export function renderGraph(ctx: WorkspaceContext, ui: GraphUi, options: GraphRenderOptions = {}): string {
   const t = text(ctx.lang);
+  const compact = options.compact === true;
+  const focus = options.focus !== undefined && isFocus(options.focus) ? options.focus : undefined;
+  const title = focus ? t.focusTitle(t.groups[focus]) : t.title;
+  const sectionClass = `ws-graph${compact ? ' ws-graph-compact' : ''}${ui.errorPath ? ' ws-graph-errmode' : ''}${ui.layout === 'lanes' ? ' ws-graph-lanes' : ''}`;
+  const focusAttr = focus ? ` data-focus="${focus}"` : '';
+  // « Plein écran » : un bouton bascule à icône (nom constant, état `aria-pressed`) ; agrandi, il rend au
+  // panneau sa place (`data-op="restore"`, comme Échap).
+  const fullscreen = compact
+    ? `<button type="button" class="btn small ws-graph-ico ws-graph-max" data-action="ws-pane" data-pane="primary" data-op="${options.maximized ? 'restore' : 'max'}" aria-pressed="${String(options.maximized === true)}" aria-label="${esc(t.fullscreen)}" title="${esc(options.maximized ? t.exitFullscreenHint : t.fullscreenHint)}">${icon(options.maximized ? 'restore' : 'max')}</button>`
+    : '';
   const graph = ctx.incident.investigation.graph;
-  if (!graph || graph.nodes.length === 0)
-    return `<section class="ws-graph" aria-label="${esc(t.title)}">${panelState(ctx.lang, 'empty', t.none)}${relationLegend(ctx.lang)}</section>`;
+  if (!graph || graph.nodes.length === 0) {
+    if (!compact)
+      return `<section class="ws-graph" aria-label="${esc(title)}">${panelState(ctx.lang, 'empty', t.none)}${relationLegend(ctx.lang)}</section>`;
+    return `<section class="${sectionClass}" aria-label="${esc(title)}"${focusAttr}><div class="ws-graph-empty">${panelState(ctx.lang, 'empty', t.none)}</div><details class="ws-graph-more" data-ws-details="graph-more"><summary>${esc(t.more)}</summary><div class="ws-graph-more-b">${relationLegend(ctx.lang)}<p class="note ws-graph-static">${esc(t.staticNote)}</p></div></details></section>`;
+  }
   const full = new Map(graph.nodes.map((node) => [node.id, node]));
-  const visible = visibleGraph(graph, ui.hidden);
-  const layout = graphLayout2(visible);
+  const visible = visibleGraph(graph, graphHidden(ui.hidden, focus));
+  const mode: GraphLayoutMode = isGraphLayout(ui.layout) ? ui.layout : 'columns';
+  const layout = layoutGraph(visible, mode);
   const view = graphViewBox(layout, ui);
   const computedPath = errorPath(graph, incidentReproduction(ctx.incident));
   const path = ui.errorPath ? computedPath : undefined;
   const pathNodes = new Set(path?.nodes ?? []);
   const pct = graphScalePercent(view);
-  const fitPct = Math.round(fitScale(layout.width) * 100);
+  const fitPct = Math.round(frameOf(layout.width, layout.height, ui.viewport).fit * 100);
   const readablePct = Math.round(READABLE_GRAPH_SCALE * 100);
   // Un seul arrêt de tabulation pour les nœuds (tabindex itinérant) : le nœud sélectionné, sinon le début
   // du chemin d'erreur, sinon le premier nœud ; les flèches mènent ensuite d'un nœud à son voisin.
@@ -925,18 +1348,34 @@ export function renderGraph(ctx: WorkspaceContext, ui: GraphUi): string {
   const requests = requestsOf(ctx);
   const size = `data-w="${num(layout.width)}" data-h="${num(layout.height)}"`;
 
-  const groupButtons = GRAPH_GROUPS.map((group) => {
-    const shown = !ui.hidden.includes(group);
-    return `<button type="button" class="chip ws-graph-layer ws-gg-${group.toLowerCase()}" data-action="ws-graph-layer" data-layer="${group}" aria-pressed="${String(shown)}" title="${esc(t.showLayer(t.groups[group], shown))}"><span class="ws-graph-dot" aria-hidden="true"></span>${esc(t.groups[group])}</button>`;
-  }).join('');
-  const toolbar = `<div class="ws-graph-bar" role="group" aria-label="${esc(t.controls)}"><div class="ws-graph-zoom" role="group" aria-label="${esc(t.zoom)}"><button type="button" class="btn small" data-action="ws-graph-zoom" data-dir="out" ${size} aria-label="${esc(t.zoomOut)}" title="${esc(t.zoomOut)}"${ui.zoom <= MIN_GRAPH_ZOOM ? ' disabled' : ''}>−</button><span class="ws-graph-pct" title="${esc(t.scaleHint)}">${String(pct)} %</span><button type="button" class="btn small" data-action="ws-graph-zoom" data-dir="in" ${size} aria-label="${esc(t.zoomIn)}" title="${esc(t.zoomIn)}"${ui.zoom >= MAX_GRAPH_ZOOM ? ' disabled' : ''}>+</button><button type="button" class="btn small" data-action="ws-graph-fit" title="${esc(t.fitHint(fitPct))}">${esc(t.fit)}</button><button type="button" class="btn small" data-action="ws-graph-reset">${esc(t.reset)}</button></div><button type="button" class="chip ws-graph-errbtn" data-action="ws-graph-errors" aria-pressed="${String(ui.errorPath)}" title="${esc(t.errorPathHint)}">${esc(t.errorPath)}</button><div class="ws-graph-layers" role="group" aria-label="${esc(t.show)}"><span class="ws-graph-show" aria-hidden="true">${esc(t.show)}</span>${groupButtons}</div></div>`;
+  // Les couches proposées : toutes, ou celles de la vue restreinte.
+  const offered = focus ? FOCUS_GROUPS[focus] : GRAPH_GROUPS;
+  const groupButtons = offered
+    .map((group) => {
+      const shown = !ui.hidden.includes(group);
+      return `<button type="button" class="chip ws-graph-layer ws-gg-${group.toLowerCase()}" data-action="ws-graph-layer" data-layer="${group}" aria-pressed="${String(shown)}" title="${esc(t.showLayer(t.groups[group], shown))}"><span class="ws-graph-dot" aria-hidden="true"></span>${esc(t.groups[group])}</button>`;
+    })
+    .join('');
+  const shownCount = offered.filter((group) => !ui.hidden.includes(group)).length;
+  // Panneau : les couches dans un menu déroulant « Couches (n/m) » (un volet `<details>` dont le contrôleur
+  // garde l'état ouvert au redessin ; `data-ws-graph` y ramène le focus) ; « Ajuster » et « Réinitialiser »
+  // gardent leur nom (texte masqué visuellement quand le panneau est étroit, voir les styles).
+  const layers = compact
+    ? `<details class="ws-graph-menu" data-ws-details="graph-layers" data-ws-menu=""><summary class="btn small ws-graph-menu-t${shownCount < offered.length ? ' ws-graph-menu-some' : ''}" data-ws-graph="layers" title="${esc(t.layersHint)}">${esc(t.layersMenu(shownCount, offered.length))}</summary><div class="ws-graph-menu-b" role="group" aria-label="${esc(t.layersGroup)}">${groupButtons}</div></details>`
+    : `<div class="ws-graph-layers" role="group" aria-label="${esc(t.show)}"><span class="ws-graph-show" aria-hidden="true">${esc(t.show)}</span>${groupButtons}</div>`;
+  const labelled = (key: 'fit' | 'reset', label: string): string =>
+    compact ? `${icon(key)}<span class="ws-graph-txt">${esc(label)}</span>` : esc(label);
+  const toolbar = `<div class="ws-graph-bar" role="group" aria-label="${esc(t.controls)}"><div class="ws-graph-zoom" role="group" aria-label="${esc(t.zoom)}"><button type="button" class="btn small" data-action="ws-graph-zoom" data-dir="out" ${size} aria-label="${esc(t.zoomOut)}" title="${esc(t.zoomOut)}"${ui.zoom <= MIN_GRAPH_ZOOM ? ' disabled' : ''}>−</button><span class="ws-graph-pct" title="${esc(t.scaleHint)}">${String(pct)} %</span><button type="button" class="btn small" data-action="ws-graph-zoom" data-dir="in" ${size} aria-label="${esc(t.zoomIn)}" title="${esc(t.zoomIn)}"${ui.zoom >= MAX_GRAPH_ZOOM ? ' disabled' : ''}>+</button><button type="button" class="btn small ws-graph-fit" data-action="ws-graph-fit" title="${esc(t.fitHint(fitPct))}">${labelled('fit', t.fit)}</button><button type="button" class="btn small ws-graph-reset" data-action="ws-graph-reset"${compact ? ` title="${esc(t.reset)}"` : ''}>${labelled('reset', t.reset)}</button></div><button type="button" class="chip ws-graph-errbtn" data-action="ws-graph-errors" aria-pressed="${String(ui.errorPath)}" title="${esc(t.errorPathHint)}">${esc(t.errorPath)}</button>${layoutSelect(t, mode)}${layers}${fullscreen}</div>${inlineLegend(ctx.lang)}`;
 
   const notes: string[] = [];
+  const userHidden = graph.nodes.length - visibleGraph(graph, ui.hidden).nodes.length;
   const hiddenCount = graph.nodes.length - visible.nodes.length;
+  const focusHidden = Math.max(0, hiddenCount - userHidden);
   if (visible.nodes.length === 0) notes.push(`<p class="note">${esc(t.allHidden)}</p>`);
   else if (view.scale < READABLE_GRAPH_SCALE - 1e-9)
     notes.push(`<p class="note ws-graph-msg ws-graph-reduced">${esc(t.reduced(pct, readablePct))}</p>`);
-  else if (hiddenCount > 0) notes.push(`<p class="mu ws-graph-msg">${esc(t.hiddenCount(hiddenCount))}</p>`);
+  else if (userHidden > 0 && !compact)
+    notes.push(`<p class="mu ws-graph-msg">${esc(t.hiddenCount(userHidden))}</p>`);
   if (path) {
     const first = path.nodes[0];
     const last = path.nodes.at(-1);
@@ -957,6 +1396,7 @@ export function renderGraph(ctx: WorkspaceContext, ui: GraphUi): string {
         `<rect class="ws-graph-band" x="${num(band.x)}" y="6" width="${num(band.width)}" height="${num(layout.height - 12)}" rx="10"/><text class="ws-graph-band-t" x="${num(band.x + 10)}" y="28">${esc(truncate(t.bands[band.key], Math.floor(band.width / 8)))}</text>`,
     )
     .join('');
+  const lanes = (layout.lanes ?? []).map((lane) => laneHtml(ctx, lane, layout.width)).join('');
   const labelOf = (id: string): string => full.get(id)?.label ?? id;
   const edges = layout.edges
     .map((laid) => {
@@ -1008,8 +1448,19 @@ export function renderGraph(ctx: WorkspaceContext, ui: GraphUi): string {
     count('INFERRED'),
     count('UNKNOWN'),
   );
-  const svg = `<svg class="ws-graph-svg" viewBox="${num(view.x)} ${num(view.y)} ${num(view.width)} ${num(view.height)}" preserveAspectRatio="xMidYMid meet" width="${String(view.pixelWidth)}" height="${String(view.pixelHeight)}" style="width:${String(view.pixelWidth)}px;height:${String(view.pixelHeight)}px" data-scale="${String(Math.round(view.scale * 1000) / 1000)}" xmlns="http://www.w3.org/2000/svg" focusable="false"><defs>${markers()}</defs><g class="ws-graph-bands" aria-hidden="true">${bands}</g><g class="ws-graph-edges">${edges}</g><g class="ws-graph-nodes">${nodes}</g></svg>`;
-  return `<section class="ws-graph${ui.errorPath ? ' ws-graph-errmode' : ''}" aria-label="${esc(t.title)}">${toolbar}${notes.join('')}<figure class="ws-graph-fig"><figcaption id="ws-graph-cap" class="mu">${esc(caption)}</figcaption><div class="ws-graph-canvas" tabindex="0" role="group" aria-label="${esc(t.canvas)}" aria-describedby="ws-graph-cap ws-graph-help" data-ws-graph="canvas" ${size}>${svg}</div><p id="ws-graph-help" class="mu ws-graph-help">${esc(t.help)}</p></figure>${relationLegend(ctx.lang)}<p class="note ws-graph-static">${esc(t.staticNote)}</p></section>`;
+  const svg = `<svg class="ws-graph-svg" viewBox="${num(view.x)} ${num(view.y)} ${num(view.width)} ${num(view.height)}" preserveAspectRatio="xMidYMid meet" width="${String(view.pixelWidth)}" height="${String(view.pixelHeight)}" style="width:${String(view.pixelWidth)}px;height:${String(view.pixelHeight)}px" data-scale="${String(Math.round(view.scale * 1000) / 1000)}" xmlns="http://www.w3.org/2000/svg" focusable="false"><defs>${markers()}</defs><g class="ws-graph-bands" aria-hidden="true">${bands}${lanes}</g><g class="ws-graph-edges">${edges}</g><g class="ws-graph-nodes">${nodes}</g></svg>`;
+  // `data-upp` : unités du cadre par pixel affiché (glisser : déplacement en pixels × data-upp).
+  const upp = view.pixelWidth > 0 ? view.frameWidth / view.pixelWidth : 1;
+  const canvas = `<div class="ws-graph-canvas" tabindex="0" role="group" aria-label="${esc(mode === 'lanes' ? t.canvasLanes : t.canvas)}" aria-describedby="ws-graph-cap ws-graph-help" data-ws-graph="canvas" ${size} data-upp="${String(Math.round(upp * 10_000) / 10_000)}"${focusAttr} data-layout="${mode}">${svg}</div>`;
+  const focusNote = focus
+    ? `<p class="mu ws-graph-msg ws-graph-focusnote">${esc(t.focusNote(FOCUS_GROUPS[focus].map((group) => t.groups[group]).join(', '), focusHidden))}</p>`
+    : '';
+  if (!compact)
+    return `<section class="${sectionClass}" aria-label="${esc(title)}"${focusAttr}>${toolbar}${focusNote}${notes.join('')}<figure class="ws-graph-fig"><figcaption id="ws-graph-cap" class="mu">${esc(caption)}</figcaption>${canvas}<p id="ws-graph-help" class="mu ws-graph-help">${esc(t.help)}</p></figure>${relationLegend(ctx.lang)}<p class="note ws-graph-static">${esc(t.staticNote)}</p></section>`;
+  const hiddenNote =
+    userHidden > 0 ? `<p class="mu ws-graph-msg">${esc(t.hiddenByMenu(userHidden))}</p>` : '';
+  const more = `<details class="ws-graph-more" data-ws-details="graph-more"><summary>${esc(t.more)} <small class="mu ws-graph-sum">${esc(t.summary(graph.nodes.length, graph.edges.length))}</small></summary><div class="ws-graph-more-b"><p id="ws-graph-cap" class="mu ws-graph-msg">${esc(caption)}</p>${focusNote}${hiddenNote}${relationLegend(ctx.lang)}<p id="ws-graph-help" class="mu ws-graph-help">${esc(t.help)}</p><p class="note ws-graph-static">${esc(t.staticNote)}</p></div></details>`;
+  return `<section class="${sectionClass}" aria-label="${esc(title)}"${focusAttr}>${toolbar}${notes.length > 0 ? `<div class="ws-graph-msgs">${notes.join('')}</div>` : ''}${canvas}${more}</section>`;
 }
 
 // ── Détail de la sélection ───────────────────────────────────────────────────────────────────
@@ -1206,8 +1657,17 @@ export const INCIDENT_GRAPH_CSS = `
 .ws-graph svg .ws-selected,.ws-graph svg .ws-related{outline:none;background:none}
 .ws-graph-node.ws-selected .ws-graph-box{stroke:var(--qa-color-primary);stroke-width:3.5}
 .ws-graph-node.ws-related .ws-graph-box{fill:color-mix(in srgb,var(--qa-color-primary) 12%,var(--qa-color-surface))}
-.ws-graph svg .ws-dimmed{opacity:.3}
-.ws-graph svg .ws-graph-onpath.ws-dimmed{opacity:.65}
+/* Atténué (sélection ailleurs, ou hors du chemin d'erreur) : traits et bandes en retrait, libellés lisibles
+   (couleur atténuée à pleine opacité, ≥ 4,5:1 sur le fond du nœud) ; jamais d'opacité sur le groupe entier. */
+.ws-graph svg .ws-dimmed{opacity:1}
+.ws-graph svg .ws-graph-node.ws-dimmed .ws-graph-box,.ws-graph-errmode .ws-graph-node:not(.ws-graph-onpath):not(.ws-selected):not(.ws-related) .ws-graph-box{stroke-opacity:.4}
+.ws-graph svg .ws-graph-node.ws-dimmed .ws-graph-stripe,.ws-graph-errmode .ws-graph-node:not(.ws-graph-onpath):not(.ws-selected):not(.ws-related) .ws-graph-stripe{opacity:.4}
+.ws-graph svg .ws-graph-node.ws-dimmed .ws-graph-label,.ws-graph-errmode .ws-graph-node:not(.ws-graph-onpath):not(.ws-selected):not(.ws-related) .ws-graph-label{fill:var(--qa-color-muted)}
+.ws-graph svg .ws-graph-node.ws-graph-onpath.ws-dimmed .ws-graph-box{stroke-opacity:.75}
+.ws-graph svg .ws-graph-node.ws-graph-onpath.ws-dimmed .ws-graph-stripe{opacity:.75}
+.ws-graph svg .ws-graph-node.ws-graph-onpath.ws-dimmed .ws-graph-label{fill:var(--qa-color-text)}
+.ws-graph svg .ws-graph-edge.ws-dimmed{opacity:.3}
+.ws-graph svg .ws-graph-edge.ws-graph-onpath.ws-dimmed{opacity:.65}
 .ws-graph-edge{cursor:pointer;outline:none}
 .ws-graph-hit{fill:none;stroke:transparent;stroke-width:12}
 .ws-graph-line{fill:none;stroke-width:2}
@@ -1221,7 +1681,6 @@ export const INCIDENT_GRAPH_CSS = `
 .ws-graph-edge.ws-graph-onpath .ws-graph-line{stroke-width:5}
 .ws-graph-node.ws-graph-onpath .ws-graph-box{stroke-width:3.5;stroke:var(--qa-color-danger)}
 .ws-graph-errmode .ws-graph-edge:not(.ws-graph-onpath):not(.ws-selected):not(.ws-related){opacity:.35}
-.ws-graph-errmode .ws-graph-node:not(.ws-graph-onpath):not(.ws-selected):not(.ws-related){opacity:.6}
 .ws-graph-static{font-size:13px}
 .ws-graph-detail{display:flex;flex-direction:column;gap:8px;min-width:0}
 .ws-graph-detail h3{margin:0;font-size:15px;overflow-wrap:anywhere}
@@ -1246,9 +1705,77 @@ export const INCIDENT_GRAPH_CSS = `
 .ws-graph-reason{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:30ch;font-size:12px;overflow-wrap:anywhere}
 .ws-graph-tbl tr.ws-selected td{background:color-mix(in srgb,var(--qa-color-primary) 10%,transparent)}
 .ws-graph-tbl tr.ws-selected{outline:none}
+.ws-graph-compact{height:100%;min-height:0;gap:6px;container-type:inline-size}
+.ws-graph-compact .ws-graph-bar{position:relative;flex:none;flex-wrap:nowrap;gap:6px;padding:3px;min-width:0}
+.ws-graph-compact .ws-graph-zoom{flex:none;flex-wrap:nowrap;gap:4px}
+.ws-graph-compact .ws-graph-bar .btn,.ws-graph-compact .ws-graph-bar .chip{flex:none;min-height:28px;padding:0 8px;font-size:12px;white-space:nowrap;align-self:center;gap:5px}
+.ws-graph-compact .ws-graph-pct{min-width:40px;font-size:12px}
+.ws-graph-i{flex:none;width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.ws-graph-compact .ws-graph-bar .ws-graph-ico{min-width:28px;padding:0 6px}
+.ws-graph-max{margin-left:auto}
+.ws-graph-max[aria-pressed="true"]{background:var(--qa-color-primary);border-color:var(--qa-color-primary);color:var(--qa-color-surface)}
+.ws-graph-menu{flex:none}
+.ws-graph-menu-t{list-style:none;cursor:pointer;user-select:none}
+.ws-graph-menu-t::-webkit-details-marker{display:none}
+.ws-graph-menu-t::after{content:"";flex:none;width:0;height:0;border-top:5px solid currentColor;border-left:4px solid transparent;border-right:4px solid transparent;transition:transform .15s}
+.ws-graph-menu[open]>.ws-graph-menu-t::after{transform:rotate(180deg)}
+.ws-graph-menu-t.ws-graph-menu-some{border-color:var(--qa-color-primary);color:var(--qa-color-primary)}
+.ws-graph-menu-t:focus-visible,.ws-graph-compact .ws-graph-bar .btn:focus-visible,.ws-graph-compact .ws-graph-bar .chip:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px}
+.ws-graph-menu-b{position:absolute;z-index:6;top:calc(100% + 2px);right:3px;display:flex;flex-direction:column;align-items:stretch;gap:4px;min-width:150px;padding:6px;border:1px solid var(--qa-color-border-strong);border-radius:10px;background:var(--qa-color-surface);box-shadow:0 6px 18px color-mix(in srgb,var(--qa-color-text) 18%,transparent)}
+.ws-graph-compact .ws-graph-menu-b .chip{align-self:stretch;justify-content:flex-start;min-height:32px}
+.ws-graph-msgs{flex:none;display:flex;flex-direction:column;gap:4px;max-height:30%;overflow:auto}
+.ws-graph-compact .ws-graph-msgs .note,.ws-graph-compact .ws-graph-pathnote{padding:4px 10px}
+.ws-graph-compact .ws-graph-canvas{flex:1;min-height:0;overflow:auto;border-radius:8px}
+.ws-graph-empty{flex:1;min-height:0;overflow:auto}
+.ws-graph-more{flex:none;min-width:0}
+.ws-graph-compact .ws-graph-more{max-height:45%;overflow:auto}
+.ws-graph-more summary{cursor:pointer;min-height:28px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:13px;font-weight:600;list-style:none}
+.ws-graph-more summary::-webkit-details-marker{display:none}
+.ws-graph-more summary::before{content:"";flex:none;width:0;height:0;border-left:6px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+.ws-graph-more[open]>summary::before{transform:rotate(90deg)}
+.ws-graph-more summary:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px;border-radius:6px}
+.ws-graph-sum{font-weight:400;font-size:12px}
+.ws-graph-more-b{display:flex;flex-direction:column;gap:6px;padding:4px 0 2px}
+.ws-graph-disp{display:inline-flex;align-items:center;gap:6px;flex:none;font-size:13px;font-weight:600;color:var(--qa-color-muted)}
+.ws-graph-sel{min-height:28px;max-width:20ch;padding:0 6px;border:1px solid var(--qa-color-border-strong);border-radius:8px;background:var(--qa-color-surface);color:var(--qa-color-text);font:12px var(--qa-font-family);cursor:pointer}
+.ws-graph-sel:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:1px}
+.ws-graph-legend{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:2px 16px;list-style:none;margin:0;padding:0 4px;font-size:12px;color:var(--qa-color-muted)}
+.ws-graph-legend li{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.ws-graph-legline{display:inline-block;width:22px;border-top:2px solid var(--qa-color-muted)}
+.ws-graph-legline.ws-ge-observed{border-top:3px solid var(--qa-color-primary)}
+.ws-graph-legline.ws-ge-statically_resolved{border-top-color:var(--qa-color-success)}
+.ws-graph-legline.ws-ge-inferred{border-top:2px dashed var(--qa-color-warning)}
+.ws-graph-legline.ws-ge-unknown{border-top:2px dotted var(--qa-color-danger)}
+.ws-graph-lane{--ws-g-lane:var(--ws-g-http)}
+.ws-graph-lane.ws-gl-frontend{--ws-g-lane:var(--ws-g-front)}
+.ws-graph-lane.ws-gl-bff{--ws-g-lane:var(--ws-g-bff)}
+.ws-graph-lane.ws-gl-backend{--ws-g-lane:var(--ws-g-back)}
+.ws-graph-lane.ws-gl-data{--ws-g-lane:var(--ws-g-data)}
+.ws-graph-lane-bg{fill:var(--qa-color-surface);stroke:var(--qa-color-border)}
+.ws-graph-lane-head{fill:color-mix(in srgb,var(--ws-g-lane) 9%,var(--qa-color-surface));stroke:none}
+.ws-graph-lane-bar{fill:var(--ws-g-lane)}
+.ws-graph-lane-t{font:600 12px var(--qa-font-family);fill:var(--qa-color-text)}
+.ws-graph-lane-s{font:11px var(--qa-font-family);fill:var(--qa-color-muted)}
+.ws-graph-lanes .ws-graph-canvas{background:var(--qa-color-background)}
+@container (max-width:860px){
+  .ws-graph-compact .ws-graph-disp-t{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+}
+@container (max-width:760px){
+  .ws-graph-compact .ws-graph-bar .ws-graph-fit,.ws-graph-compact .ws-graph-bar .ws-graph-reset{min-width:28px;padding:0 6px}
+  .ws-graph-compact .ws-graph-bar .ws-graph-txt{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .ws-graph-compact .ws-graph-sel{max-width:13ch}
+}
+@container (max-width:600px){
+  .ws-graph-compact .ws-graph-bar{gap:4px}
+  .ws-graph-compact .ws-graph-bar .ws-graph-fit,.ws-graph-compact .ws-graph-bar .ws-graph-reset{min-width:28px;padding:0 6px}
+  .ws-graph-compact .ws-graph-txt{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+}
+@container (max-width:400px){
+  .ws-graph-compact .ws-graph-bar{flex-wrap:wrap}
+}
 @container (max-width:600px){
   .ws-graph-bar{gap:6px}
   .ws-graph-dl{grid-template-columns:minmax(0,1fr)}
 }
-@media (prefers-reduced-motion:reduce){.ws-graph *{transition:none!important}}
+@media (prefers-reduced-motion:reduce){.ws-graph *,.ws-graph-more summary::before,.ws-graph-menu-t::after{transition:none!important}}
 `;

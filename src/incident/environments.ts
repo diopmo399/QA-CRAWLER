@@ -7,12 +7,14 @@ import { stringify } from 'yaml';
 import { runProcess } from '../sdk/server/test-runs.js';
 import { redactText } from '../security/redactor.js';
 import { guardedFiles, type GuardedFiles } from './guarded-fs.js';
-import type {
-  EnvironmentCapabilities,
-  ExecutionEnvironmentConfig,
-  ExecutionTarget,
-  PolicyDecision,
-  PolicyOperation,
+import {
+  MAX_MEMORY_MB,
+  MIN_MEMORY_MB,
+  type EnvironmentCapabilities,
+  type ExecutionEnvironmentConfig,
+  type ExecutionTarget,
+  type PolicyDecision,
+  type PolicyOperation,
 } from './model.js';
 import { ScopeDeniedError, type ScopePolicy } from './scope-policy.js';
 
@@ -281,6 +283,12 @@ function mountedFiles(inner: GuardedFiles, mount: string): GuardedFiles {
       if (!inside(root, mount)) throw outside(root, 'LIST_DIR');
       return inner.list(root, options);
     },
+    async listDirectories(root, options) {
+      if (!inside(root, mount)) throw outside(root, 'LIST_DIR');
+      if (!inner.listDirectories)
+        throw new EnvironmentError('directory listing is not available', 'ENV_UNSUPPORTED');
+      return inner.listDirectories(root, options);
+    },
     get denied() {
       return [...extraDenied, ...inner.denied];
     },
@@ -374,6 +382,8 @@ class Adapter implements ExecutionEnvironmentAdapter {
       tests: java || node,
       logs,
       kubernetesJobs,
+      // La mémoire maximale n'est imposée que par le Job d'investigation (resources.limits.memory).
+      memoryLimit: this.target === 'ARO' && kubernetesJobs,
       limitations,
     };
   }
@@ -488,6 +498,8 @@ export function investigationJobManifest(input: {
   /** La PVC qui porte les dépôts (par défaut `qa-crawler-repositories`). */
   repositoriesClaim?: string;
   activeDeadlineSeconds?: number;
+  /** `limits.maxMemoryMb` du périmètre : la limite mémoire du conteneur (`<n>Mi`). */
+  maxMemoryMb?: number;
 }): string {
   const aro = input.config.aro;
   if (input.config.target !== 'ARO' || !aro)
@@ -504,6 +516,12 @@ export function investigationJobManifest(input: {
     throw new EnvironmentError(
       `${input.cwd} is outside the repositories mount ${aro.repositoriesMount}`,
       'ENV_ARO_MOUNT',
+    );
+  const memory = input.maxMemoryMb;
+  if (memory !== undefined && (!Number.isInteger(memory) || memory < MIN_MEMORY_MB || memory > MAX_MEMORY_MB))
+    throw new EnvironmentError(
+      `maxMemoryMb must be an integer between ${String(MIN_MEMORY_MB)} and ${String(MAX_MEMORY_MB)}`,
+      'ENV_LIMITS',
     );
   if (SHELLS.has(path.basename(input.command).toLowerCase()))
     throw new EnvironmentError(`${input.command} is a command interpreter`, 'ENV_SHELL');
@@ -557,8 +575,12 @@ export function investigationJobManifest(input: {
               workingDir: input.cwd,
               env: [{ name: 'QA_INCIDENT_ID', value: input.incidentId }],
               resources: {
-                requests: { cpu: '500m', memory: '1Gi' },
-                limits: { cpu: '2', memory: '3Gi' },
+                // La demande ne dépasse jamais la limite (Kubernetes refuserait le pod).
+                requests: {
+                  cpu: '500m',
+                  memory: memory !== undefined && memory < 1024 ? `${String(memory)}Mi` : '1Gi',
+                },
+                limits: { cpu: '2', memory: memory !== undefined ? `${String(memory)}Mi` : '3Gi' },
               },
               securityContext: {
                 allowPrivilegeEscalation: false,

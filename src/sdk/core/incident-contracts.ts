@@ -1,3 +1,6 @@
+import type { AiInvestigationState, HypothesisOrigin, InvestigationMemory } from './incident-ai-contracts.js';
+import type { TriggerInvestigationState } from './incident-trigger-contracts.js';
+
 /**
  * INCIDENT RECONSTRUCTION — le contrat commun. Un incident fonctionnel déclaré (« après Enregistrer,
  * l'application affiche une erreur HTTP 500 ») est délimité (périmètre), reproduit avec le moteur
@@ -35,6 +38,121 @@ export type IncidentState = (typeof INCIDENT_STATES)[number];
 
 export const INCIDENT_SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
 export type IncidentSeverity = (typeof INCIDENT_SEVERITIES)[number];
+
+/** La nature de l'incident, déclarée par la personne (sert au classement, jamais au diagnostic). */
+export const INCIDENT_KINDS = ['FUNCTIONAL', 'TECHNICAL', 'PERFORMANCE', 'SECURITY', 'DATA'] as const;
+export type IncidentKind = (typeof INCIDENT_KINDS)[number];
+
+/** Les groupes de la liste des incidents (onglets « Tous », « Ouverts », « En investigation », …). */
+export const INCIDENT_GROUPS = ['OPEN', 'INVESTIGATING', 'RESOLVED', 'CLOSED'] as const;
+export type IncidentGroup = (typeof INCIDENT_GROUPS)[number];
+
+/** Le groupe d'un état : ouvert (rien n'a encore tourné), en investigation, résolu (diagnostic posé), fermé. */
+export function incidentGroup(state: IncidentState): IncidentGroup {
+  switch (state) {
+    case 'DRAFT':
+    case 'SCOPED':
+      return 'OPEN';
+    case 'REPRODUCING':
+    case 'REPRODUCED':
+    case 'NOT_REPRODUCED':
+    case 'INVESTIGATING':
+      return 'INVESTIGATING';
+    case 'DIAGNOSED':
+    case 'INCONCLUSIVE':
+      return 'RESOLVED';
+    case 'CANCELLED':
+    case 'FAILED':
+      return 'CLOSED';
+  }
+}
+
+/** Les pièces jointes acceptées : captures et textes (journaux, exports), jamais d'exécutable. */
+export const ATTACHMENT_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'text/plain',
+  'application/json',
+] as const;
+export type AttachmentType = (typeof ATTACHMENT_TYPES)[number];
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_ATTACHMENTS = 10;
+/** Le nom d'une pièce jointe, après nettoyage (caractères). */
+export const MAX_ATTACHMENT_NAME = 120;
+
+/** L'envoi d'une pièce jointe : le contenu en base64 (le type déclaré est vérifié sur les octets). */
+export interface IncidentAttachmentInput {
+  name: string;
+  type: AttachmentType;
+  dataBase64: string;
+}
+
+/** Le contenu d'une pièce jointe : une image en URL `data:`, un texte masqué (valeurs sensibles). */
+export type IncidentAttachmentContent =
+  { id: string; type: AttachmentType; dataUrl: string } | { id: string; type: AttachmentType; text: string };
+
+/** L'application touchée, telle que saisie (caractères). */
+export const MAX_INCIDENT_APPLICATION = 120;
+
+/** Une pièce jointe de l'incident (le contenu est lu à part, par sa route). */
+export interface IncidentAttachment {
+  id: string;
+  /** Le nom donné par la personne, nettoyé (aucun chemin). */
+  name: string;
+  type: AttachmentType;
+  bytes: number;
+  addedAt: string;
+  addedBy: string;
+}
+
+/** Les sections du rapport, dans l'ordre ; un export peut n'en retenir qu'une partie. */
+export const REPORT_SECTIONS = [
+  'summary',
+  'environment',
+  'timeline',
+  'requests',
+  'graph',
+  'code',
+  'hypotheses',
+  'experiments',
+  'diagnosis',
+  'regression',
+  'ai',
+] as const;
+export type ReportSection = (typeof REPORT_SECTIONS)[number];
+export const REPORT_FORMATS = ['json', 'markdown', 'html', 'pdf'] as const;
+export type ReportFormat = (typeof REPORT_FORMATS)[number];
+
+/** La profondeur de l'arborescence de périmètre (route scope/tree) et son plafond de dossiers. */
+export const SCOPE_TREE_MAX_DEPTH = 4;
+export const SCOPE_TREE_DEFAULT_DEPTH = 3;
+export const SCOPE_TREE_MAX_NODES = 400;
+
+/** Les bornes de `limits.maxMemoryMb` (Mio). */
+export const MIN_MEMORY_MB = 64;
+export const MAX_MEMORY_MB = 16_384;
+
+/** Un dossier du dépôt d'une application, pour choisir le périmètre (lecture seule, profondeur bornée). */
+export interface ScopeTreeNode {
+  /** Chemin relatif à la racine du dépôt, séparé par « / » (vide : la racine). */
+  path: string;
+  name: string;
+  /** Inclus dans le périmètre (lui-même ou un dossier parent est dans `include`). */
+  included: boolean;
+  children: ScopeTreeNode[];
+  /** Des sous-dossiers existent au-delà de la profondeur lue. */
+  truncated?: boolean;
+}
+
+export interface ScopeTree {
+  applicationId: string;
+  root: ScopeTreeNode;
+  /** La profondeur lue (1..SCOPE_TREE_MAX_DEPTH). */
+  depth?: number;
+  /** Le plafond de SCOPE_TREE_MAX_NODES dossiers a été atteint : l'arborescence est partielle. */
+  capped?: boolean;
+}
 
 export const RELATION_STATUSES = ['OBSERVED', 'STATICALLY_RESOLVED', 'INFERRED', 'UNKNOWN'] as const;
 export type RelationStatus = (typeof RELATION_STATUSES)[number];
@@ -98,6 +216,11 @@ export interface ScopePermissions {
   openshift: 'NONE' | 'READ';
   /** Effets de bord (écritures, tests qui modifient des données) : jamais sans approbation explicite. */
   sideEffects: boolean;
+  /**
+   * Lecture de l'historique Git des dépôts du périmètre (journal, différences), en lecture seule, par le binaire
+   * `git` lancé sans interpréteur de commandes ; absent ou faux : refusé. Demande aussi `git` dans `allowedCommands`.
+   */
+  readGitHistory?: boolean;
 }
 
 export interface ResourceLimits {
@@ -106,6 +229,11 @@ export interface ResourceLimits {
   maxDurationMs: number;
   maxRequests: number;
   maxExperiments: number;
+  /**
+   * Mémoire maximale (Mio) du conteneur d'exécution : imposée au Job Kubernetes / OpenShift (ARO) ; en LOCAL
+   * et REMOTE, rien ne la fait respecter (l'interface le dit).
+   */
+  maxMemoryMb?: number;
 }
 
 export const SCOPE_EXTENSION_KINDS = [
@@ -206,6 +334,12 @@ export interface EnvironmentCapabilities {
   tests: boolean;
   logs: 'FILES' | 'OPENSHIFT' | 'FILES_AND_OPENSHIFT' | 'NONE';
   kubernetesJobs: boolean;
+  /**
+   * `limits.maxMemoryMb` est imposée : vrai seulement en ARO dans un cluster (elle est écrite dans
+   * `resources.limits.memory` du Job d'investigation). LOCAL et REMOTE : faux, rien ne la fait respecter.
+   * Absent (serveur plus ancien) : à lire comme faux.
+   */
+  memoryLimit?: boolean;
   /** Ce qui manque pour que la capacité soit utilisable (outil absent, namespace non configuré…). */
   limitations: string[];
 }
@@ -302,6 +436,50 @@ export interface ReproductionRun {
   screenshots: string[];
   trace?: string;
   error?: string;
+  /**
+   * La progression EN DIRECT d'une reproduction RUNNING, tirée des événements du moteur (début et fin de
+   * chaque étape). Servie depuis la mémoire du serveur par `incidents.get` (jamais écrite dans le fichier :
+   * la révision ne change pas pendant le rejeu) ; absente une fois le run terminé (les `actions` la remplacent)
+   * ou si le serveur a redémarré pendant le rejeu.
+   */
+  live?: ReproductionLive;
+}
+
+/** Le statut d'une étape en direct : RUNNING tant que le moteur la joue, puis celui qu'il a rapporté. */
+export const LIVE_STEP_STATUSES = ['RUNNING', 'PASSED', 'FAILED', 'BLOCKED', 'SKIPPED', 'MANUAL'] as const;
+export type LiveStepStatus = (typeof LIVE_STEP_STATUSES)[number];
+
+export interface ReproductionLiveStep {
+  /** Position dans le flow (1…). */
+  index: number;
+  /** Le genre d'étape du moteur (goto, click, fill, expect…). */
+  kind: string;
+  /** La description du moteur, sans valeur saisie. */
+  description: string;
+  status: LiveStepStatus;
+  /** Quand le moteur a commencé l'étape (absent pour une étape SKIPPED jamais commencée). */
+  startedAt?: string;
+  /** La durée mesurée par le moteur, à la fin de l'étape seulement. */
+  durationMs?: number;
+  /** La raison d'un échec ou d'un blocage (jamais pour une saisie). */
+  reason?: string;
+  /** Une capture écrite par le moteur pour cette étape, relative au dossier du run (incidents.screenshot). */
+  screenshot?: string;
+}
+
+export interface ReproductionLive {
+  /** Le flow en cours de rejeu. */
+  flow?: string;
+  /** Le nombre d'étapes du flow, annoncé par le moteur au début du flow. */
+  total?: number;
+  /** Les étapes commencées ou terminées, dans l'ordre ; aucune étape à venir n'est inventée. */
+  steps: ReproductionLiveStep[];
+  /** L'étape que le moteur joue en ce moment (RUNNING), absente entre deux étapes. */
+  current?: number;
+  /** Le dernier événement reçu du moteur. */
+  updatedAt: string;
+  /** La dernière capture écrite pendant le rejeu (relative au dossier du run). */
+  latestScreenshot?: string;
 }
 
 // ── Code ─────────────────────────────────────────────────────────────────────────────────────
@@ -468,10 +646,14 @@ export interface Hypothesis {
   /** Preuves favorables : ids de preuves, d'échanges, de symboles, avec le fait qu'elles établissent. */
   supporting: { ref: string; fact: string }[];
   contradicting: { ref: string; fact: string }[];
-  /** 0 à 1. */
+  /** 0 à 1. Indicative pour une hypothèse d'origine IA, plafonnée tant qu'aucune vérification ne la soutient. */
   confidence: number;
   verifications: ProposedVerification[];
   status: HypothesisStatus;
+  /** D'où vient l'hypothèse : une règle du moteur (défaut) ou un agent IA (toujours affichée comme telle). */
+  origin?: HypothesisOrigin;
+  /** Le run IA qui l'a proposée. */
+  aiRunId?: string;
 }
 
 export const EXPERIMENT_STATUSES = [
@@ -548,6 +730,9 @@ export interface IncidentEvent {
     | 'DIAGNOSIS'
     | 'REPORT'
     | 'REGRESSION'
+    | 'ATTACHMENT'
+    | 'AI'
+    | 'TRIGGER'
     | 'CANCELLED'
     | 'RESUMED';
   message: string;
@@ -565,6 +750,10 @@ export interface Investigation {
   frontendTrace?: FrontendTrace;
   /** La chronologie unifiée (actions, requêtes, réponses, console, erreurs, captures, journaux, vérifications). */
   timeline?: TimelineEvent[];
+  /** L'investigation assistée par l'IA : runs et réponses de l'assistant (absent en mode DETERMINISTIC). */
+  ai?: AiInvestigationState;
+  /** La découverte automatique des conditions déclenchantes (description interprétée, runs). */
+  trigger?: TriggerInvestigationState;
 }
 
 export interface IncidentInput {
@@ -575,6 +764,9 @@ export interface IncidentInput {
   /** Ce qui est attendu (« le livre est créé »). */
   expected: string;
   severity: IncidentSeverity;
+  /** L'application touchée, telle que la personne la nomme (« Catalogue »). */
+  application?: string;
+  kind?: IncidentKind;
   /** Le scénario de la bibliothèque qui mène au symptôme. */
   scenario?: string;
   /** L'environnement cible du projet (SDK) ; à défaut, le premier. */
@@ -591,10 +783,13 @@ export interface Incident {
   observed: string;
   expected: string;
   severity: IncidentSeverity;
+  application?: string;
+  kind?: IncidentKind;
   scenario?: string;
   environmentId?: string;
   execution: ExecutionEnvironmentConfig;
   scope: InvestigationScope;
+  attachments?: IncidentAttachment[];
   state: IncidentState;
   /** L'état avant une annulation : la reprise y revient quand c'est possible. */
   cancelledFrom?: IncidentState;
@@ -613,8 +808,11 @@ export interface IncidentSummary {
   title: string;
   severity: IncidentSeverity;
   state: IncidentState;
+  application?: string;
+  kind?: IncidentKind;
   scenario?: string;
   target: ExecutionTarget;
+  createdAt: string;
   updatedAt: string;
   diagnosis?: Diagnosis['status'];
 }
@@ -640,8 +838,52 @@ export interface InvestigationReport {
   experiments: Experiment[];
   diagnosis?: Diagnosis;
   regression?: RegressionTestProposal;
+  /** L'investigation IA (runs, synthèses), quand elle a eu lieu : des propositions, jamais le diagnostic. */
+  ai?: AiInvestigationState;
+  /** La mémoire de l'investigation approfondie (stratégies, rôles des hypothèses, contradictions, couverture, limites). */
+  aiMemory?: InvestigationMemory;
   /** Ce que le rapport ne peut pas affirmer (reproduction absente, analyse partielle…). */
   limitations: string[];
+}
+
+/**
+ * Un rapport restreint à des sections (`?sections=`) : les clés des sections écartées sont ABSENTES
+ * (jamais vides, pour ne pas dire « aucune requête » quand la section n'a simplement pas été demandée).
+ * Toujours présents : l'en-tête de l'incident et les limites. `summary` porte description, observé,
+ * attendu et scénario ; `environment` porte l'environnement et le périmètre.
+ */
+export type InvestigationReportPart = Pick<InvestigationReport, 'version' | 'generatedAt' | 'limitations'> & {
+  incident: Pick<InvestigationReport['incident'], 'id' | 'projectId' | 'title' | 'severity' | 'state'> &
+    Partial<Pick<InvestigationReport['incident'], 'description' | 'observed' | 'expected'>>;
+  sections: ReportSection[];
+} & Partial<
+    Pick<
+      InvestigationReport,
+      | 'environment'
+      | 'scope'
+      | 'scenario'
+      | 'timeline'
+      | 'requests'
+      | 'code'
+      | 'graph'
+      | 'hypotheses'
+      | 'experiments'
+      | 'diagnosis'
+      | 'regression'
+    >
+  >;
+
+/** Le test Playwright TypeScript généré depuis le flow du test de non-régression proposé (jamais exécuté ici). */
+export interface RegressionSpec {
+  language: 'typescript';
+  fileName: string;
+  code: string;
+  /** Le flow d'origine (nom du test proposé). */
+  flow: string;
+  steps: number;
+  assertions: number;
+  /** L'URL de départ utilisée pour `page.goto`. */
+  baseUrl: string;
 }
 
 // ── Investigation Workspace : contrats de l'interface ─────────────────────────────────────────
@@ -804,3 +1046,6 @@ export function incidentReproduction(
     (incident.scenario ? undefined : runs.at(-1))
   );
 }
+
+export * from './incident-ai-contracts.js';
+export * from './incident-trigger-contracts.js';

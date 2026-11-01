@@ -1,12 +1,17 @@
 import { redactText } from '../security/redactor.js';
 import { incidentReproduction } from './evidence.js';
+import { REPORT_SECTIONS } from './model.js';
 import type {
+  AiInvestigationRun,
   CodeSymbol,
   GraphEdge,
   HttpExchange,
   Incident,
   InvestigationGraph,
+  InvestigationMemory,
   InvestigationReport,
+  InvestigationReportPart,
+  ReportSection,
   ReproductionRun,
 } from './model.js';
 
@@ -97,6 +102,19 @@ function limitationsOf(incident: Incident, reproduction: ReproductionRun | undef
     if (!reproduction.trace)
       limitations.push('Pas de trace Playwright pour cette reproduction (browser.playwrightTrace).');
   }
+  const aiUnproven = investigation.hypotheses.filter(
+    (hypothesis) =>
+      hypothesis.origin === 'AI' && hypothesis.status !== 'CONFIRMED' && hypothesis.status !== 'REFUTED',
+  ).length;
+  if (aiUnproven > 0)
+    limitations.push(
+      `${String(aiUnproven)} hypothèse(s) d'origine IA non éprouvée(s) : des propositions, jamais un diagnostic.`,
+    );
+  const lastRun = investigation.ai?.runs.at(-1);
+  if (lastRun && lastRun.status !== 'DONE')
+    limitations.push(
+      `Le dernier run IA s'est terminé ${lastRun.status}${lastRun.stopReason ? ` (${lastRun.stopReason})` : ''} : ses conclusions sont partielles.`,
+    );
   if (!investigation.code) limitations.push("Le code n'a pas été analysé.");
   else {
     if (investigation.code.truncated.length > 0)
@@ -144,7 +162,11 @@ function redactRequest(request: HttpExchange): HttpExchange {
   };
 }
 
-export function buildReport(incident: Incident, now: Date): InvestigationReport {
+export function buildReport(
+  incident: Incident,
+  now: Date,
+  extra: { memory?: InvestigationMemory } = {},
+): InvestigationReport {
   const { investigation } = incident;
   const reproduction = incidentReproduction(incident);
   const graph = investigation.graph;
@@ -187,6 +209,8 @@ export function buildReport(incident: Incident, now: Date): InvestigationReport 
     experiments: investigation.experiments,
     ...(investigation.diagnosis ? { diagnosis: investigation.diagnosis } : {}),
     ...(investigation.regression ? { regression: investigation.regression } : {}),
+    ...(investigation.ai ? { ai: investigation.ai } : {}),
+    ...(extra.memory ? { aiMemory: extra.memory } : {}),
     limitations: limitationsOf(incident, reproduction),
   };
 }
@@ -246,15 +270,68 @@ function mermaid(graph: InvestigationGraph): string[] {
   return codeBlock(lines.join('\n'), 'mermaid');
 }
 
-export function reportMarkdown(report: InvestigationReport): string {
+/**
+ * Le rapport restreint à des sections : les clés des sections écartées sont retirées (jamais vidées).
+ * L'en-tête de l'incident et les limites restent toujours.
+ */
+export function reportPart(
+  report: InvestigationReport,
+  sections: readonly ReportSection[],
+): InvestigationReportPart {
+  const keep = new Set(sections);
+  const { description, observed, expected, ...header } = report.incident;
+  return {
+    version: report.version,
+    generatedAt: report.generatedAt,
+    sections: REPORT_SECTIONS.filter((section) => keep.has(section)),
+    incident: keep.has('summary') ? { ...header, description, observed, expected } : header,
+    ...(keep.has('summary') && report.scenario !== undefined ? { scenario: report.scenario } : {}),
+    ...(keep.has('environment') ? { environment: report.environment, scope: report.scope } : {}),
+    ...(keep.has('timeline') ? { timeline: report.timeline } : {}),
+    ...(keep.has('requests') ? { requests: report.requests } : {}),
+    ...(keep.has('code') ? { code: report.code } : {}),
+    ...(keep.has('graph') && report.graph ? { graph: report.graph } : {}),
+    ...(keep.has('hypotheses') ? { hypotheses: report.hypotheses } : {}),
+    ...(keep.has('experiments') ? { experiments: report.experiments } : {}),
+    ...(keep.has('diagnosis') && report.diagnosis ? { diagnosis: report.diagnosis } : {}),
+    ...(keep.has('regression') && report.regression ? { regression: report.regression } : {}),
+    ...(keep.has('ai') && report.ai ? { ai: report.ai } : {}),
+    ...(keep.has('ai') && report.aiMemory ? { aiMemory: report.aiMemory } : {}),
+    limitations: report.limitations,
+  };
+}
+
+/** Le rapport en Markdown ; `sections` (par défaut toutes) choisit les parties rendues. */
+export function reportMarkdown(report: InvestigationReport, sections?: readonly ReportSection[]): string {
   const out: string[] = [];
   const { incident } = report;
+  const want = (section: ReportSection): boolean => sections === undefined || sections.includes(section);
   out.push(`# Rapport d'investigation — ${escapeMarkdown(incident.title)}`, '');
   out.push(
     `_Généré le ${report.generatedAt}. Incident ${escapeMarkdown(incident.id)} (projet ${escapeMarkdown(incident.projectId)})._`,
     '',
   );
+  if (want('summary')) summaryMarkdown(report, out);
+  if (want('environment')) environmentMarkdown(report, out);
+  if (want('timeline')) timelineMarkdown(report, out);
+  if (want('requests')) requestsMarkdown(report, out);
+  if (want('code')) codeMarkdown(report, out);
+  if (want('graph')) graphMarkdown(report, out);
+  if (want('hypotheses')) hypothesesMarkdown(report, out);
+  if (want('experiments')) experimentsMarkdown(report, out);
+  if (want('diagnosis')) diagnosisMarkdown(report, out);
+  if (want('regression')) regressionMarkdown(report, out);
+  if (want('ai')) aiMarkdown(report, out);
 
+  out.push('## Limites', '');
+  if (report.limitations.length === 0) out.push('_Aucune._');
+  for (const limitation of report.limitations) out.push(`- ${escapeMarkdown(limitation)}`);
+  out.push('');
+  return out.join('\n');
+}
+
+function summaryMarkdown(report: InvestigationReport, out: string[]): void {
+  const { incident } = report;
   out.push('## Incident', '');
   out.push(`- **État** : ${incident.state}`);
   out.push(`- **Gravité** : ${incident.severity}`);
@@ -263,7 +340,9 @@ export function reportMarkdown(report: InvestigationReport): string {
   out.push(`- **Attendu** : ${escapeMarkdown(incident.expected)}`);
   if (report.scenario) out.push(`- **Scénario** : ${escapeMarkdown(report.scenario)}`);
   out.push('');
+}
 
+function environmentMarkdown(report: InvestigationReport, out: string[]): void {
   out.push('## Environnement', '');
   out.push(`- **Cible d'exécution** : ${report.environment.execution.target}`);
   if (report.environment.environmentId)
@@ -287,7 +366,9 @@ export function reportMarkdown(report: InvestigationReport): string {
   if (report.scope.endpoints.length > 0)
     out.push('', `- **Endpoints** : ${escapeMarkdown(report.scope.endpoints.join(', '))}`);
   out.push('');
+}
 
+function timelineMarkdown(report: InvestigationReport, out: string[]): void {
   out.push('## Chronologie', '');
   out.push(
     ...table(
@@ -296,7 +377,9 @@ export function reportMarkdown(report: InvestigationReport): string {
     ),
   );
   out.push('');
+}
 
+function requestsMarkdown(report: InvestigationReport, out: string[]): void {
   out.push('## Requêtes', '');
   out.push(
     ...table(
@@ -324,7 +407,9 @@ export function reportMarkdown(report: InvestigationReport): string {
       out.push('Corps de la réponse (masqué) :', '', ...codeBlock(request.responseBody, 'json'));
   }
   out.push('');
+}
 
+function codeMarkdown(report: InvestigationReport, out: string[]): void {
   out.push('## Code inspecté', '');
   out.push(
     ...table(
@@ -343,7 +428,9 @@ export function reportMarkdown(report: InvestigationReport): string {
       out.push(`- ${escapeMarkdown(denied.path)} — ${escapeMarkdown(denied.reason)}`);
   }
   out.push('');
+}
 
+function graphMarkdown(report: InvestigationReport, out: string[]): void {
   if (report.graph) {
     out.push("## Graphe d'investigation", '');
     out.push(
@@ -365,7 +452,9 @@ export function reportMarkdown(report: InvestigationReport): string {
     );
     out.push('');
   }
+}
 
+function hypothesesMarkdown(report: InvestigationReport, out: string[]): void {
   out.push('## Hypothèses', '');
   if (report.hypotheses.length === 0) out.push('_Aucune hypothèse._');
   for (const hypothesis of report.hypotheses) {
@@ -394,7 +483,9 @@ export function reportMarkdown(report: InvestigationReport): string {
     }
     out.push('');
   }
+}
 
+function experimentsMarkdown(report: InvestigationReport, out: string[]): void {
   out.push('## Vérifications', '');
   out.push(
     ...table(
@@ -409,7 +500,9 @@ export function reportMarkdown(report: InvestigationReport): string {
     ),
   );
   out.push('');
+}
 
+function diagnosisMarkdown(report: InvestigationReport, out: string[]): void {
   out.push('## Diagnostic', '');
   const diagnosis = report.diagnosis;
   if (!diagnosis) out.push('_Pas encore de diagnostic._');
@@ -434,7 +527,9 @@ export function reportMarkdown(report: InvestigationReport): string {
     }
   }
   out.push('');
+}
 
+function regressionMarkdown(report: InvestigationReport, out: string[]): void {
   out.push('## Test de non-régression', '');
   const regression = report.regression;
   if (!regression) out.push('_Aucun test proposé._');
@@ -451,10 +546,221 @@ export function reportMarkdown(report: InvestigationReport): string {
     out.push('', ...codeBlock(regression.flowYaml, 'yaml'));
   }
   out.push('');
+}
 
-  out.push('## Limites', '');
-  if (report.limitations.length === 0) out.push('_Aucune._');
-  for (const limitation of report.limitations) out.push(`- ${escapeMarkdown(limitation)}`);
+// ── Investigation IA ─────────────────────────────────────────────────────────────────────────
+
+const USAGE_LABELS: [keyof AiInvestigationRun['usage'], string][] = [
+  ['modelCalls', 'appels au modèle'],
+  ['toolCalls', "appels d'outils"],
+  ['inputTokens', 'jetons en entrée'],
+  ['outputTokens', 'jetons en sortie'],
+  ['files', 'fichiers lus'],
+  ['experiments', 'vérifications lancées'],
+];
+
+/**
+ * La section « Investigation IA » : ce que les agents ont proposé (jamais confirmé), avec le mode, la profondeur,
+ * l'arrêt et la consommation réels ; puis, quand la mémoire existe, les dix-neuf points de l'investigation
+ * approfondie (stratégies tentées ou non, rôles des hypothèses, contradictions, vérifications menées ou en
+ * attente, couverture par dimension, limites, permissions, raison d'arrêt). Rien n'est inventé : chaque ligne
+ * vient d'un run ou de la mémoire.
+ */
+function aiMarkdown(report: InvestigationReport, out: string[]): void {
+  out.push('## Investigation IA', '');
+  const ai = report.ai;
+  if (!ai || ai.runs.length === 0) {
+    out.push(
+      "_Aucune investigation IA n'a eu lieu : le diagnostic ci-dessus est entièrement déterministe._",
+      '',
+    );
+    return;
+  }
+  out.push(
+    '_Les hypothèses et relations proposées par les agents sont des propositions à vérifier ; seul le validateur déterministe confirme une cause._',
+    '',
+  );
+  for (const run of ai.runs) {
+    out.push(
+      `### Run ${escapeMarkdown(run.id)} — ${run.mode}${run.depth ? ` / ${run.depth}` : ''} — ${run.status}${run.stopReason ? ` (${run.stopReason})` : ''}`,
+      '',
+      `- **Lancé** : ${run.startedAt} par ${escapeMarkdown(run.startedBy)}${run.finishedAt ? `, terminé ${run.finishedAt}` : ''}`,
+      ...(run.provider || run.model
+        ? [`- **Fournisseur** : ${escapeMarkdown([run.provider, run.model].filter(Boolean).join(' / '))}`]
+        : []),
+      `- **Consommation** : ${USAGE_LABELS.map(([key, label]) => `${String(run.usage[key])} ${label}`).join(', ')}`,
+    );
+    if (run.error) out.push(`- **Erreur** : ${escapeMarkdown(run.error)}`);
+    out.push('', '**Agents**', '');
+    out.push(
+      ...table(
+        ['Agent', 'Statut', 'Résumé'],
+        run.steps.map((step) => [step.agent, step.status, step.summary ?? step.error]),
+      ),
+    );
+    if (run.findings.length > 0) {
+      out.push('', '**Constats**', '');
+      out.push(
+        ...table(
+          ['Agent', 'Couche', 'Base', 'Constat', 'Références'],
+          run.findings.map((finding) => [
+            finding.agent,
+            finding.layer,
+            finding.basis,
+            `${finding.title} — ${finding.summary}`,
+            finding.refs.map((ref) => ref.id).join(', '),
+          ]),
+        ),
+      );
+    }
+    if (run.hypothesisIds.length > 0)
+      out.push('', `- **Hypothèses proposées (origine IA, PROPOSED)** : ${run.hypothesisIds.join(', ')}`);
+    if (run.proposals.length > 0) {
+      out.push('', '**Vérifications proposées**', '');
+      out.push(
+        ...table(
+          ['Proposition', 'Hypothèse', 'Sorte', 'Effets de bord', 'Statut', 'Vérification planifiée'],
+          run.proposals.map((proposal) => [
+            proposal.id,
+            proposal.hypothesisId,
+            proposal.kind,
+            proposal.sideEffects ? 'avec' : 'sans',
+            proposal.status,
+            proposal.experimentId ?? proposal.refusal,
+          ]),
+        ),
+      );
+    }
+    if (run.synthesis) {
+      out.push('', '**Synthèse (proposition de l’agent)**', '', escapeMarkdown(run.synthesis.summary));
+      if (run.synthesis.ranking.length > 0)
+        out.push(`- **Ordre de vraisemblance** : ${run.synthesis.ranking.join(', ')}`);
+      if (run.synthesis.missing.length > 0)
+        out.push(`- **Ce qui manque** : ${run.synthesis.missing.map(escapeMarkdown).join(' ; ')}`);
+    }
+    if (run.limitations.length > 0) {
+      out.push('', '**Limites du run**', '');
+      for (const limitation of run.limitations) out.push(`- ${escapeMarkdown(limitation)}`);
+    }
+    out.push('');
+  }
+  if (ai.answers.length > 0)
+    out.push(
+      `- **Questions posées à l'assistant** : ${String(ai.answers.length)} (réponses conservées dans l'incident)`,
+      '',
+    );
+  const memory = report.aiMemory;
+  if (memory) deepMarkdown(memory, out);
+}
+
+function deepMarkdown(memory: InvestigationMemory, out: string[]): void {
+  out.push('### Investigation approfondie', '');
+  out.push(
+    `- **Profondeur / mode** : ${memory.depth} / ${memory.mode} — **état** : ${memory.status}${memory.stopReason ? ` (${memory.stopReason})` : ''}`,
+    `- **Budget** : ${String(memory.budget.maxIterations)} itération(s), ${String(memory.budget.maxModelCalls)} appel(s) au modèle, ${String(memory.budget.maxExperiments)} vérification(s)${memory.budget.extensions.length > 0 ? ` ; ${String(memory.budget.extensions.length)} prolongation(s) accordée(s)` : ''}`,
+    `- **Consommé** : ${String(memory.usage.iterations)} itération(s), ${String(memory.usage.modelCalls)} appel(s) au modèle, ${String(memory.usage.experiments)} vérification(s)`,
+    '',
+    '**Stratégies**',
+    '',
+    ...table(
+      ['Stratégie', 'Catégorie', 'Statut', 'Tentatives', 'Raison'],
+      memory.strategies.map((strategy) => [
+        strategy.name,
+        strategy.category,
+        strategy.status,
+        strategy.attempts,
+        strategy.reason,
+      ]),
+    ),
+    '',
+    '**Rôles des hypothèses (validateur déterministe et vérifications)**',
+    '',
+    ...table(
+      ['Hypothèse', 'Origine', 'Rôle', 'Vérifications', 'Inconnues'],
+      memory.explorations.map((exploration) => [
+        exploration.hypothesisId,
+        exploration.origin,
+        exploration.role,
+        exploration.verifications.length,
+        exploration.unknowns.join(' ; '),
+      ]),
+    ),
+    '',
+    '**Contradictions**',
+    '',
+    ...table(
+      ['Id', 'Hypothèse', 'Sorte', 'Statut', 'Question ouverte', 'Résumé'],
+      memory.contradictions.map((contradiction) => [
+        contradiction.id,
+        contradiction.hypothesisId,
+        contradiction.kind,
+        contradiction.status,
+        contradiction.openQuestion ? 'question' : 'constat',
+        contradiction.summary,
+      ]),
+    ),
+    '',
+    '**Vérifications générées**',
+    '',
+    ...table(
+      ['Id', 'Hypothèse', 'Sorte', 'Statut', 'Effets de bord', 'Approbation'],
+      memory.experiments.map((experiment) => [
+        experiment.id,
+        experiment.hypothesisId,
+        experiment.kind,
+        experiment.status,
+        experiment.sideEffects ? 'avec' : 'sans',
+        experiment.permissions.join(' ; ') || (experiment.status === 'PROPOSED' ? 'aucune' : undefined),
+      ]),
+    ),
+    '',
+    '**Couverture (par dimension, dénominateur explicite)**',
+    '',
+    ...table(
+      ['Dimension', 'État', 'Examiné', 'Total', 'Dénominateur', 'Raison'],
+      memory.coverage.map((entry) => [
+        entry.dimension,
+        entry.state,
+        entry.examined,
+        entry.total,
+        entry.denominator,
+        entry.reason,
+      ]),
+    ),
+  );
+  if (memory.permissions.length > 0) {
+    out.push('', '**Permissions (liées à une opération et à ses paramètres)**', '');
+    out.push(
+      ...table(
+        ['Quand', 'Qui', 'Opération', 'Paramètres', 'Décision'],
+        memory.permissions.map((permission) => [
+          permission.at,
+          permission.by,
+          permission.operation,
+          Object.entries(permission.parameters)
+            .map(([key, value]) => `${key}=${value}`)
+            .join(', '),
+          permission.decision,
+        ]),
+      ),
+    );
+  }
+  if (memory.limits.length > 0) {
+    out.push('', '**Limites atteintes**', '');
+    for (const limit of memory.limits)
+      out.push(
+        `- ${limit.at} : ${limit.limit} — ${String(limit.remaining.length)} piste(s) restante(s)${
+          limit.proposedExtension
+            ? ` ; prolongation proposée : ${Object.entries(limit.proposedExtension)
+                .map(([key, value]) => `${key} +${String(value)}`)
+                .join(', ')}`
+            : ''
+        }`,
+      );
+  }
+  if (memory.remaining.length > 0) {
+    out.push('', '**Ce qui reste à faire**', '');
+    for (const item of memory.remaining) out.push(`- ${escapeMarkdown(item)}`);
+  }
   out.push('');
-  return out.join('\n');
 }

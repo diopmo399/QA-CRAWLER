@@ -148,8 +148,30 @@ describe('Incident Reconstruction — the known incident with the real engine', 
 
   it('reproduces it with Playwright: the 500 of POST /api/books, observed on the click on Enregistrer', async () => {
     await api<Incident>('POST', `/${incident.id}/reproduce`);
+    // Le suivi en direct : pendant le rejeu, `incidents.get` sert la reproduction RUNNING avec l'étape que
+    // le moteur joue (`live.current`) et ses étapes commencées, sans changer la révision.
+    let seen: Incident['investigation']['reproductions'][number]['live'] | undefined;
+    const revisions = new Set<number>();
+    for (const started = Date.now(); !seen && Date.now() - started < 120_000;) {
+      const current = await api<Incident>('GET', `/${incident.id}`);
+      const run = current.investigation.reproductions.at(-1);
+      if (run?.status === 'RUNNING') {
+        revisions.add(current.revision);
+        if (run.live?.current !== undefined && run.live.steps.some((step) => step.status === 'RUNNING'))
+          seen = run.live;
+      }
+      if (current.state !== 'REPRODUCING') break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(seen?.steps.find((step) => step.status === 'RUNNING')?.index).toBe(seen?.current);
+    // Aucune durée n'est donnée pour une étape en cours ; aucune étape à venir n'est inventée.
+    expect(seen?.steps.find((step) => step.status === 'RUNNING')?.durationMs).toBeUndefined();
+    expect(seen?.steps.length ?? 0).toBeLessThanOrEqual(seen?.total ?? Number.MAX_SAFE_INTEGER);
+    expect(revisions.size).toBe(1);
     incident = await until(incident.id, (current) => current.state !== 'REPRODUCING');
     expect(incident.state).toBe('REPRODUCED');
+    // Terminée, la reproduction n'a plus de suivi en direct : ses actions le remplacent.
+    expect(incident.investigation.reproductions.at(-1)?.live).toBeUndefined();
     const reproduction = incident.investigation.reproductions.at(-1);
     expect(reproduction?.reproduced).toBe(true);
     const failing = reproduction?.requests.find(
@@ -279,48 +301,65 @@ describe('Incident Reconstruction — the known incident with the real engine', 
       const dashboard = page.locator('qa-crawler-dashboard');
       await dashboard.locator('select[data-action="project-context"]').selectOption(project.id);
       await dashboard.locator('.drawer [data-action="nav"][data-view="incidents"]').click();
-      await dashboard.locator('[data-action="inc-open"]', { hasText: 'Erreur 500' }).click();
-      // L'espace d'investigation : en-tête, progression, onglets, graphe full-stack à côté du contenu.
+      await dashboard.locator('tr.inc-l-row', { hasText: 'Erreur 500' }).first().click();
+      // L'espace d'investigation : en-tête, progression, onglets ; le graphe full-stack dans le panneau
+      // principal de l'onglet Traçabilité, avec les détails, les fichiers, l'éditeur et les preuves.
       await dashboard.locator('#ws-ux-tab-overview[aria-selected="true"]').waitFor();
-      const graph = dashboard.locator('[data-ws-zone="graph"] svg.ws-graph-svg');
+      await dashboard.locator('#ws-ux-tab-traceability').click();
+      await dashboard.locator('#ws-ux-sub-fullstack[aria-selected="true"]').waitFor();
+      const graph = dashboard.locator('[data-ws-zone="primary"] svg.ws-graph-svg');
       await graph.waitFor();
       expect(await graph.locator('.ws-graph-node').count()).toBeGreaterThan(5);
-      // La requête en échec, sélectionnée dans « Requêtes HTTP » : le graphe met en évidence ses nœuds,
-      // le panneau contextuel montre son détail.
-      await dashboard.locator('#ws-ux-tab-requests').click();
-      await dashboard.locator('.ws-timeline-path', { hasText: '/api/books' }).click();
+      for (const pane of ['details', 'tree', 'editor', 'evidence'])
+        await dashboard.locator(`[data-ws-pane="${pane}"]`).waitFor();
+      // La requête en échec, sélectionnée dans « HTTP » : le panneau des détails montre son détail, le
+      // graphe met en évidence ses nœuds.
+      await dashboard.locator('#ws-ux-sub-http').click();
       await dashboard
-        .locator('[data-ws-zone="graph"] .ws-graph-node[data-ws-state="related"]')
-        .first()
-        .waitFor();
-      expect(
-        await dashboard
-          .locator(
-            '[data-ws-zone="graph"] .ws-graph-node[data-ws-state="selected"], [data-ws-zone="graph"] .ws-graph-node.ws-related',
-          )
-          .count(),
-      ).toBeGreaterThan(0);
-      const aside = dashboard.locator('[data-ws-zone="aside"]');
+        .locator('[data-ws-zone="primary"] .ws-timeline-path', { hasText: '/api/books' })
+        .click();
+      const aside = dashboard.locator('[data-ws-zone="details"]');
       await aside.locator('.ws-timeline-detail').waitFor();
       const detail = (await aside.textContent()) ?? '';
       expect(detail).toContain('/api/books');
       expect(detail).toContain('500');
       expect(detail).toMatch(/NullPointerException/);
-      // Le code du backend, lu dans le périmètre : CatalogBookService, la ligne visée mise en évidence.
-      await dashboard.locator('#ws-ux-tab-backend').click();
-      const code = dashboard.locator('[data-ws-zone="main"] .ws-code');
+      await dashboard.locator('#ws-ux-sub-fullstack').click();
+      await dashboard
+        .locator('[data-ws-zone="primary"] .ws-graph-node[data-ws-state="related"]')
+        .first()
+        .waitFor();
+      expect(
+        await dashboard
+          .locator(
+            '[data-ws-zone="primary"] .ws-graph-node[data-ws-state="selected"], [data-ws-zone="primary"] .ws-graph-node.ws-related',
+          )
+          .count(),
+      ).toBeGreaterThan(0);
+      // Le code du backend, lu dans le périmètre : un nœud CatalogBookService de la vue Backend ouvre son
+      // fichier dans l'éditeur, la ligne visée mise en évidence.
+      await dashboard.locator('#ws-ux-sub-backend').click();
+      await dashboard.locator('#ws-ux-sub-backend[aria-selected="true"]').waitFor();
+      await dashboard
+        .locator('[data-ws-zone="primary"] .ws-graph-node[data-ref*="CatalogBookService.java"]')
+        .first()
+        .click();
+      const code = dashboard.locator('[data-ws-zone="editor"] .ws-code-scroll');
       await code.locator('.ws-code-sel').waitFor();
       expect(await code.getAttribute('data-file')).toMatch(/CatalogBookService\.java$/);
       expect(await code.textContent()).toContain('CatalogBookService');
       // Le diagnostic : une cause probable n'est jamais présentée comme confirmée.
       await dashboard.locator('#ws-ux-tab-diagnosis').click();
+      await dashboard.locator('#ws-ux-sub-diagnosis[aria-selected="true"]').waitFor();
       const diagnosis = (await dashboard.locator('#ws-ux-panel').textContent()) ?? '';
       expect(diagnosis).toMatch(/publisher/i);
       expect(diagnosis).toContain('Cause probable');
       expect(diagnosis).not.toContain('Cause racine confirmée');
-      expect(await dashboard.locator('#ws-ux-panel .ws-dx-diag').getAttribute('data-status')).toBe(
-        'PROBABLE',
-      );
+      expect(
+        await dashboard
+          .locator('#ws-ux-panel .ws-dx-board .ws-dx-boardhead .ws-dx-chip')
+          .getAttribute('data-status'),
+      ).toBe('PROBABLE');
       // La démonstration, depuis la liste : bandeau « Données de démonstration », actions désactivées.
       await dashboard.locator('[data-action="back"][data-to="incidents"]').click();
       await dashboard.locator('[data-action="inc-demo"]').first().click();

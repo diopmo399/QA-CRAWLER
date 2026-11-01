@@ -13,8 +13,29 @@ export interface GuardedFiles {
   readText(path: string): Promise<string>;
   /** Fichiers (chemins absolus, triés) portant l'une des extensions, sous `root`, dans le périmètre. */
   list(root: string, options: { extensions: string[] }): Promise<string[]>;
+  /**
+   * Les DOSSIERS sous `root` (aucun contenu de fichier lu), en largeur d'abord, jusqu'à `depth` niveaux
+   * et `maxNodes` dossiers ; chaque dossier passe par LIST_DIR. Les liens symboliques ne sont jamais suivis.
+   * Lève ScopeDeniedError si `root` lui-même est refusé.
+   */
+  listDirectories?(root: string, options: { depth: number; maxNodes: number }): Promise<DirectoryListing>;
   readonly denied: { path: string; reason: string }[];
   readonly truncated: string[];
+}
+
+/** Un dossier listé : chemin relatif à la racine demandée (« / »), vide pour la racine. */
+export interface DirectoryNode {
+  path: string;
+  name: string;
+  children: DirectoryNode[];
+  /** Des sous-dossiers existent au-delà de la profondeur ou du plafond. */
+  truncated?: boolean;
+}
+
+export interface DirectoryListing {
+  root: DirectoryNode;
+  /** Le plafond de dossiers a été atteint : la liste est partielle. */
+  capped: boolean;
 }
 
 /** Dossiers jamais parcourus : dépendances, sorties de build, métadonnées de gestion de versions. */
@@ -28,6 +49,9 @@ const SKIPPED_DIRECTORIES = new Set([
   '.svn',
   '.hg',
 ]);
+
+/** En plus, pour choisir le périmètre : configuration d'IDE et rapports de couverture. */
+const TREE_SKIPPED_DIRECTORIES = new Set([...SKIPPED_DIRECTORIES, '.idea', 'coverage']);
 
 /** Refus attendus pendant un parcours (hors des dossiers inclus) : ils ne sont pas des refus à signaler. */
 const SILENT_RULES = new Set(['path.outside-include']);
@@ -153,9 +177,82 @@ export function guardedFiles(policy: ScopePolicy): GuardedFiles {
     return found.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   }
 
+  async function listDirectories(
+    root: string,
+    options: { depth: number; maxNodes: number },
+  ): Promise<DirectoryListing> {
+    const start = await policy.check({ kind: 'LIST_DIR', path: root });
+    if (!start.allowed || start.resolvedPath === undefined) {
+      recordDenied(root, start);
+      throw new ScopeDeniedError(start);
+    }
+    const base = path.resolve(root);
+    const top: DirectoryNode = { path: '', name: path.basename(base), children: [] };
+    const visited = new Set<string>([start.resolvedPath]);
+    let count = 0;
+    let capped = false;
+
+    /** Les sous-dossiers autorisés d'un dossier (nom, chemin demandé, chemin réel), triés. */
+    const subdirectories = async (
+      requested: string,
+      real: string,
+    ): Promise<{ name: string; requested: string; real: string }[]> => {
+      let entries;
+      try {
+        entries = await readdir(real, { withFileTypes: true });
+      } catch {
+        return [];
+      }
+      entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      const found: { name: string; requested: string; real: string }[] = [];
+      for (const entry of entries) {
+        // Un lien symbolique n'est jamais suivi (boucles, sortie du dépôt) : isDirectory() est faux pour lui.
+        if (!entry.isDirectory() || TREE_SKIPPED_DIRECTORIES.has(entry.name)) continue;
+        const full = path.join(requested, entry.name);
+        const decision = await policy.check({ kind: 'LIST_DIR', path: full });
+        if (decision.allowed && decision.resolvedPath !== undefined && !visited.has(decision.resolvedPath))
+          found.push({ name: entry.name, requested: full, real: decision.resolvedPath });
+        else if (!decision.allowed && !SILENT_RULES.has(decision.rule)) recordDenied(full, decision);
+      }
+      return found;
+    };
+
+    let level: { node: DirectoryNode; requested: string; real: string }[] = [
+      { node: top, requested: base, real: start.resolvedPath },
+    ];
+    for (let depth = 1; level.length > 0; depth += 1) {
+      const next: typeof level = [];
+      for (const current of level) {
+        const children = await subdirectories(current.requested, current.real);
+        if (children.length === 0) continue;
+        if (depth > options.depth || capped) {
+          current.node.truncated = true;
+          continue;
+        }
+        for (const child of children) {
+          if (count >= options.maxNodes) {
+            capped = true;
+            current.node.truncated = true;
+            break;
+          }
+          count += 1;
+          visited.add(child.real);
+          const relative = path.relative(base, child.requested).split(path.sep).join('/');
+          const node: DirectoryNode = { path: relative, name: child.name, children: [] };
+          current.node.children.push(node);
+          next.push({ node, requested: child.requested, real: child.real });
+        }
+      }
+      level = next;
+    }
+    if (capped) recordTruncated(`${root} : limite de ${String(options.maxNodes)} dossiers atteinte.`);
+    return { root: top, capped };
+  }
+
   return {
     readText,
     list,
+    listDirectories,
     get denied() {
       return denied;
     },

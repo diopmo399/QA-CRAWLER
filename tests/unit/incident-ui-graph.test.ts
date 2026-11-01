@@ -12,13 +12,22 @@ import {
   emptyGraphUi,
   fitScale,
   errorPath,
+  GRAPH_VIEWPORT_STEP,
+  graphHidden,
   graphKeyAction,
+  graphLanesLayout,
   graphLayout2,
+  GRAPH_LAYOUTS,
   graphScalePercent,
   graphViewBox,
   groupOf,
   INCIDENT_GRAPH_CSS,
+  isGraphLayout,
+  LANE_HEAD,
+  laneOf,
+  layoutGraph,
   NODE_H,
+  NODE_W,
   READABLE_GRAPH_SCALE,
   reduceGraph,
   renderGraph,
@@ -342,7 +351,11 @@ const tagOf = (html: string, kind: 'node' | 'edge', ref: string): string => {
   const start = html.lastIndexOf('<g ', index);
   return html.slice(start, html.indexOf('>', index) + 1);
 };
-const svgOf = (html: string): string => html.slice(html.indexOf('<svg'), html.indexOf('</svg>'));
+/** Le dessin du graphe (pas les icônes de la barre d'outils). */
+const svgOf = (html: string): string => {
+  const start = html.indexOf('<svg class="ws-graph-svg"');
+  return html.slice(start, html.indexOf('</svg>', start));
+};
 
 /** La liste des mots proscrits, écrite à l'envers pour ne pas les citer dans le dépôt. */
 const FORBIDDEN = new RegExp(
@@ -595,7 +608,14 @@ describe('incident graph — view reducer', () => {
   });
 
   it('fits, resets, toggles layers and the error path; ignores other actions', () => {
-    const ui: GraphUi = { zoom: 2.5, offsetX: 30, offsetY: -12, hidden: ['BFF'], errorPath: true };
+    const ui: GraphUi = {
+      zoom: 2.5,
+      offsetX: 30,
+      offsetY: -12,
+      hidden: ['BFF'],
+      errorPath: true,
+      layout: 'columns',
+    };
     expect(reduceGraph(ui, 'ws-graph-fit', {})).toEqual({ ...ui, zoom: 1, offsetX: 0, offsetY: 0 });
     expect(reduceGraph(ui, 'ws-graph-reset', {})).toEqual(emptyGraphUi());
     expect(reduceGraph(ui, 'ws-graph-layer', { layer: 'BFF' })?.hidden).toEqual([]);
@@ -829,6 +849,37 @@ describe('incident graph — rendering and selection', () => {
     expect(tagOf(byRequest, 'node', N.request.id)).toContain('ws-related');
   });
 
+  it('dims without making labels unreadable: strokes fade, labels turn muted at full opacity', () => {
+    const css = INCIDENT_GRAPH_CSS;
+    // Le `.ws-dimmed` commun (opacité) est neutralisé dans le SVG : aucune opacité de groupe sur un nœud.
+    expect(css).toContain('.ws-graph svg .ws-dimmed{opacity:1}');
+    expect(css).not.toMatch(/\.ws-graph svg \.ws-dimmed\{opacity:\.[0-9]/);
+    expect(css).not.toMatch(/\.ws-graph-node[^{,]*\)\{opacity:/);
+    expect(css).not.toMatch(/\.ws-graph-node(\.[a-z-]+)*\{opacity:/);
+    // Traits et bande de couleur en retrait ; le libellé passe en couleur atténuée, à pleine opacité.
+    expect(css).toMatch(
+      /\.ws-graph svg \.ws-graph-node\.ws-dimmed \.ws-graph-box,[^{]+\{stroke-opacity:\.4\}/,
+    );
+    expect(css).toMatch(/\.ws-graph svg \.ws-graph-node\.ws-dimmed \.ws-graph-stripe,[^{]+\{opacity:\.4\}/);
+    expect(css).toMatch(
+      /\.ws-graph svg \.ws-graph-node\.ws-dimmed \.ws-graph-label,[^{]+\{fill:var\(--qa-color-muted\)\}/,
+    );
+    // Hors du chemin d'erreur : le même retrait (et non plus une opacité de groupe).
+    expect(css).toContain(
+      '.ws-graph-errmode .ws-graph-node:not(.ws-graph-onpath):not(.ws-selected):not(.ws-related) .ws-graph-label{fill:var(--qa-color-muted)}',
+    );
+    // Sur le chemin d'erreur, un nœud atténué reste plus marqué, son libellé garde la couleur du texte.
+    expect(css).toContain(
+      '.ws-graph svg .ws-graph-node.ws-graph-onpath.ws-dimmed .ws-graph-box{stroke-opacity:.75}',
+    );
+    expect(css).toContain(
+      '.ws-graph svg .ws-graph-node.ws-graph-onpath.ws-dimmed .ws-graph-label{fill:var(--qa-color-text)}',
+    );
+    // Les relations atténuées (pas de texte) gardent une opacité réduite.
+    expect(css).toContain('.ws-graph svg .ws-graph-edge.ws-dimmed{opacity:.3}');
+    expect(css).toContain('.ws-graph svg .ws-graph-edge.ws-graph-onpath.ws-dimmed{opacity:.65}');
+  });
+
   it('shows an empty state without graph, and English texts', () => {
     const empty = renderGraph(ctxOf({ incident: incidentOf(null) }), emptyGraphUi());
     expect(empty).toContain('Le graphe apparaît après l’analyse');
@@ -1037,5 +1088,681 @@ describe('incident graph — keyboard: a single tab stop among the nodes', () =>
     });
     expect(stops(hidden)).toHaveLength(1);
     expect(stops(hidden)).not.toContain(esc(N.controller.id));
+  });
+});
+
+describe('incident graph — workspace pane: viewport fit', () => {
+  it('fits both dimensions of the measured frame, between the readable minimum and 100 %', () => {
+    const pane = { width: 900, height: 380 };
+    expect(fitScale(1000, 300, pane)).toBeCloseTo(0.9);
+    expect(fitScale(1000, 300, { width: 900, height: 270 })).toBeCloseTo(0.9);
+    expect(fitScale(1000, 600, pane)).toBe(READABLE_GRAPH_SCALE);
+    expect(fitScale(500, 200, pane)).toBe(1);
+    expect(fitScale(2152, 500, pane)).toBe(READABLE_GRAPH_SCALE);
+    expect(fitScale(1000, undefined, pane)).toBeCloseTo(0.9);
+    // Une mesure inutilisable : la vue ajustée historique (largeur visée).
+    expect(fitScale(1000, 300, { width: 0, height: 380 })).toBeCloseTo(0.96);
+    expect(fitScale(1000, 300, { width: Number.NaN, height: 380 })).toBeCloseTo(0.96);
+    expect(fitScale(0, 300, pane)).toBe(1);
+  });
+
+  it('fills the pane with the SVG when the graph is smaller, scrolls (never below 85 %) when larger', () => {
+    const small = graphViewBox(
+      { width: 600, height: 200 },
+      { ...emptyGraphUi(), viewport: { width: 900, height: 380 } },
+    );
+    expect(small.scale).toBe(1);
+    expect(small.pixelWidth).toBe(900);
+    expect(small.pixelHeight).toBe(380);
+    expect(small.width).toBe(900);
+    // Le graphe est centré dans le cadre (le viewBox déborde du graphe de part et d'autre).
+    expect(small.x).toBe(-150);
+    expect(small.y).toBe(-90);
+    const fitted = graphViewBox(
+      { width: 1000, height: 300 },
+      { ...emptyGraphUi(), viewport: { width: 900, height: 380 } },
+    );
+    expect(fitted.scale).toBeCloseTo(0.9);
+    expect(fitted.pixelWidth).toBe(900);
+    expect(fitted.pixelHeight).toBe(380);
+    expect(graphScalePercent(fitted)).toBe(90);
+    const large = graphViewBox(
+      { width: 2152, height: 500 },
+      { ...emptyGraphUi(), viewport: { width: 900, height: 380 } },
+    );
+    expect(large.scale).toBe(READABLE_GRAPH_SCALE);
+    expect(large.pixelWidth).toBe(Math.round(2152 * READABLE_GRAPH_SCALE));
+    expect(large.pixelHeight).toBe(Math.round(500 * READABLE_GRAPH_SCALE));
+    expect(large.pixelWidth / large.width).toBeCloseTo(large.scale, 3);
+    // Zoom : le viewBox se resserre dans un cadre de même taille ; en dessous, le cadre rétrécit.
+    const zoomed = graphViewBox(
+      { width: 1000, height: 300 },
+      { zoom: 2, offsetX: 0, offsetY: 0, viewport: { width: 900, height: 380 } },
+    );
+    expect(zoomed.pixelWidth).toBe(900);
+    expect(zoomed.width).toBeCloseTo(500);
+    expect(graphScalePercent(zoomed)).toBe(180);
+    const reduced = graphViewBox(
+      { width: 2152, height: 500 },
+      { zoom: 0.5, offsetX: 0, offsetY: 0, viewport: { width: 900, height: 380 } },
+    );
+    expect(reduced.scale).toBeLessThan(READABLE_GRAPH_SCALE);
+    expect(reduced.pixelWidth).toBe(Math.round(large.pixelWidth / 2));
+  });
+
+  it('stores the measured frame through ws-graph-viewport, ignoring small or invalid changes', () => {
+    const ui = emptyGraphUi();
+    const measured = reduceGraph(ui, 'ws-graph-viewport', { w: '880.4', h: '312.6' });
+    expect(measured?.viewport).toEqual({ width: 880, height: 313 });
+    if (!measured) throw new Error('not handled');
+    expect(GRAPH_VIEWPORT_STEP).toBe(8);
+    // Moins de 8 px dans les deux sens : le même objet (le contrôleur ne redessine pas).
+    expect(reduceGraph(measured, 'ws-graph-viewport', { w: '886', h: '306' })).toBe(measured);
+    expect(reduceGraph(measured, 'ws-graph-viewport', { w: '888', h: '313' })?.viewport).toEqual({
+      width: 888,
+      height: 313,
+    });
+    expect(reduceGraph(measured, 'ws-graph-viewport', { w: '880', h: '200' })?.viewport?.height).toBe(200);
+    for (const bad of [{}, { w: '0', h: '300' }, { w: '-4', h: '300' }, { w: 'abc', h: '300' }, { w: '900' }])
+      expect(reduceGraph(measured, 'ws-graph-viewport', bad)).toBe(measured);
+    // La mesure survit aux autres actions, réinitialisation comprise (ce n'est pas un choix de vue).
+    const zoomed = reduceGraph(measured, 'ws-graph-zoom', { dir: 'in' });
+    expect(zoomed?.viewport).toEqual(measured.viewport);
+    expect(reduceGraph({ ...measured, zoom: 3 }, 'ws-graph-fit', {})).toEqual({
+      ...emptyGraphUi(),
+      viewport: measured.viewport,
+    });
+    expect(reduceGraph({ ...measured, zoom: 3, hidden: ['BFF'] }, 'ws-graph-reset', {})).toEqual({
+      ...emptyGraphUi(),
+      viewport: measured.viewport,
+    });
+    expect(reduceGraph(emptyGraphUi(), 'ws-graph-reset', {})).toEqual(emptyGraphUi());
+    expect(reduceGraph(measured, 'ws-graph-layer', { layer: 'DATA' })?.viewport).toEqual(measured.viewport);
+  });
+
+  it('keeps the point under the pointer in place when zooming in a measured frame', () => {
+    const layout = { width: 600, height: 200 };
+    const ui: GraphUi = { ...emptyGraphUi(), viewport: { width: 900, height: 380 } };
+    const before = graphViewBox(layout, ui);
+    const pointX = before.x + 0.8 * before.width;
+    const pointY = before.y + 0.3 * before.height;
+    const next = reduceGraph(ui, 'ws-graph-zoom', { dir: 'in', fx: '0.8', fy: '0.3', w: '600', h: '200' });
+    if (!next) throw new Error('not handled');
+    const after = graphViewBox(layout, next);
+    expect(after.x + 0.8 * after.width).toBeCloseTo(pointX, 5);
+    expect(after.y + 0.3 * after.height).toBeCloseTo(pointY, 5);
+  });
+
+  it('renders the measured fit: SVG pixel size, real scale, Ajuster hint and units per pixel for the drag', () => {
+    const viewport = { width: 900, height: 300 };
+    const layout = graphLayout2(catalogueGraph());
+    const view = graphViewBox(layout, { ...emptyGraphUi(), viewport });
+    const html = renderGraph(ctxOf(), { ...emptyGraphUi(), viewport }, { compact: true });
+    expect(html).toContain(`width="${String(view.pixelWidth)}" height="${String(view.pixelHeight)}"`);
+    expect(view.pixelHeight).toBeGreaterThanOrEqual(300);
+    expect(html).toContain(`>${String(graphScalePercent(view))} %</span>`);
+    expect(html).toContain('Vue ajustée : tout le graphe à 85 %');
+    expect(html).toMatch(/data-upp="[\d.]+"/);
+    const upp = Number(/data-upp="([\d.]+)"/.exec(html)?.[1]);
+    expect(upp).toBeCloseTo(view.frameWidth / view.pixelWidth, 3);
+    // Un graphe qui tient : le SVG prend la taille du cadre, à 100 % au plus.
+    const tiny = renderGraph(
+      ctxOf(),
+      { ...emptyGraphUi(), viewport: { width: 4000, height: 1200 } },
+      { compact: true },
+    );
+    expect(tiny).toContain('width="4000" height="1200"');
+    expect(tiny).toContain('>100 %</span>');
+  });
+});
+
+describe('incident graph — workspace pane: compact rendering', () => {
+  it('puts every command on one compact toolbar, with « Plein écran » acting on the primary pane', () => {
+    const html = renderGraph(ctxOf(), emptyGraphUi(), { compact: true });
+    expect(html).toContain('class="ws-graph ws-graph-compact"');
+    const bar = html.slice(html.indexOf('<div class="ws-graph-bar"'), html.indexOf('data-ws-graph="canvas"'));
+    for (const action of [
+      'ws-graph-zoom',
+      'ws-graph-fit',
+      'ws-graph-reset',
+      'ws-graph-errors',
+      'ws-graph-layer',
+    ])
+      expect(bar).toContain(`data-action="${action}"`);
+    // « Ajuster » et « Réinitialiser » : une icône décorative et leur nom (masqué visuellement si étroit).
+    expect(bar).toMatch(
+      /data-action="ws-graph-fit" title="Vue ajustée : [^"]+"><svg class="ws-graph-i"[^>]* aria-hidden="true" focusable="false">.*?<\/svg><span class="ws-graph-txt">Ajuster<\/span><\/button>/,
+    );
+    expect(bar).toMatch(
+      /data-action="ws-graph-reset" title="Réinitialiser"><svg class="ws-graph-i"[^>]* aria-hidden="true"[^>]*>.*?<\/svg><span class="ws-graph-txt">Réinitialiser<\/span><\/button>/,
+    );
+    expect(bar).toContain('>Chemin d’erreur</button>');
+    expect(bar).toMatch(/ %<\/span>/);
+    // Pas de libellé « Afficher : » dans le panneau : les couches sont dans le menu « Couches ».
+    expect(bar).not.toContain('Afficher :');
+    // « Plein écran » : bouton bascule à icône, nom constant, état pressé quand le panneau est agrandi.
+    expect(bar).toMatch(
+      /<button type="button" class="btn small ws-graph-ico ws-graph-max" data-action="ws-pane" data-pane="primary" data-op="max" aria-pressed="false" aria-label="Plein écran" title="Afficher le graphe sur tout l’espace de travail \(Échap pour revenir\)"><svg class="ws-graph-i"[^>]*aria-hidden="true"/,
+    );
+    const max = renderGraph(ctxOf(), emptyGraphUi(), { compact: true, maximized: true });
+    expect(max).toContain(
+      'data-action="ws-pane" data-pane="primary" data-op="restore" aria-pressed="true" aria-label="Plein écran" title="Rendre au graphe sa place dans l’espace de travail"',
+    );
+    expect(max).not.toContain('data-op="max"');
+    // Chaque bouton à icône a un nom : texte (masqué visuellement) ou aria-label.
+    for (const button of bar.match(/<button[^>]*>.*?<\/button>/g) ?? [])
+      expect(
+        button.includes('aria-label="') ||
+          /<span class="ws-graph-txt">[^<]+</.test(button) ||
+          />[^<]+<\/button>$/.test(button),
+      ).toBe(true);
+    // Le rendu historique n'a ni bouton de panneau, ni menu, ni icône.
+    const full = renderGraph(ctxOf(), emptyGraphUi());
+    expect(full).not.toContain('data-action="ws-pane"');
+    expect(full).not.toContain('ws-graph-menu');
+    expect(full).not.toContain('ws-graph-i');
+    expect(full).toContain('>Ajuster</button>');
+    expect(full).toContain('Afficher :');
+    const en = renderGraph(ctxOf({ lang: 'en' }), emptyGraphUi(), { compact: true });
+    expect(en).toContain('aria-label="Full screen"');
+    expect(en).toContain('<span class="ws-graph-txt">Fit</span>');
+    expect(en).toContain('>Layers (4/4)</summary>');
+    expect(en).toContain('Legend and help');
+  });
+
+  it('moves the layer toggles into a « Couches (n/m) » disclosure menu that keeps its state', () => {
+    const html = renderGraph(ctxOf(), { ...emptyGraphUi(), hidden: ['BFF'] }, { compact: true });
+    const menu = html.slice(html.indexOf('<details class="ws-graph-menu"'), html.indexOf('</details>') + 10);
+    // Un volet nommé (état ouvert gardé au redessin par le contrôleur), fermé par défaut.
+    expect(menu).toMatch(/^<details class="ws-graph-menu" data-ws-details="graph-layers" data-ws-menu="">/);
+    expect(menu).not.toMatch(/<details[^>]* open/);
+    // Son résumé est le bouton (état déplié natif), avec le compte des couches dessinées ; signalé quand
+    // une couche est masquée ; `data-ws-graph` y ramène le focus après un redessin.
+    expect(menu).toContain(
+      '<summary class="btn small ws-graph-menu-t ws-graph-menu-some" data-ws-graph="layers" title="Choisir les couches dessinées dans le graphe">Couches (3/4)</summary>',
+    );
+    expect(menu).toContain('<div class="ws-graph-menu-b" role="group" aria-label="Couches dessinées">');
+    // Chaque couche reste un bouton bascule avec son point de couleur.
+    for (const [layer, pressed] of [
+      ['FRONTEND', 'true'],
+      ['BFF', 'false'],
+      ['BACKEND', 'true'],
+      ['DATA', 'true'],
+    ] as const)
+      expect(menu).toMatch(
+        new RegExp(
+          `<button type="button" class="chip ws-graph-layer ws-gg-${layer.toLowerCase()}" data-action="ws-graph-layer" data-layer="${layer}" aria-pressed="${pressed}" title="[^"]+"><span class="ws-graph-dot" aria-hidden="true"></span>`,
+        ),
+      );
+    expect(renderGraph(ctxOf(), emptyGraphUi(), { compact: true })).toContain(
+      '<summary class="btn small ws-graph-menu-t" data-ws-graph="layers"',
+    );
+    // Les vues restreintes ne proposent que leurs couches, et comptent sur elles.
+    const backend = renderGraph(
+      ctxOf(),
+      { ...emptyGraphUi(), hidden: ['BFF'] },
+      { compact: true, focus: 'BACKEND' },
+    );
+    expect(backend).toContain('>Couches (2/2)</summary>');
+    expect(backend).not.toContain('ws-graph-menu-some');
+    const bff = renderGraph(ctxOf(), emptyGraphUi(), { compact: true, focus: 'BFF' });
+    expect(bff).toContain('>Couches (1/1)</summary>');
+    expect(bff.match(/data-action="ws-graph-layer"/g)).toHaveLength(1);
+    // Le compte des nœuds masqués nomme le menu.
+    expect(html).toContain('6 nœud(s) masqué(s) par le menu « Couches ».');
+  });
+
+  it('keeps the compact toolbar on one line without horizontal scrolling down to 400 px', () => {
+    const css = INCIDENT_GRAPH_CSS;
+    expect(css).toContain(
+      '.ws-graph-compact .ws-graph-bar{position:relative;flex:none;flex-wrap:nowrap;gap:6px;padding:3px;min-width:0}',
+    );
+    expect(css).not.toMatch(/\.ws-graph-compact \.ws-graph-bar\{[^}]*overflow-x:auto/);
+    // Le menu s'ouvre sous la barre, au-dessus du cadre, aligné à droite de la barre.
+    expect(css).toMatch(/\.ws-graph-menu-b\{position:absolute;z-index:6;top:calc\(100% \+ 2px\);right:3px;/);
+    // Sous 600 px de panneau : « Ajuster » et « Réinitialiser » en icônes (nom gardé, masqué visuellement).
+    expect(css).toMatch(
+      /@container \(max-width:600px\)\{[^@]*\.ws-graph-compact \.ws-graph-txt\{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset\(50%\)/,
+    );
+    // Sous 400 px seulement, la barre passe à la ligne.
+    expect(css).toMatch(
+      /@container \(max-width:400px\)\{\s*\.ws-graph-compact \.ws-graph-bar\{flex-wrap:wrap\}/,
+    );
+    // Focus visible au contraste de l'accent, état pressé du plein écran, icônes au trait du texte.
+    expect(css).toContain('.ws-graph-menu-t:focus-visible,');
+    expect(css).toMatch(/outline:2px solid var\(--qa-color-primary\);outline-offset:1px/);
+    expect(css).toContain('.ws-graph-max[aria-pressed="true"]{background:var(--qa-color-primary);');
+    expect(css).toContain('stroke:currentColor');
+  });
+
+  it('moves legend, help, caption and static note into a closed « Légende et aide » drawer', () => {
+    const html = renderGraph(ctxOf(), emptyGraphUi(), { compact: true });
+    const drawer = html.slice(html.indexOf('<details class="ws-graph-more"'));
+    expect(drawer).toMatch(
+      /^<details class="ws-graph-more" data-ws-details="graph-more"><summary>Légende et aide /,
+    );
+    expect(drawer).toContain('16 nœud(s) · 16 relation(s)');
+    expect(drawer).toContain('class="ws-legend"');
+    expect(drawer).toContain('id="ws-graph-cap"');
+    expect(drawer).toContain('id="ws-graph-help"');
+    expect(drawer).toContain('Seules les relations « Observée » viennent de la reproduction');
+    expect(drawer).toContain('aucune durée n’est mesurée pour le code');
+    // Replié par défaut, et rien de tout cela avant le cadre.
+    expect(html).not.toMatch(/<details[^>]* open/);
+    const before = html.slice(0, html.indexOf('<div class="ws-graph-canvas"'));
+    for (const piece of ['class="ws-legend"', 'ws-graph-help', 'ws-graph-static', '<figure'])
+      expect(before).not.toContain(piece);
+    // Le cadre reste décrit par la légende chiffrée et l'aide, même repliées.
+    expect(html).toContain('aria-describedby="ws-graph-cap ws-graph-help"');
+    // Le compte des nœuds masqués par « Afficher : » est dans le volet.
+    const hidden = renderGraph(ctxOf(), { ...emptyGraphUi(), hidden: ['BFF'] }, { compact: true });
+    expect(hidden.slice(hidden.indexOf('<details'))).toContain('6 nœud(s) masqué(s)');
+    expect(hidden.slice(0, hidden.indexOf('<details'))).not.toContain('masqué(s)');
+  });
+
+  it('keeps the important messages visible above the canvas: reduced overview, error path', () => {
+    const path = renderGraph(ctxOf(), { ...emptyGraphUi(), errorPath: true }, { compact: true });
+    const msgs = path.slice(0, path.indexOf('data-ws-graph="canvas"'));
+    expect(msgs).toContain('<div class="ws-graph-msgs">');
+    expect(msgs).toContain('ws-graph-pathnote');
+    expect(path).toContain('class="ws-graph ws-graph-compact ws-graph-errmode"');
+    const reduced = renderGraph(ctxOf(), { ...emptyGraphUi(), zoom: 0.5 }, { compact: true });
+    expect(reduced.slice(0, reduced.indexOf('data-ws-graph="canvas"'))).toContain('Vue d’ensemble réduite');
+    expect(renderGraph(ctxOf(), emptyGraphUi(), { compact: true })).not.toContain('ws-graph-msgs');
+  });
+
+  it('keeps every interaction of the full rendering: nodes, edges, tab stop, selection, truthfulness', () => {
+    const ctx = ctxOf({ selection: { kind: 'node', id: N.service.id } });
+    const html = renderGraph(ctx, emptyGraphUi(), { compact: true });
+    expect(svgOf(html)).toBe(svgOf(renderGraph(ctx, emptyGraphUi())));
+    expect(tagOf(html, 'node', N.service.id)).toContain('tabindex="0"');
+    expect(tagOf(html, 'node', N.service.id)).toContain('ws-selected');
+    expect(tagOf(html, 'node', N.repository.id)).toContain('ws-dimmed');
+    expect(html).toContain('data-ws-graph="canvas"');
+    expect(html).toMatch(/data-ws-graph="canvas" data-w="\d+(\.\d)?" data-h="\d+(\.\d)?"/);
+    expect(svgOf(html).match(/\d+ ms/g)).toHaveLength(2);
+    expect(html).not.toContain('aria-live');
+  });
+
+  it('fills the pane height: the canvas takes the remaining space and scrolls by itself', () => {
+    expect(INCIDENT_GRAPH_CSS).toContain('.ws-graph-compact{height:100%;min-height:0;');
+    expect(INCIDENT_GRAPH_CSS).toContain(
+      '.ws-graph-compact .ws-graph-canvas{flex:1;min-height:0;overflow:auto;',
+    );
+    expect(INCIDENT_GRAPH_CSS).toMatch(
+      /\.ws-graph-compact \.ws-graph-bar\{position:relative;flex:none;flex-wrap:nowrap;/,
+    );
+    expect(INCIDENT_GRAPH_CSS).toMatch(/\.ws-graph-compact \.ws-graph-more\{max-height:45%;overflow:auto\}/);
+    expect(INCIDENT_GRAPH_CSS).toMatch(
+      /\.ws-graph-more summary:focus-visible\{outline:2px solid var\(--qa-color-primary\)/,
+    );
+    // La barre reste sur une ligne ; sous 400 px de large seulement, elle passe à la ligne.
+    expect(INCIDENT_GRAPH_CSS).toMatch(
+      /@container \(max-width:400px\)\{\s*\.ws-graph-compact \.ws-graph-bar\{flex-wrap:wrap/,
+    );
+    expect(INCIDENT_GRAPH_CSS).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsl\(/i);
+  });
+
+  it('shows an empty compact pane with its drawer, and uses no forbidden word', () => {
+    const empty = renderGraph(ctxOf({ incident: incidentOf(null) }), emptyGraphUi(), { compact: true });
+    expect(empty).toContain('ws-graph-compact');
+    expect(empty).toContain('Le graphe apparaît après l’analyse');
+    expect(empty).toContain(
+      '<details class="ws-graph-more" data-ws-details="graph-more"><summary>Légende et aide</summary>',
+    );
+    expect(empty).toContain('class="ws-legend"');
+    for (const lang of ['fr', 'en'] as const) {
+      const ctx = ctxOf({ lang, selection: { kind: 'node', id: N.controller.id } });
+      const html = [
+        renderGraph(ctx, { ...emptyGraphUi(), errorPath: true, hidden: ['DATA'] }, { compact: true }),
+        renderGraph(
+          ctx,
+          { ...emptyGraphUi(), zoom: 0.5 },
+          { compact: true, focus: 'BACKEND', maximized: true },
+        ),
+        renderGraph(ctxOf({ lang, incident: incidentOf(null) }), emptyGraphUi(), { compact: true }),
+      ].join('');
+      expect(html.replace(/data-[a-z-]+="[^"]*"/g, '')).not.toMatch(FORBIDDEN);
+    }
+  });
+});
+
+describe('incident graph — workspace pane: layer focus', () => {
+  const ids = (html: string, list: GraphNode[]): boolean[] =>
+    list.map((node) => tagOf(svgOf(html), 'node', node.id) !== '');
+
+  it('computes the drawn layers without touching the chosen ones', () => {
+    expect(graphHidden([], 'BACKEND')).toEqual(['FRONTEND', 'BFF']);
+    expect(graphHidden([], 'BFF')).toEqual(['FRONTEND', 'BACKEND', 'DATA']);
+    expect(graphHidden([], 'FRONTEND')).toEqual(['BFF', 'BACKEND', 'DATA']);
+    expect(graphHidden(['DATA'], 'BACKEND')).toEqual(['FRONTEND', 'BFF', 'DATA']);
+    expect(graphHidden(['BFF'])).toEqual(['BFF']);
+    expect(graphHidden(['BFF'], 'NOPE')).toEqual(['BFF']);
+    expect(graphHidden([], undefined)).toEqual([]);
+  });
+
+  it('draws the Backend layer, the data layer, the HTTP requests and the incident only', () => {
+    const ui = emptyGraphUi();
+    const html = renderGraph(ctxOf(), ui, { compact: true, focus: 'BACKEND' });
+    expect(
+      ids(html, [N.catalogController, N.catalogService, N.repository, N.npe, N.request, N.incident]),
+    ).toEqual([true, true, true, true, true, true]);
+    expect(ids(html, [N.controller, N.service, N.client, N.outgoing, N.front, N.action])).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(ui.hidden).toEqual([]);
+    expect(html).toContain('aria-label="Traçabilité Backend" data-focus="BACKEND"');
+    expect(html).toContain('data-ws-graph="canvas"');
+    expect(html).toMatch(/data-upp="[\d.]+" data-focus="BACKEND"/);
+    // Les couches proposées sont celles de la vue.
+    expect(html).toContain('data-layer="BACKEND"');
+    expect(html).toContain('data-layer="DATA"');
+    expect(html).not.toContain('data-layer="BFF"');
+    expect(html).not.toContain('data-layer="FRONTEND"');
+    expect(html).toContain(
+      'Vue restreinte : seules les couches Backend, Données, les requêtes HTTP et l’incident sont dessinés',
+    );
+    // Les données masquées par l'utilisateur le restent dans la vue.
+    const noData = renderGraph(ctxOf(), { ...ui, hidden: ['DATA'] }, { compact: true, focus: 'BACKEND' });
+    expect(ids(noData, [N.repository, N.catalogService])).toEqual([false, true]);
+    expect(noData).toMatch(/data-layer="DATA" aria-pressed="false"/);
+  });
+
+  it('draws the Frontend and BFF views, keeps the error path computed on the whole graph', () => {
+    const front = renderGraph(ctxOf(), emptyGraphUi(), { focus: 'FRONTEND' });
+    expect(ids(front, [N.front, N.action, N.request, N.scenario])).toEqual([true, true, true, true]);
+    expect(ids(front, [N.controller, N.catalogService, N.repository])).toEqual([false, false, false]);
+    expect(front).toContain('aria-label="Traçabilité Frontend" data-focus="FRONTEND"');
+    const bff = renderGraph(ctxOf(), { ...emptyGraphUi(), errorPath: true }, { compact: true, focus: 'BFF' });
+    expect(ids(bff, [N.controller, N.service, N.client, N.outgoing, N.thrown])).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(ids(bff, [N.front, N.catalogService, N.repository])).toEqual([false, false, false]);
+    expect(bff).toContain('Chemin d’erreur : de « POST /api/books → 500 »');
+    expect(tagOf(svgOf(bff), 'node', N.request.id)).toContain('ws-graph-onpath');
+    // La vue Full Stack et une vue inconnue dessinent tout.
+    const unknown = renderGraph(ctxOf(), emptyGraphUi(), { focus: 'DATA' as never });
+    expect(unknown).not.toContain('data-focus');
+    expect(ids(unknown, [N.front, N.controller, N.repository])).toEqual([true, true, true]);
+    expect(renderGraph(ctxOf({ lang: 'en' }), emptyGraphUi(), { compact: true, focus: 'BFF' })).toContain(
+      'aria-label="BFF traceability"',
+    );
+  });
+
+  it('moves the tab stop away from a node the focused view does not draw', () => {
+    const html = renderGraph(ctxOf({ selection: { kind: 'node', id: N.front.id } }), emptyGraphUi(), {
+      compact: true,
+      focus: 'BACKEND',
+    });
+    const stops = svgOf(html).match(/tabindex="0"/g) ?? [];
+    expect(stops).toHaveLength(1);
+    expect(tagOf(html, 'node', N.front.id)).toBe('');
+  });
+});
+
+describe('incident graph — « Disposition » : couloirs horizontaux', () => {
+  const lanesUi = (over: Partial<GraphUi> = {}): GraphUi => ({ ...emptyGraphUi(), layout: 'lanes', ...over });
+
+  it('offers two layouts, validates them, and defaults to the columns', () => {
+    expect(GRAPH_LAYOUTS).toEqual(['columns', 'lanes']);
+    expect(isGraphLayout('lanes')).toBe(true);
+    expect(isGraphLayout('columns')).toBe(true);
+    expect(isGraphLayout('rows')).toBe(false);
+    expect(isGraphLayout(undefined)).toBe(false);
+    expect(emptyGraphUi().layout).toBe('columns');
+    expect(layoutGraph(catalogueGraph()).mode).toBe('columns');
+    expect(layoutGraph(catalogueGraph(), 'lanes').mode).toBe('lanes');
+    expect(graphLayout2(catalogueGraph()).lanes).toBeUndefined();
+  });
+
+  it('puts each node in the lane of its layer; incident, scenario and requests in the Frontend lane', () => {
+    expect(laneOf(N.incident)).toBe('FRONTEND');
+    expect(laneOf(N.scenario)).toBe('FRONTEND');
+    expect(laneOf(N.action)).toBe('FRONTEND');
+    expect(laneOf(N.request)).toBe('FRONTEND');
+    expect(laneOf(N.controller)).toBe('BFF');
+    expect(laneOf(N.outgoing)).toBe('BFF');
+    expect(laneOf(N.thrown)).toBe('BFF');
+    expect(laneOf(N.missing)).toBe('BFF');
+    expect(laneOf(N.catalogService)).toBe('BACKEND');
+    expect(laneOf(N.npe)).toBe('BACKEND');
+    expect(laneOf(N.repository)).toBe('DATA');
+    const layout = graphLanesLayout(catalogueGraph());
+    expect(layout.lanes?.map((lane) => lane.key)).toEqual(['FRONTEND', 'BFF', 'BACKEND', 'DATA']);
+    const lanes = new Map((layout.lanes ?? []).map((lane) => [lane.key, lane]));
+    for (const laid of layout.nodes) {
+      const lane = lanes.get(laneOf(laid.node));
+      expect(lane).toBeDefined();
+      if (!lane) continue;
+      // Chaque nœud est entièrement dans son couloir, à droite de la colonne des titres.
+      expect(laid.y).toBeGreaterThanOrEqual(lane.y);
+      expect(laid.y + NODE_H).toBeLessThanOrEqual(lane.y + lane.height);
+      expect(laid.x).toBeGreaterThanOrEqual(LANE_HEAD);
+    }
+    // Les couloirs se suivent sans se chevaucher, et le graphe les contient.
+    const list = layout.lanes ?? [];
+    list.slice(1).forEach((lane, index) => {
+      const previous = list[index];
+      if (previous) expect(lane.y).toBeGreaterThanOrEqual(previous.y + previous.height);
+    });
+    const last = list.at(-1);
+    expect(last && last.y + last.height).toBeLessThanOrEqual(layout.height);
+    expect(Math.max(...layout.nodes.map((laid) => laid.x + NODE_W))).toBeLessThanOrEqual(layout.width);
+    expect(layout.bands).toEqual([]);
+  });
+
+  it('flows left to right: a relation never goes back to the left along the path of the kinds', () => {
+    const layout = graphLanesLayout(catalogueGraph());
+    const at = new Map(layout.nodes.map((laid) => [laid.node.id, laid]));
+    for (const edge of catalogueGraph().edges) {
+      const a = at.get(edge.from);
+      const b = at.get(edge.to);
+      if (!a || !b || b.column <= a.column) continue;
+      expect(b.x).toBeGreaterThanOrEqual(a.x);
+    }
+    // Dans un couloir, deux colonnes différentes ne se superposent jamais.
+    for (const left of layout.nodes)
+      for (const right of layout.nodes)
+        if (left !== right && laneOf(left.node) === laneOf(right.node) && left.column !== right.column)
+          expect(left.x === right.x).toBe(false);
+    // Le parcours descend d'un couloir au suivant : l'endpoint BFF est sous la requête qui l'appelle.
+    const request = at.get(N.request.id);
+    const controller = at.get(N.controller.id);
+    expect(controller?.x).toBe(request?.x);
+    // Une autre requête est entre les deux (même colonne) : la relation contourne par le côté.
+    const side = layout.edges.find((laid) => laid.id === edgeId(N.request.id, N.controller.id));
+    expect(side?.d).toMatch(new RegExp(`^M${String((request?.x ?? 0) + NODE_W)},`));
+    // Sans elle, un trait vertical du bas de la requête au haut de l'endpoint.
+    const graph = catalogueGraph();
+    const alone = graphLanesLayout({
+      nodes: graph.nodes.filter((node) => node.id !== N.drafts.id && node.id !== N.missing.id),
+      edges: graph.edges.filter((edge) => edge.from !== N.drafts.id && edge.to !== N.drafts.id),
+    });
+    const top = alone.nodes.find((laid) => laid.node.id === N.request.id);
+    const drop = alone.edges.find((laid) => laid.id === edgeId(N.request.id, N.controller.id));
+    const x = String((top?.x ?? 0) + NODE_W / 2);
+    expect(drop?.d).toMatch(
+      new RegExp(`^M${x},${String((top?.y ?? 0) + NODE_H)} C${x},[\\d.]+ ${x},[\\d.]+ ${x},[\\d.]+$`),
+    );
+  });
+
+  it('is deterministic and keeps the same relations, statuses and dangling count as the columns', () => {
+    const graph = catalogueGraph();
+    const lanes = graphLanesLayout(graph);
+    expect(graphLanesLayout(catalogueGraph())).toEqual(lanes);
+    const columns = graphLayout2(graph);
+    expect(lanes.nodes.map((laid) => laid.node.id).sort()).toEqual(
+      columns.nodes.map((laid) => laid.node.id).sort(),
+    );
+    const statuses = (layout: typeof lanes): string[] =>
+      layout.edges.map((laid) => `${laid.id}=${laid.status}`).sort();
+    expect(statuses(lanes)).toEqual(statuses(columns));
+    const broken = { ...graph, edges: [...graph.edges, e(N.action, 'node:absent', 'INFERRED', 'x')] };
+    expect(graphLanesLayout(broken).dangling).toBe(1);
+    // Une relation OBSERVED entre deux nœuds du code reste affichée « lue dans le code ».
+    const forged = {
+      ...graph,
+      edges: graph.edges.map((edge) =>
+        edge.from === N.controller.id ? { ...edge, status: 'OBSERVED' as const } : edge,
+      ),
+    };
+    expect(
+      graphLanesLayout(forged).edges.find((laid) => laid.id === edgeId(N.controller.id, N.service.id))
+        ?.status,
+    ).toBe('STATICALLY_RESOLVED');
+    // Un graphe vide : aucun couloir.
+    expect(graphLanesLayout({ nodes: [], edges: [] }).lanes).toEqual([]);
+  });
+
+  it('switches the layout through ws-graph-layout, back to the fitted view; reset keeps the choice', () => {
+    const ui: GraphUi = { ...emptyGraphUi(), zoom: 2, offsetX: 40, offsetY: -10, hidden: ['DATA'] };
+    const lanes = reduceGraph(ui, 'ws-graph-layout', { value: 'lanes' });
+    expect(lanes).toEqual({ ...ui, layout: 'lanes', zoom: 1, offsetX: 0, offsetY: 0 });
+    expect(reduceGraph(ui, 'ws-graph-layout', { layout: 'lanes' })?.layout).toBe('lanes');
+    expect(reduceGraph(ui, 'ws-graph-layout', { value: 'columns' })).toBe(ui);
+    expect(reduceGraph(ui, 'ws-graph-layout', { value: 'diagonal' })).toBe(ui);
+    expect(reduceGraph(ui, 'ws-graph-layout', {})).toBe(ui);
+    const measured = { ...lanesUi({ zoom: 3, errorPath: true }), viewport: { width: 900, height: 500 } };
+    expect(reduceGraph(measured, 'ws-graph-reset', {})).toEqual({
+      ...emptyGraphUi(),
+      layout: 'lanes',
+      viewport: { width: 900, height: 500 },
+    });
+    expect(reduceGraph(lanesUi({ zoom: 2 }), 'ws-graph-fit', {})?.layout).toBe('lanes');
+  });
+
+  it('renders the « Disposition » select in the toolbar, compact or not', () => {
+    for (const compact of [true, false]) {
+      const html = renderGraph(ctxOf(), lanesUi(), { compact });
+      const bar = html.slice(
+        html.indexOf('<div class="ws-graph-bar"'),
+        html.indexOf('data-ws-graph="canvas"'),
+      );
+      expect(bar).toContain(
+        '<label class="ws-graph-disp" title="Choisir la disposition du graphe : une colonne par genre de nœud, ou un couloir horizontal par couche"><span class="ws-graph-disp-t">Disposition</span><select class="ws-graph-sel" data-action="ws-graph-layout" data-ws-graph="layout"><option value="columns">Colonnes</option><option value="lanes" selected>Couloirs horizontaux</option></select></label>',
+      );
+    }
+    expect(renderGraph(ctxOf(), emptyGraphUi(), { compact: true })).toContain(
+      '<option value="columns" selected>Colonnes</option><option value="lanes">Couloirs horizontaux</option>',
+    );
+    const en = renderGraph(ctxOf({ lang: 'en' }), lanesUi(), { compact: true });
+    expect(en).toContain('>Layout</span>');
+    expect(en).toContain('<option value="lanes" selected>Horizontal lanes</option>');
+    // Le pourtour : la classe de section et la disposition sur le cadre (le contrôleur la lit pour le glisser).
+    const html = renderGraph(ctxOf(), lanesUi(), { compact: true });
+    expect(html).toContain('class="ws-graph ws-graph-compact ws-graph-lanes"');
+    expect(html).toMatch(/data-ws-graph="canvas" [^>]*data-layout="lanes">/);
+    expect(renderGraph(ctxOf(), emptyGraphUi(), { compact: true })).toMatch(/data-layout="columns">/);
+  });
+
+  it('shows the inline legend « Observé / Résolu statiquement / Inféré / Inconnu » with the drawn line styles', () => {
+    const html = renderGraph(ctxOf(), lanesUi(), { compact: true });
+    expect(html).toContain(
+      '<ul class="ws-graph-legend" aria-label="Légende des relations"><li title="vue pendant l’exécution"><span class="ws-graph-legline ws-ge-observed" aria-hidden="true"></span>Observé</li><li title="résolue dans le code, sans ambiguïté"><span class="ws-graph-legline ws-ge-statically_resolved" aria-hidden="true"></span>Résolu statiquement</li><li title="déduite, à vérifier"><span class="ws-graph-legline ws-ge-inferred" aria-hidden="true"></span>Inféré</li><li title="lien non établi"><span class="ws-graph-legline ws-ge-unknown" aria-hidden="true"></span>Inconnu</li></ul>',
+    );
+    // Avant le cadre (visible sans ouvrir « Légende et aide »).
+    expect(html.indexOf('ws-graph-legend')).toBeLessThan(html.indexOf('data-ws-graph="canvas"'));
+    expect(renderGraph(ctxOf(), emptyGraphUi())).toContain('class="ws-graph-legend"');
+    const en = renderGraph(ctxOf({ lang: 'en' }), lanesUi(), { compact: true });
+    for (const label of ['Observed', 'Statically resolved', 'Inferred', 'Unknown'])
+      expect(en).toContain(`</span>${label}</li>`);
+    // Le motif du trait (plein, tirets, pointillés), pas la seule couleur.
+    expect(INCIDENT_GRAPH_CSS).toContain(
+      '.ws-graph-legline.ws-ge-inferred{border-top:2px dashed var(--qa-color-warning)}',
+    );
+    expect(INCIDENT_GRAPH_CSS).toContain(
+      '.ws-graph-legline.ws-ge-unknown{border-top:2px dotted var(--qa-color-danger)}',
+    );
+  });
+
+  it('draws one lane per layer with its title on the left and the scope applications', () => {
+    const html = renderGraph(ctxOf(), lanesUi(), { compact: true });
+    const svg = svgOf(html);
+    for (const [key, title] of [
+      ['frontend', 'Frontend'],
+      ['bff', 'BFF (Java)'],
+      ['backend', 'Backend (Spring Boot)'],
+      ['data', 'Données'],
+    ] as const) {
+      expect(svg).toContain(`<g class="ws-graph-lane ws-gl-${key}">`);
+      expect(svg).toMatch(
+        new RegExp(
+          `<text class="ws-graph-lane-t" x="20" y="[\\d.]+">${title.replace(/[()]/g, '\\$&')}</text>`,
+        ),
+      );
+    }
+    // Les couloirs sont décoratifs pour les lecteurs d'écran (les nœuds portent leur genre).
+    expect(svg).toMatch(/<g class="ws-graph-bands" aria-hidden="true"><g class="ws-graph-lane/);
+    expect(svg).toContain('<text class="ws-graph-lane-s" x="20" y="');
+    expect(svg).toContain('accès lus dans le code');
+    expect(html).toContain(
+      'aria-label="Graphe full-stack en couloirs : un couloir par couche, parcours de gauche à droite"',
+    );
+    // Aucune bande verticale des colonnes en couloirs.
+    expect(svg).not.toContain('class="ws-graph-band"');
+    expect(svgOf(renderGraph(ctxOf(), emptyGraphUi(), { compact: true }))).not.toContain('ws-graph-lane');
+  });
+
+  it('keeps selection, roving tab stop, error path and truthfulness in lanes', () => {
+    const plain = renderGraph(ctxOf(), lanesUi(), { compact: true });
+    const stops = svgOf(plain).match(/tabindex="0"/g) ?? [];
+    expect(stops).toHaveLength(1);
+    expect(tagOf(svgOf(plain), 'node', N.request.id)).toContain('tabindex="0"');
+    const selected = renderGraph(ctxOf({ selection: { kind: 'node', id: N.catalogService.id } }), lanesUi(), {
+      compact: true,
+    });
+    const tag = tagOf(svgOf(selected), 'node', N.catalogService.id);
+    expect(tag).toContain('ws-selected');
+    expect(tag).toContain('tabindex="0"');
+    expect(tag).toContain('data-action="ws-select"');
+    expect(tagOf(svgOf(selected), 'node', N.request.id)).toContain('tabindex="-1"');
+    // Les relations gardent leur style de statut et restent sélectionnables.
+    const edge = tagOf(svgOf(plain), 'edge', edgeId(N.client.id, N.outgoing.id));
+    expect(edge).toContain('ws-ge-inferred');
+    expect(edge).toContain('data-action="ws-select"');
+    expect(tagOf(svgOf(plain), 'edge', edgeId(N.drafts.id, N.missing.id))).toContain('ws-ge-unknown');
+    // Aucune durée pour un nœud du code ; la durée observée d'une requête reste.
+    expect(svgOf(plain)).not.toMatch(/Code (BFF|backend)[^<]* ms/);
+    // Le chemin d'erreur est le même calcul.
+    const path = renderGraph(ctxOf(), lanesUi({ errorPath: true }), { compact: true });
+    expect(path).toContain('Chemin d’erreur : de « POST /api/books → 500 »');
+    expect(tagOf(svgOf(path), 'node', N.npe.id)).toContain('ws-graph-onpath');
+    // Vue restreinte : seuls les couloirs de la vue (les requêtes vont dans le couloir Frontend).
+    const backend = svgOf(renderGraph(ctxOf(), lanesUi(), { compact: true, focus: 'BACKEND' }));
+    expect(backend).toContain('ws-gl-backend');
+    expect(backend).toContain('ws-gl-data');
+    expect(backend).toContain('ws-gl-frontend');
+    expect(backend).not.toContain('ws-gl-bff');
+  });
+
+  it('escapes the lane texts, uses theme tokens only and no forbidden word', () => {
+    const evil = '<img src=x onerror=alert(1)>';
+    const incident = incidentOf();
+    const tainted: Incident = {
+      ...incident,
+      scope: {
+        ...incident.scope,
+        applications: incident.scope.applications.map((application) => ({ ...application, name: evil })),
+      },
+    };
+    const html = renderGraph(ctxOf({ incident: tainted }), lanesUi(), { compact: true });
+    expect(html).not.toContain('<img');
+    for (const lang of ['fr', 'en'] as const) {
+      const text = renderGraph(ctxOf({ lang }), lanesUi(), { compact: true });
+      expect(text.replace(/data-[a-z-]+="[^"]*"/g, '')).not.toMatch(FORBIDDEN);
+    }
+    const css = INCIDENT_GRAPH_CSS.slice(INCIDENT_GRAPH_CSS.indexOf('.ws-graph-disp{'));
+    expect(css).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(css).not.toMatch(/rgba?\(|hsla?\(/);
+    expect(css).toContain('.ws-graph-sel:focus-visible{outline:2px solid var(--qa-color-primary)');
   });
 });

@@ -1,25 +1,45 @@
 import { QaCrawlerError, type QaCrawlerClient } from '../core/client.js';
+import { can } from './dashboard-access.js';
 import type { Incident } from '../core/incident-contracts.js';
 import {
   applicationOf,
+  base64Of,
   emptyApplicationForm,
   emptyExtensionForm,
   emptyIncidentForm,
   emptyIncidentsUi,
+  flowText,
+  INCIDENT_LIST_GROUPS,
   incidentFormProblems,
   incidentInputOf,
+  incidentsCsv,
+  isListGroup,
   needsPolling,
   scopeFormOf,
   scopeOf,
+  sortAttachments,
+  visibleIncidents,
   type ApplicationForm,
   type ExtensionForm,
-  type IncidentForm,
   type IncidentsUi,
   type InvestigationRow,
+  type PendingAttachment,
   type ScopeForm,
 } from './dashboard-incidents.js';
 import type { DashboardRoute, DashboardState } from './dashboard-view.js';
-import { workspaceProgress } from './incident-ux.js';
+import {
+  depthText,
+  emptyScopeUi,
+  reduceScope,
+  SCOPE_MODES_ORDER,
+  scopeDirty,
+  scopeDraftOf,
+  scopeEditable,
+  scopeTreeRequests,
+  type ScopeUi,
+} from './incident-scope.js';
+import type { PrefsStorage } from './incident-split.js';
+import { rovingTarget, workspaceProgress } from './incident-ux.js';
 import {
   WorkspaceController,
   type OpOptions,
@@ -45,6 +65,8 @@ export interface IncidentsHost {
   navigate(route: DashboardRoute): void;
   /** Relit la vue courante (liste ou incident). */
   refresh(): Promise<void>;
+  /** Le stockage des préférences de l'espace d'investigation (absent : `localStorage` s'il est permis). */
+  storage?(): PrefsStorage | undefined;
 }
 
 type IncidentRoute = Extract<DashboardRoute, { view: 'incident' }>;
@@ -55,9 +77,20 @@ const MAX_PROGRESS = 40;
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const detailsOf = (error: unknown): string[] => (error instanceof QaCrawlerError ? error.details : []);
 
-const FORM_FIELDS: readonly (keyof IncidentForm)[] = [
+type TextField =
+  | 'title'
+  | 'description'
+  | 'application'
+  | 'observed'
+  | 'expected'
+  | 'namespace'
+  | 'serviceAccount'
+  | 'image'
+  | 'repositoriesMount';
+const FORM_FIELDS: readonly TextField[] = [
   'title',
   'description',
+  'application',
   'observed',
   'expected',
   'namespace',
@@ -79,6 +112,9 @@ export class IncidentsController {
   private pendingFocus: string | undefined;
   /** L'espace d'investigation de l'incident ouvert. */
   readonly workspace: WorkspaceController;
+  /** Le texte du message au dernier dessin (absent avant le premier), et l'effacement de la zone live. */
+  private liveSource: string | undefined;
+  private liveClear: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly host: IncidentsHost) {
     const workspaceHost = {
@@ -92,6 +128,7 @@ export class IncidentsController {
         this.receive(incident);
       },
       focus: (selector: string) => this.focus(selector),
+      ...(host.storage ? { storage: () => host.storage?.() } : {}),
     };
     Object.defineProperty(workspaceHost, 'state', { get: () => host.state });
     this.workspace = new WorkspaceController(workspaceHost as WorkspaceHost);
@@ -107,8 +144,17 @@ export class IncidentsController {
     return route.view === 'incident' ? route : undefined;
   }
 
+  /**
+   * Focalise le premier élément visé qui peut l'être : pas désactivé, pas dans un corps masqué (panneau
+   * réduit, `hidden`) — un bouton invisible laisserait le focus tomber sur la page.
+   */
   private focus(selector: string): boolean {
-    const element = this.host.root.querySelector<HTMLElement>(selector);
+    const root = this.host.root;
+    let element = root.querySelector<HTMLElement>(selector);
+    if (element && hiddenElement(element))
+      element =
+        [...root.querySelectorAll<HTMLElement>(selector)].find((candidate) => !hiddenElement(candidate)) ??
+        null;
     if (!element || (element as HTMLButtonElement).disabled) return false;
     element.focus();
     return true;
@@ -142,6 +188,8 @@ export class IncidentsController {
         validation: undefined,
         scopeForm: undefined,
         extension: emptyExtensionForm(),
+        scope: emptyScopeUi(),
+        scopeTrees: {},
       });
     }
     if (route.view !== 'incidents' || !route.create) ui.form = undefined;
@@ -156,10 +204,17 @@ export class IncidentsController {
   async load(api: QaCrawlerClient, route: DashboardRoute, current: () => boolean): Promise<void> {
     const ui = this.ui;
     if (route.view === 'incidents') {
-      const list = await api.incidents.list(route.projectId);
-      if (!current()) return;
-      ui.list = list;
       if (route.create && !ui.form) ui.form = emptyIncidentForm(this.host.state.project);
+      try {
+        const list = await api.incidents.list(route.projectId);
+        if (!current()) return;
+        ui.list = list;
+        ui.listError = undefined;
+      } catch (error) {
+        if (!current()) return;
+        ui.list = undefined;
+        ui.listError = message(error);
+      }
       return;
     }
     if (route.view === 'investigations') {
@@ -317,21 +372,257 @@ export class IncidentsController {
     this.host.paint();
     try {
       const incident = await api.incidents.create(route.projectId, incidentInputOf(form));
+      // Les pièces jointes, une à une après la création : un refus n'empêche pas les suivantes.
+      const failed: string[] = [];
+      if (form.attachments.length > 0) {
+        ui.busy = 'inc-attach';
+        this.host.paint();
+        for (const file of form.attachments)
+          try {
+            await api.incidents.addAttachment(route.projectId, incident.id, {
+              name: file.name,
+              type: file.type,
+              dataBase64: file.dataBase64,
+            });
+          } catch (error) {
+            failed.push(`${file.name} : ${message(error)}`);
+          }
+      }
       ui.busy = undefined;
-      this.pendingFocus = '#ws-ux-tab-scope';
+      this.pendingFocus = '#ws-ux-sub-scope';
       this.host.navigate({
         view: 'incident',
         projectId: route.projectId,
         incidentId: incident.id,
         tab: 'scope',
       });
-      ui.notice = this.host.state.t.inc.done.created(incident.title);
+      const f = flowText(this.host.state.t.locale);
+      ui.notice = `${this.host.state.t.inc.done.created(incident.title)}${
+        form.attachments.length > 0 ? ` ${f.attachmentsSent(form.attachments.length - failed.length)}` : ''
+      }`;
+      if (failed.length > 0) {
+        ui.error = f.attachmentsFailed(failed.length);
+        ui.details = failed;
+      }
     } catch (error) {
       ui.busy = undefined;
       ui.error = message(error);
       ui.details = detailsOf(error);
       this.paintKeepingFocus('[data-inc="title"]');
     }
+  }
+
+  // ── Liste et pièces jointes ────────────────────────────────────────────────────────────────
+
+  /** Les lignes affichées de la liste, en fichier CSV (téléchargé par la page, rien n'est envoyé). */
+  private exportCsv(): void {
+    const ui = this.ui;
+    const state = this.host.state;
+    const route = state.route;
+    if (route.view !== 'incidents' || !ui.list) return;
+    const lang = state.t.locale;
+    const f = flowText(lang);
+    const rows = visibleIncidents(ui.list, ui.group, ui.query);
+    if (rows.length === 0) return;
+    const csv = incidentsCsv(
+      rows,
+      {
+        columns: [f.col.id, f.col.title, f.col.severity, f.col.application, f.col.state, f.col.created],
+        severities: state.t.inc.severities,
+        states: state.t.inc.states,
+      },
+      lang,
+    );
+    const name = `incidents-${route.projectId}-${new Date().toISOString().slice(0, 10)}.csv`;
+    try {
+      const document = this.host.root.ownerDocument;
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = name;
+      link.hidden = true;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 10_000);
+      ui.notice = f.exported(name, rows.length);
+    } catch (error) {
+      ui.error = message(error);
+    }
+    this.host.paint();
+  }
+
+  /** Les fichiers choisis : triés (type, taille, nombre), lus en base64, gardés jusqu'à la création. */
+  private async readFiles(input: HTMLInputElement): Promise<void> {
+    const form = this.ui.form;
+    const files = [...(input.files ?? [])];
+    input.value = '';
+    if (!form || files.length === 0) return;
+    const { accepted, rejected } = sortAttachments(form.attachments.length, files);
+    const read: PendingAttachment[] = [];
+    for (const { index, type } of accepted) {
+      const file = files[index];
+      if (!file) continue;
+      try {
+        read.push({
+          name: file.name,
+          type,
+          bytes: file.size,
+          dataBase64: base64Of(new Uint8Array(await file.arrayBuffer())),
+        });
+      } catch {
+        rejected.push({ name: file.name, reason: 'read' });
+      }
+    }
+    if (this.ui.form !== form) return;
+    form.attachments = [...form.attachments, ...read];
+    form.rejected = rejected;
+    this.host.paint();
+    this.focus('#inc-f-files');
+  }
+
+  // ── Définition du périmètre ────────────────────────────────────────────────────────────────
+
+  /** Le brouillon du périmètre de l'incident ouvert (un autre incident repart de zéro). */
+  private scopeUi(): ScopeUi {
+    const ui = this.ui;
+    const id = ui.incident?.id;
+    if (ui.scope.incidentId !== id) ui.scope = emptyScopeUi(id);
+    return ui.scope;
+  }
+
+  private scopeAction(action: string, dataset: Record<string, string | undefined>): void {
+    const ui = this.ui;
+    const incident = ui.incident;
+    if (!incident) return;
+    ui.scope = reduceScope(this.scopeUi(), action, dataset, { incident, trees: ui.scopeTrees }) ?? ui.scope;
+  }
+
+  private scopeContext() {
+    const state = this.host.state;
+    const ui = this.ui;
+    const incident = ui.incident;
+    return incident
+      ? {
+          incident,
+          lang: state.t.locale,
+          can: (right: 'RUN' | 'DECIDE' | 'PUBLISH' | 'RUN_WRITES') => can(state, right),
+          demo: ui.ws.demo && isDemoIncident(incident.id),
+        }
+      : undefined;
+  }
+
+  private scopeClick(action: string, target: HTMLElement): void {
+    const context = this.scopeContext();
+    if (!context || (action !== 'inc-scope-expand' && !scopeEditable(context))) return;
+    const data = target.dataset;
+    this.scopeAction(action, { mode: data.mode, block: data.block, index: data.index, open: data.open });
+    this.host.paint();
+    if (action === 'inc-scope-mode')
+      this.focus(`[data-action="inc-scope-mode"][data-mode="${attr(data.mode ?? '')}"]`);
+    else if (action === 'inc-scope-reset') this.focus('[data-action="inc-scope-next"]');
+    else if (action === 'inc-scope-remove') {
+      if (!this.focus('[data-action="inc-scope-remove"]')) this.focus('[data-action="inc-scope-next"]');
+    } else
+      this.focus(
+        `[data-action="${action}"][data-block="${attr(data.block ?? '')}"][data-index="${attr(data.index ?? '')}"]`,
+      );
+  }
+
+  /** Les arborescences de l'onglet « Périmètre » qui manquent : lues en parallèle, chaque réponse redessine. */
+  private ensureScopeTrees(): void {
+    const route = this.route();
+    const ui = this.ui;
+    const incident = ui.incident;
+    const api = this.host.api();
+    if (!route || route.tab !== 'scope' || !api || !incident || incident.id !== route.incidentId) return;
+    const context = this.scopeContext();
+    if (!context || context.demo || !context.can('RUN')) return;
+    for (const app of scopeTreeRequests(incident, ui.scopeTrees)) {
+      const root = app.repository.root;
+      ui.scopeTrees = { ...ui.scopeTrees, [app.id]: { state: 'loading', root } };
+      api.incidents.scopeTree(route.projectId, incident.id, app.id).then(
+        (tree) => {
+          if (this.ui.incident?.id !== incident.id) return;
+          this.ui.scopeTrees = { ...this.ui.scopeTrees, [app.id]: { tree, root } };
+          this.host.paint();
+        },
+        (error: unknown) => {
+          if (this.ui.incident?.id !== incident.id) return;
+          const denied = error instanceof QaCrawlerError && error.status === 403;
+          this.ui.scopeTrees = {
+            ...this.ui.scopeTrees,
+            [app.id]: { state: denied ? 'denied' : { error: message(error) }, root },
+          };
+          this.host.paint();
+        },
+      );
+    }
+  }
+
+  /**
+   * « Étape suivante » : le brouillon vérifié dans la page, enregistré s'il a changé (révision lue ; 409 :
+   * relu et dit), puis le périmètre enregistré vérifié par le serveur ; valide, « Environnement » s'ouvre.
+   */
+  private scopeNext(): void {
+    const ui = this.ui;
+    const context = this.scopeContext();
+    const incident = ui.incident;
+    if (!context || !incident) return;
+    if (!scopeEditable(context)) {
+      this.goToStage('environment');
+      return;
+    }
+    const scopeUi = this.scopeUi();
+    const draft = scopeDraftOf(incident, scopeUi);
+    if (draft.invalid.length > 0) {
+      ui.scope = reduceScope(scopeUi, 'inc-scope-invalid', { fields: draft.invalid.join(',') }) ?? scopeUi;
+      this.host.paint();
+      const first = draft.invalid[0] ?? '';
+      if (first.startsWith('limit:')) this.focus(`[data-inc="scope.limit.${attr(first.slice(6))}"]`);
+      else
+        this.focus(`[data-action="inc-scope-toggle"][data-block="${attr(first.slice(4))}"][data-index=""]`);
+      return;
+    }
+    const dirty = scopeDirty(incident, scopeUi);
+    let valid = false;
+    void this.op(
+      'inc-scope-next',
+      async (api, projectId, current) => {
+        if (dirty) {
+          // Enregistré : l'incident relu remplace l'affiché et le brouillon est vidé, même si la
+          // vérification qui suit échoue (la page ne garde jamais une révision périmée).
+          const saved = await api.incidents.update(projectId, current.id, current.revision, {
+            scope: draft.scope,
+          });
+          if (this.route()?.incidentId !== current.id) return undefined;
+          this.receive(saved);
+          ui.scope = reduceScope(this.scopeUi(), 'inc-scope-saved', {}) ?? ui.scope;
+          ui.notice = this.host.state.t.inc.done.scopeSaved;
+        }
+        const validation = await api.incidents.validateScope(projectId, current.id);
+        ui.validation = validation;
+        valid = validation.ok;
+        return undefined;
+      },
+      {
+        revision: dirty,
+        after: () => {
+          if (valid) {
+            ui.validation = undefined;
+            this.goToStage('environment');
+          }
+        },
+        focus: '[data-action="inc-scope-next"]',
+      },
+    );
+  }
+
+  /** Ouvre l'onglet d'une étape, comme un clic dans la progression. */
+  private goToStage(stage: string): void {
+    this.workspace.click('ws-ux-stage', { dataset: { stage } } as unknown as HTMLElement);
   }
 
   // ── Événements de la page ──────────────────────────────────────────────────────────────────
@@ -354,6 +645,61 @@ export class IncidentsController {
         ui.invalid = undefined;
         this.host.paint();
         this.focus('[data-inc="title"]');
+        return true;
+      case 'inc-group': {
+        const group = target.dataset.group;
+        if (!isListGroup(group)) return true;
+        ui.group = group;
+        this.host.paint();
+        this.focus(`[data-action="inc-group"][data-group="${group}"]`);
+        return true;
+      }
+      case 'inc-list-reset':
+        ui.group = 'ALL';
+        ui.query = '';
+        this.host.paint();
+        this.focus('#inc-l-q');
+        return true;
+      case 'inc-export':
+        this.exportCsv();
+        return true;
+      case 'inc-options-toggle': {
+        // Le clic sur le résumé : le volet change ensuite ; son état est gardé pour les redessins.
+        const details = target.parentElement as HTMLDetailsElement | null;
+        if (ui.form && details) ui.form.optionsOpen = !details.open;
+        return false;
+      }
+      case 'inc-att-remove': {
+        const form = ui.form;
+        const index = Number(target.dataset.index);
+        if (!form || !Number.isInteger(index)) return true;
+        form.attachments = form.attachments.filter((_, at) => at !== index);
+        this.host.paint();
+        if (
+          !this.focus(
+            `[data-action="inc-att-remove"][data-index="${String(Math.min(index, form.attachments.length - 1))}"]`,
+          )
+        )
+          this.focus('#inc-f-files');
+        return true;
+      }
+      case 'inc-scope-mode':
+      case 'inc-scope-expand':
+      case 'inc-scope-toggle':
+      case 'inc-scope-remove':
+      case 'inc-scope-reset':
+        this.scopeClick(action, target);
+        return true;
+      case 'inc-scope-tree-retry': {
+        const app = target.dataset.block;
+        if (app)
+          ui.scopeTrees = Object.fromEntries(Object.entries(ui.scopeTrees).filter(([key]) => key !== app));
+        this.host.paint();
+        this.focus(`[data-action="inc-scope-toggle"][data-block="${attr(app ?? '')}"][data-index=""]`);
+        return true;
+      }
+      case 'inc-scope-next':
+        this.scopeNext();
         return true;
       case 'inc-create-cancel':
         if (route.view !== 'incidents') return true;
@@ -562,12 +908,36 @@ export class IncidentsController {
     if (!key) return false;
     const ui = this.ui;
     const value = target.value;
-    if (ui.form && (FORM_FIELDS as readonly string[]).includes(key)) {
-      ui.form[key as Exclude<keyof IncidentForm, 'severity' | 'target'>] = value;
+    if (key === 'list.query') {
+      ui.query = value;
+      this.host.paint();
       return true;
     }
-    if (ui.form && (key === 'severity' || key === 'scenario' || key === 'environmentId')) {
+    if (key === 'files') return true;
+    if (ui.form && (FORM_FIELDS as readonly string[]).includes(key)) {
+      ui.form[key as TextField] = value;
+      // Un champ signalé qui devient valide : son message disparaît tout de suite (un seul redessin).
+      if (ui.invalid?.includes(key) && !incidentFormProblems(ui.form).includes(key as TextField)) {
+        ui.invalid = ui.invalid.filter((entry) => entry !== key);
+        this.host.paint();
+      }
+      return true;
+    }
+    if (ui.form && (key === 'severity' || key === 'scenario' || key === 'environmentId' || key === 'kind')) {
       (ui.form as unknown as Record<string, string>)[key] = value;
+      return true;
+    }
+    if (key === 'scope.range') {
+      this.scopeAction('inc-scope-depth', { value });
+      // Pendant le glissement : la valeur dite et affichée, sans redessiner (le curseur reste saisi).
+      const text = depthText(this.host.state.t.locale, Number(value));
+      target.setAttribute('aria-valuetext', text);
+      const shown = this.host.root.querySelector<HTMLElement>('.inc-sc-depth-v');
+      if (shown) shown.textContent = text;
+      return true;
+    }
+    if (key.startsWith('scope.limit.')) {
+      this.scopeAction('inc-scope-limit', { field: key.slice('scope.limit.'.length), value });
       return true;
     }
     const scopeField = SCOPE_FIELDS[key];
@@ -602,14 +972,40 @@ export class IncidentsController {
       this.host.paint();
       return true;
     }
+    if (key === 'files' && 'files' in target) {
+      void this.readFiles(target);
+      return true;
+    }
     this.input(target);
-    if (key === 'ext.kind') this.host.paint();
+    if (key === 'ext.kind' || key === 'severity' || key === 'scope.range') this.host.paint();
     return true;
   }
 
   /** Échap referme la confirmation d'annulation ; le reste du clavier de l'espace va à son contrôleur. */
   keydown(event: KeyboardEvent): boolean {
+    const element = event.target as HTMLElement | null;
+    const action = element && 'dataset' in element ? element.dataset.action : undefined;
+    if (action === 'inc-group' && this.host.state.route.view === 'incidents') {
+      const next = rovingTarget(INCIDENT_LIST_GROUPS, this.ui.group, event.key);
+      if (!next) return false;
+      event.preventDefault();
+      this.ui.group = next;
+      this.host.paint();
+      this.focus(`[data-action="inc-group"][data-group="${next}"]`);
+      return true;
+    }
     if (!this.route()) return false;
+    if (action === 'inc-scope-mode') {
+      const incident = this.ui.incident;
+      if (!incident) return false;
+      const next = rovingTarget(SCOPE_MODES_ORDER, this.scopeUi().mode ?? incident.scope.mode, event.key);
+      if (!next) return false;
+      event.preventDefault();
+      this.scopeAction('inc-scope-mode', { mode: next });
+      this.host.paint();
+      this.focus(`[data-action="inc-scope-mode"][data-mode="${next}"]`);
+      return true;
+    }
     const ui = this.ui;
     if (event.key === 'Escape' && ui.confirmCancel) {
       ui.confirmCancel = false;
@@ -629,10 +1025,61 @@ export class IncidentsController {
   }
 
   beforePaint(): void {
-    if (this.route()) this.workspace.beforePaint();
+    if (!this.route()) return;
+    this.ensureScopeTrees();
+    this.workspace.beforePaint();
   }
 
   afterPaint(): void {
+    this.announce();
     if (this.route()) this.workspace.afterPaint();
   }
+
+  /**
+   * Après le dessin et le retour du focus : un focus resté dans un corps masqué (panneau réduit) va au
+   * bouton qui rouvre ce panneau ; un focus perdu dans l'espace revient sur l'onglet affiché.
+   */
+  afterFocus(): void {
+    if (!this.route()) return;
+    const active = this.host.root.activeElement as HTMLElement | null;
+    if (!active || !hiddenElement(active)) return;
+    const pane = active.closest<HTMLElement>('[data-ws-pane]')?.dataset.wsPane;
+    if (pane && this.focus(`[data-ws-pane="${pane}"] .ws-pane-ops [data-op="restore"]`)) return;
+    this.focus('[data-action="ws-ux-tab"][aria-selected="true"]');
+  }
+
+  /**
+   * LA ZONE LIVE : un nœud permanent du Dashboard (`.inc-live`, hors de la partie redessinée) reprend le
+   * texte du message affiché (`.inc-msg`) seulement quand ce texte CHANGE : un redessin au même texte
+   * (suivi, sélection, disposition) ne dit rien, le premier dessin non plus (un message plus ancien que la
+   * page). Le texte annoncé s'efface de la zone live après un moment (le message affiché reste).
+   */
+  private announce(): void {
+    const root = this.host.root;
+    const live = root.querySelector<HTMLElement>('.inc-live');
+    if (!live) return;
+    const text = root.querySelector<HTMLElement>('.inc-msg')?.textContent.trim() ?? '';
+    const first = this.liveSource === undefined;
+    if (text === this.liveSource) return;
+    this.liveSource = text;
+    clearTimeout(this.liveClear);
+    this.liveClear = undefined;
+    if (first) return;
+    live.textContent = text;
+    if (text)
+      this.liveClear = setTimeout(() => {
+        this.liveClear = undefined;
+        live.textContent = '';
+      }, LIVE_CLEAR_MS);
+  }
 }
+
+/** Le temps pendant lequel la zone live garde le texte annoncé. */
+const LIVE_CLEAR_MS = 8000;
+
+/** Une valeur dans un sélecteur d'attribut entre guillemets. */
+const attr = (value: string): string => value.replace(/["\\]/g, '\\$&');
+
+/** Un élément dans une partie masquée (`hidden`), donc ni visible ni focalisable utilement. */
+const hiddenElement = (element: HTMLElement): boolean =>
+  typeof element.closest === 'function' && element.closest('[hidden]') !== null;

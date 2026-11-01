@@ -1,8 +1,12 @@
+import { INCIDENT_ATTACHMENTS_CSS } from './incident-attachments.js';
 import { INCIDENT_CODE_CSS } from './incident-code.js';
+import { INCIDENT_AI_CSS } from './incident-ai.js';
+import { INCIDENT_TRIGGER_CSS } from './incident-trigger.js';
 import { INCIDENT_DIAGNOSIS_CSS } from './incident-diagnosis.js';
 import { INCIDENT_FRONTEND_TRACE_CSS } from './incident-frontend-trace.js';
 import { INCIDENT_GRAPH_CSS } from './incident-graph.js';
 import { INCIDENT_PARTS_CSS } from './incident-parts.js';
+import { INCIDENT_REPRODUCTION_CSS } from './incident-reproduction.js';
 import { INCIDENT_TIMELINE_CSS } from './incident-timeline.js';
 import { INCIDENT_UX_CSS } from './incident-ux.js';
 import { INCIDENT_WORKSPACE_CSS } from './incident-workspace.js';
@@ -33,6 +37,7 @@ export const DASHBOARD_CSS = `
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
+.qa-view{display:contents}
 button,select,input{font:inherit;color:inherit}
 code,.mono{font-family:var(--qa-font-family-mono);font-size:.9em}
 code{background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);border-radius:6px;padding:0 5px;overflow-wrap:anywhere}
@@ -1146,8 +1151,8 @@ li.info .ed-sev{color:var(--qa-color-primary)}
   .menu-btn span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 }
 /* Incidents : liste, déclaration, périmètre ; l'espace d'investigation suit. */
-.inc-live{margin:0;min-height:1.5em;display:flex;align-items:center;gap:8px;color:var(--qa-color-muted)}
-.inc-live:empty{display:none}
+/* Le message affiché (en clair) ; la zone live \`.inc-live\` est un nœud permanent, hors de la partie redessinée. */
+.inc-msg{margin:0;min-height:1.5em;display:flex;align-items:center;gap:8px;color:var(--qa-color-muted)}
 .spin.sm{width:14px;height:14px;border-width:2px;flex:none}
 .err-box{padding:12px 14px;border-radius:12px;background:var(--qa-color-danger-soft);display:flex;flex-direction:column;gap:6px}
 .inc-form{gap:14px}
@@ -1164,14 +1169,26 @@ li.info .ed-sev{color:var(--qa-color-primary)}
 .inc-ext{border:1px solid var(--qa-color-border);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:6px}
 .inc-ext p{margin:0}
 .inc-pre{margin:6px 0 0;padding:12px;border-radius:10px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);font:12px/1.5 var(--qa-font-family-mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
+/* L'espace d'investigation tient dans la fenêtre (comme l'éditeur) : la coquille prend la hauteur de la fenêtre
+   (moins les 16 px de marge de la page, de chaque côté), l'espace remplit le contenu et chaque panneau défile
+   en lui-même. Sous 560 px de haut ou 600 px de large, la page retrouve sa hauteur naturelle. */
+.dash:has(.ws-root){height:max(560px,calc(100dvh - 32px));grid-template-rows:minmax(0,1fr)}
+.main:has(>.ws-root){padding:10px 8px;gap:10px;min-height:0}
+.dash:has(.ws-root)>.side{min-height:0;overflow:auto;overscroll-behavior:contain}
+@container (max-width:960px){.dash:has(.ws-root){grid-template-rows:auto minmax(0,1fr)}}
+@media (max-height:559px),(max-width:599px){.dash:has(.ws-root){height:auto}}
 /* L'espace d'investigation : primitives partagées, structure, graphe, chronologie, traçabilité frontend, code, diagnostic, coquille. */
 ${INCIDENT_PARTS_CSS}
 ${INCIDENT_UX_CSS}
 ${INCIDENT_GRAPH_CSS}
 ${INCIDENT_TIMELINE_CSS}
+${INCIDENT_REPRODUCTION_CSS}
 ${INCIDENT_FRONTEND_TRACE_CSS}
 ${INCIDENT_CODE_CSS}
 ${INCIDENT_DIAGNOSIS_CSS}
+${INCIDENT_AI_CSS}
+${INCIDENT_TRIGGER_CSS}
+${INCIDENT_ATTACHMENTS_CSS}
 ${INCIDENT_WORKSPACE_CSS}
 ${darkThemeCss([
   // L'accent sombre est clair (#8B8BFF) : le blanc dessus n'atteint que 2,9:1. Le texte prend la surface

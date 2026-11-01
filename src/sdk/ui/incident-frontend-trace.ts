@@ -126,6 +126,7 @@ const TEXT = {
     console: 'Console',
     jsErrors: 'Erreurs JavaScript',
     limitations: 'Ce que la traçabilité ne peut pas établir',
+    legend: 'Légende et aide',
     legendNote:
       'Observé : vu pendant la reproduction (étape, requêtes, réponses, preuves). Composant, handler et services sont lus ou déduits du code : ce n’est pas une trace d’exécution.',
     kinds: {
@@ -204,6 +205,7 @@ const TEXT = {
     console: 'Console',
     jsErrors: 'JavaScript errors',
     limitations: 'What the traceability cannot establish',
+    legend: 'Legend and help',
     legendNote:
       'Observed: seen during the reproduction (step, requests, responses, evidence). Component, handler and services are read or inferred from the code: this is not an execution trace.',
     kinds: {
@@ -538,15 +540,20 @@ function chain(
 
 // ── Rendus exportés ────────────────────────────────────────────────────────────────────────
 
-/** L'onglet « Frontend » : sélecteur d'étapes, chaîne détaillée de l'étape au premier plan, légende, limites. */
+/**
+ * L'onglet « Frontend » : sélecteur d'étapes, chaîne détaillée de l'étape au premier plan, légende, limites.
+ * Le rendu tient dans un panneau : en-tête compact, liste des étapes et chaîne défilant chacune de leur
+ * côté, légende et limites repliables (le statut de chaque maillon reste écrit sur sa carte).
+ */
 export function renderFrontendTrace(ctx: WorkspaceContext, ui: FrontendTraceUi): string {
   const t = text(ctx.lang);
   const trace = ctx.incident.investigation.frontendTrace;
-  const head = `<div class="${P}-head"><h3>${esc(t.title)}</h3><p class="mu">${esc(t.intro)}</p></div>`;
+  const legend = `<details class="${P}-legend" data-ws-details="frontend-trace-legend"><summary>${esc(t.legend)}</summary><div class="${P}-legend-b"><p class="mu">${esc(t.intro)}</p>${relationLegend(ctx.lang)}<p class="mu">${esc(t.legendNote)}</p></div></details>`;
+  const head = `<div class="${P}-head"><h3>${esc(t.title)}</h3>${legend}</div>`;
   if (!trace)
-    return `<section class="${P}" aria-label="${esc(t.title)}">${demoBanner(ctx)}${head}${panelState(ctx.lang, 'empty', `${t.empty} ${t.emptyHint}`)}</section>`;
+    return `<section class="${P} ${P}-pane" aria-label="${esc(t.title)}">${demoBanner(ctx)}${head}${panelState(ctx.lang, 'empty', `${t.empty} ${t.emptyHint}`)}</section>`;
   if (trace.steps.length === 0)
-    return `<section class="${P}" aria-label="${esc(t.title)}">${demoBanner(ctx)}${head}${panelState(ctx.lang, 'empty', t.noSteps)}${limitations(ctx, trace)}</section>`;
+    return `<section class="${P} ${P}-pane" aria-label="${esc(t.title)}">${demoBanner(ctx)}${head}${panelState(ctx.lang, 'empty', t.noSteps)}${limitations(ctx, trace)}</section>`;
 
   const exchange = (id: string): HttpExchange | undefined => exchangeOf(ctx, trace, id);
   const failing = new Set(
@@ -578,16 +585,15 @@ ${
   const detail = focus
     ? `<div class="${P}-detail"><h4 class="${P}-detail-t">${esc(t.chain(focus.index))}</h4>${chain(ctx, trace, focus, false)}</div>`
     : `<div class="${P}-detail">${panelState(ctx.lang, 'empty', t.noFailing)}</div>`;
-  const legend = `<div class="${P}-legend">${relationLegend(ctx.lang)}<p class="mu">${esc(t.legendNote)}</p></div>`;
-  return `<section class="${P}" aria-label="${esc(t.title)}">${demoBanner(ctx)}${head}${legend}<div class="${P}-body-grid">${selector}${detail}</div>${limitations(ctx, trace)}</section>`;
+  return `<section class="${P} ${P}-pane" aria-label="${esc(t.title)}">${demoBanner(ctx)}${head}<div class="${P}-body-grid">${selector}${detail}</div>${limitations(ctx, trace)}</section>`;
 }
 
 function limitations(ctx: WorkspaceContext, trace: FrontendTrace): string {
   if (trace.limitations.length === 0) return '';
   const t = text(ctx.lang);
-  return `<div class="note warn ${P}-limits"><b>${esc(t.limitations)}</b><ul>${trace.limitations
+  return `<details class="note warn ${P}-limits" data-ws-details="frontend-trace-limits"><summary><b>${esc(t.limitations)}</b> <span class="${P}-count">(${String(trace.limitations.length)})</span></summary><ul>${trace.limitations
     .map((entry) => `<li>${esc(entry)}</li>`)
-    .join('')}</ul></div>`;
+    .join('')}</ul></details>`;
 }
 
 /** Le détail d'une étape pour le panneau latéral (chaîne compacte). */
@@ -601,23 +607,33 @@ export function renderFrontendStepDetail(ctx: WorkspaceContext, stepIndex: numbe
 }
 
 export const INCIDENT_FRONTEND_TRACE_CSS = `
-.${P}{display:flex;flex-direction:column;gap:14px;min-width:0}
-.${P}-head h3{margin:0 0 2px}
+.${P}{display:flex;flex-direction:column;gap:8px;min-width:0}
+.${P}-pane{height:100%;min-height:0;container-type:inline-size}
+.${P}-pane>*{flex:none}
+.${P}-head{display:flex;flex-wrap:wrap;align-items:flex-start;gap:4px 12px}
+.${P}-head h3{margin:0;font-size:15px;line-height:28px}
 .${P}-head p{margin:0}
-.${P}-legend{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface-2)}
-.${P}-legend p{margin:0;font-size:13px}
-.${P}-body-grid{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
-.${P}-steps{flex:1 1 220px;max-width:300px;min-width:0;display:flex;flex-direction:column;gap:8px}
-.${P}-steps-h{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
+.${P}-legend{flex:1 1 240px;min-width:0;font-size:13px}
+.${P}-legend summary{cursor:pointer;min-height:28px;display:flex;align-items:center;gap:8px;font-weight:600;color:var(--qa-color-muted);list-style:none}
+.${P}-legend summary::-webkit-details-marker,.${P}-limits summary::-webkit-details-marker{display:none}
+.${P}-legend summary::before,.${P}-limits summary::before{content:"";flex:none;width:0;height:0;border-left:6px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+.${P}-legend[open]>summary::before,.${P}-limits[open]>summary::before{transform:rotate(90deg)}
+.${P}-legend summary:focus-visible,.${P}-limits summary:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px;border-radius:6px}
+.${P}-legend-b{display:flex;flex-direction:column;gap:6px;margin-top:4px;padding:8px 10px;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface-2)}
+.${P}-legend-b p{margin:0;font-size:13px}
+.${P}-body-grid{display:flex;gap:12px;align-items:stretch;min-height:0}
+.${P}-pane>.${P}-body-grid{flex:1 1 auto}
+.${P}-steps{flex:0 0 clamp(200px,28%,300px);min-width:0;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:6px;padding:2px}
+.${P}-steps-h{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:2;background:var(--qa-color-surface);padding-bottom:2px}
 .${P}-steps ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
-.${P}-step{display:flex;gap:8px;align-items:flex-start;width:100%;text-align:left;padding:6px 8px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface);color:var(--qa-color-text);cursor:pointer}
+.${P}-step{display:flex;gap:8px;align-items:flex-start;width:100%;text-align:left;padding:4px 8px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface);color:var(--qa-color-text);cursor:pointer}
 .${P}-step:hover{border-color:var(--qa-color-border-strong)}
 .${P}-step:focus-visible,.${P}-pick:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px}
 .${P}-step.current{border-color:var(--qa-color-primary);background:color-mix(in srgb,var(--qa-color-primary) 8%,var(--qa-color-surface))}
 .${P}-step.failing{border-left:3px solid var(--qa-color-danger)}
 .${P}-step-n{flex:none;min-width:22px;height:22px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border)}
 .${P}-step-d{flex:1;min-width:0;overflow-wrap:anywhere;font-size:13px}
-.${P}-detail{flex:999 1 340px;min-width:0}
+.${P}-detail{flex:1 1 auto;min-width:0;min-height:0;overflow:auto;padding:2px}
 .${P}-detail-t{margin:0 0 8px;font-size:14px}
 .${P}-chain{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
 .${P}-stage{position:relative;display:flex;gap:10px;padding-bottom:12px}
@@ -646,8 +662,12 @@ export const INCIDENT_FRONTEND_TRACE_CSS = `
 .${P}-pre,.${P}-body pre{margin:0;padding:6px 8px;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px var(--qa-font-family-mono);background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);border-radius:6px}
 .${P}-body summary{cursor:pointer;font-size:13px}
 .${P}-extra{margin:4px 0 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px}
+.${P}-limits{display:block;padding:6px 12px;font-size:13px}
+.${P}-limits summary{cursor:pointer;min-height:28px;display:flex;align-items:center;gap:6px;list-style:none}
 .${P}-limits ul{margin:4px 0 0;padding-left:18px}
+.${P}-pane>.${P}-limits[open]{max-height:30%;overflow:auto}
 .${P}-compact .${P}-stage{padding-bottom:8px}
 .${P}-compact .${P}-card{padding:6px 8px}
-@container (max-width:700px){.${P}-steps{max-width:none;flex-basis:100%}.${P}-detail{flex-basis:100%}}
+@media (prefers-reduced-motion:reduce){.${P}-legend summary::before,.${P}-limits summary::before{transition:none}}
+@container (max-width:640px){.${P}-body-grid{flex-direction:column}.${P}-steps{flex:0 0 auto;max-height:35%}.${P}-detail{flex:1 1 auto}}
 `;

@@ -90,6 +90,15 @@ export class QaCrawlerDashboard extends Base {
   }
 
   private root!: ShadowRoot;
+  /**
+   * La partie redessinée du Shadow DOM (`paint()` la réécrit), à côté de la feuille de style et de la zone
+   * live permanente des incidents (`.inc-live`) : créées une fois, jamais recréées, si bien qu'une
+   * annonce n'est dite qu'au changement de son texte (et pas à chaque redessin).
+   */
+  private view?: HTMLElement;
+  /** Un dessin en cours, et le dessin demandé pendant celui-ci (fait juste après). */
+  private painting = false;
+  private repaintQueued = false;
   private state!: DashboardState;
   private injectedClient?: QaCrawlerClient;
   private ownClient?: QaCrawlerClient;
@@ -2957,6 +2966,27 @@ export class QaCrawlerDashboard extends Base {
 
   private paint(): void {
     if (!this.connected) return;
+    // Un dessin demandé PENDANT un dessin (un champ modifié perd le focus quand la page est réécrite : son
+    // « change » arrive au milieu de la réécriture) est fait juste après, jamais imbriqué.
+    if (this.painting) {
+      if (!this.repaintQueued) {
+        this.repaintQueued = true;
+        queueMicrotask(() => {
+          this.repaintQueued = false;
+          this.paint();
+        });
+      }
+      return;
+    }
+    this.painting = true;
+    try {
+      this.paintNow();
+    } finally {
+      this.painting = false;
+    }
+  }
+
+  private paintNow(): void {
     const focused = this.root.activeElement as HTMLElement | null;
     const focusKey =
       focused?.dataset.action ??
@@ -2997,7 +3027,7 @@ export class QaCrawlerDashboard extends Base {
         : null;
     this.editor.beforePaint();
     this.incidents.beforePaint();
-    this.root.innerHTML = `<style>${DASHBOARD_CSS}</style>${renderDashboard(this.state)}`;
+    this.paintView().innerHTML = renderDashboard(this.state);
     // L'éditeur de code et la comparaison reviennent dans la page redessinée.
     this.editor.afterPaint();
     // L'espace d'investigation : défilements, détails ouverts, ligne de code visée.
@@ -3028,6 +3058,26 @@ export class QaCrawlerDashboard extends Base {
         target.value = typed;
       if (caret !== null && target instanceof HTMLInputElement) target.setSelectionRange(caret, caret);
     }
+    // Un bouton retrouvé dans un panneau réduit ou masqué (corps `hidden`) : le focus va au bouton qui
+    // le rouvre, jamais sur le corps de la page.
+    this.incidents.afterFocus();
+  }
+
+  /** Le conteneur redessiné, créé au premier dessin avec la feuille de style et la zone live permanente. */
+  private paintView(): HTMLElement {
+    if (this.view?.isConnected) return this.view;
+    const style = document.createElement('style');
+    style.textContent = DASHBOARD_CSS;
+    const view = document.createElement('div');
+    view.className = 'qa-view';
+    const live = document.createElement('p');
+    live.className = 'sr inc-live';
+    live.setAttribute('role', 'status');
+    live.setAttribute('aria-live', 'polite');
+    live.setAttribute('aria-atomic', 'true');
+    this.root.replaceChildren(style, view, live);
+    this.view = view;
+    return view;
   }
 }
 

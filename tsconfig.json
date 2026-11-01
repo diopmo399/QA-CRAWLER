@@ -22,5 +22,9 @@
     "rootDir": "."
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
-  "exclude": ["tests/fixtures/static-apps/**", "tests/fixtures/packaging/*-app/**"]
+  "exclude": [
+    "tests/fixtures/static-apps/**",
+    "tests/fixtures/packaging/*-app/**",
+    "tests/fixtures/angular-app/**"
+  ]
 }
