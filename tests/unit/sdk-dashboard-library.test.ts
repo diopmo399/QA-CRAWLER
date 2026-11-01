@@ -215,16 +215,26 @@ describe('dashboard — scenario library', () => {
     expect(html).toContain('<h1>Bibliothèque de scénarios</h1>');
     expect(html).toContain('Demandes · 3 bloc(s) réutilisable(s)');
     expect(html).toContain('data-action="lib-panel-open"');
+    // Un contrat valide : une coche discrète ; à revalider : une pastille.
     expect(html).toMatch(
-      /<h3><button class="lib-title" data-action="lib-open" data-block="Bloc connexion" aria-haspopup="dialog">Bloc connexion<\/button><\/h3><span class="lib-ver"[^>]*>v2<\/span><span class="lib-state ok">Contrat valide<\/span>/,
+      /<h3><button class="lib-title" data-action="lib-open" data-block="Bloc connexion" aria-haspopup="dialog">Bloc connexion<\/button><\/h3><span class="lib-ver"[^>]*>v2<\/span><span class="lib-ok" title="Contrat valide">/,
+    );
+    expect(html).toContain('<span class="lib-kind standalone">Autonome</span><span>2 étape(s)</span>');
+    // L'origine, courte ; le détail au survol.
+    expect(html).toContain(
+      '<span class="lib-origin" title="Scénario « Connexion »">Scénario Connexion</span>',
     );
     expect(html).toContain(
-      '<span class="lib-kind standalone">Autonome</span><span>2 étape(s)</span><span>Scénario « Connexion »</span>',
+      '<span class="lib-origin" title="Groupe « Création » de l’enregistrement creer">Enregistrement creer</span>',
     );
-    expect(html).toContain('<span>Utilisé dans 1 scénario(s)</span>');
-    expect(html).toMatch(/<span>modifié le [^<]+<\/span>/);
-    expect(html).toContain('Groupe « Création » de l’enregistrement creer');
-    expect(html).toContain('<code class="lib-key" title="résolue au rejeu">user.name ⟳</code>');
+    // Le pied : la date, et l'utilisation seulement quand il y en a une.
+    expect(html).toMatch(/<small class="mu">modifié le [^<]+ · Utilisé dans 1 scénario\(s\)<\/small>/);
+    expect(html).not.toContain('Utilisé dans aucun scénario');
+    expect(html).toContain('<code class="lib-key">user.name</code>');
+    expect(html).toContain('Ni entrée ni sortie : il se joue seul.');
+    expect(html).toContain(
+      'class="btn small lib-add" data-action="lib-part-add" data-block="Bloc seul" title="Ajouter au parcours"',
+    );
     expect(html).toContain('<span class="lib-state warn">À revalider</span>');
     expect(html).toContain('Bloc &lt;x&gt;');
     expect(html).toContain('<ul class="plain lib-cards grid">');
@@ -648,6 +658,48 @@ describe('dashboard — scenario library', () => {
       }),
     );
     expect(busy).toContain('data-action="replay-scenario" data-name="Composé" disabled aria-busy="true"');
+  });
+
+  it('replaying a composed journey: « Navigateur visible » beside Rejouer, in Scénarios and in the library', () => {
+    const screen = { capabilities: { visibleBrowser: true } as DashboardState['capabilities'] };
+    const scenarios = renderDashboard(base('scenarios', { ...screen, scenarioHistory: [], recordings: [] }));
+    expect(scenarios).toMatch(
+      /data-action="replay-scenario" data-name="Composé"[^]*<input type="checkbox" data-bind="headed"/,
+    );
+    const headed = renderDashboard(
+      base('scenarios', {
+        ...screen,
+        scenarioHistory: [],
+        recordings: [],
+        launch: {
+          kind: 'REPLAY',
+          environmentId: '',
+          scenarios: [],
+          busy: false,
+          headed: true,
+          slowMoMs: 250,
+        },
+      }),
+    );
+    expect(headed).toContain('data-bind="headed" checked');
+    expect(headed).toContain('<option value="250" selected>');
+    // Sans écran sur le serveur : la case est là, désactivée, avec la raison.
+    const blind = renderDashboard(base('scenarios', { scenarioHistory: [], recordings: [] }));
+    expect(blind).toMatch(/<input type="checkbox" data-bind="headed"\s+disabled>/);
+    // La bibliothèque : le parcours tout juste créé se rejoue d'ici.
+    const library = renderDashboard(
+      base('library', screen, { composed: 'Composé', notice: t.lib.composed('Composé') }),
+    );
+    expect(library).toContain('data-action="replay-scenario" data-name="Composé"');
+    expect(library).toContain('Rejouer « Composé »');
+    expect(library).toMatch(/lib-replay[^]*data-bind="headed"/);
+    // Un nom qui n'est plus un scénario jouable ne propose rien ; un lecteur non plus.
+    expect(renderDashboard(base('library', screen, { composed: 'Bloc connexion' }))).not.toContain(
+      'lib-replay',
+    );
+    expect(renderDashboard(base('library', { ...screen, ...reader }, { composed: 'Composé' }))).not.toContain(
+      'lib-replay',
+    );
   });
 
   it('a reader sees the library and the details, never an action', () => {

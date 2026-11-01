@@ -262,6 +262,8 @@ describe('Dashboard — execution console in Chromium', () => {
     await page.mouse.down();
     await page.mouse.move(box.x + box.width / 2, box.y - 120, { steps: 6 });
     await page.mouse.up();
+    // Le glissement a été pris : le séparateur porte sa valeur.
+    await expect.poll(() => handle.getAttribute('aria-valuenow')).not.toBeNull();
     const taller = (await panel.boundingBox())?.height ?? 0;
     // La hauteur suit le pointeur jusqu'à la borne que le séparateur annonce (elle dépend de la place
     // au-dessus de l'éditeur, où une note d'un run précédent peut s'afficher).

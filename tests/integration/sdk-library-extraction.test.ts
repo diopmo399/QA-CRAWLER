@@ -53,7 +53,9 @@ const human = async ({ page }: { page: Page }): Promise<void> => {
     await page.waitForTimeout(200);
     await page.getByRole('button', { name: 'Rechercher' }).click();
     await page.waitForURL('**/search**');
-    await page.waitForTimeout(500);
+    // Une pause avant l'adresse suivante : trop proche du clic, sa navigation est prise pour l'effet du
+    // clic (route /forms attendue) au lieu d'être notée comme une étape, et le rejeu échoue.
+    await page.waitForTimeout(1500);
   }
 };
 

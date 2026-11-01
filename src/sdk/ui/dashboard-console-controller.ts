@@ -315,6 +315,7 @@ export class RunConsole {
     event.preventDefault();
     const startY = event.clientY;
     const start = panel.getBoundingClientRect().height;
+    this.syncBounds(panel);
     handle.setPointerCapture(event.pointerId);
     panel.classList.add('sizing');
     const move = (moved: PointerEvent): void => {
