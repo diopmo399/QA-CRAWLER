@@ -4369,6 +4369,11 @@ function sendError(response: ServerResponse, error: unknown): void {
     response.end();
     return;
   }
-  response.writeHead(status, { 'content-type': JSON_TYPE });
+  // Un corps refusé en cours de lecture (413) laisse la connexion à moitié lue : elle est fermée après la
+  // réponse pour qu'un client ne la réutilise pas (sinon sa requête suivante échoue sur un socket coupé).
+  response.writeHead(status, {
+    'content-type': JSON_TYPE,
+    ...(status === 413 ? { connection: 'close' } : {}),
+  });
   response.end(JSON.stringify(body));
 }
