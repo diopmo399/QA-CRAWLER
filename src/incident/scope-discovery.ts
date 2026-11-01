@@ -428,7 +428,7 @@ const failed = (
   problem: DiscoveryProblem,
   keywords: readonly string[],
   now: string,
-): ScopeDiscovery => ({
+): Omit<ScopeDiscovery, 'durationMs'> => ({
   root,
   status: 'FAILED',
   structure: 'UNKNOWN',
@@ -444,6 +444,12 @@ const failed = (
 });
 
 export async function discoverRepository(input: RepositoryDiscoveryInput): Promise<ScopeDiscovery> {
+  const started = performance.now();
+  const result = await discover(input);
+  return { ...result, durationMs: Math.max(0, Math.round(performance.now() - started)) };
+}
+
+async function discover(input: RepositoryDiscoveryInput): Promise<Omit<ScopeDiscovery, 'durationMs'>> {
   const now = input.now ?? new Date().toISOString();
   const root = input.root.trim();
   const keywords = uniq(input.keywords.map((word) => word.toLowerCase())).filter(Boolean);

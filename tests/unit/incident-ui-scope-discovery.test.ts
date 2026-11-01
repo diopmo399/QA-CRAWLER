@@ -8,6 +8,9 @@ import type {
 import {
   advancedDetails,
   applyPlan,
+  durationText,
+  frameworkGlyph,
+  principalApplication,
   discoveryEditable,
   emptyDiscoveryUi,
   INCIDENT_SCOPE_DISCOVERY_CSS,
@@ -170,7 +173,23 @@ const resultOf = (over: Partial<ScopeDiscovery> = {}): ScopeDiscovery => ({
   keywords: ['erreur', 'enregistrement', 'dossier'],
   read: ['package.json', 'nx.json', 'apps/web/package.json'],
   discoveredAt: at,
+  durationMs: 1840,
   ...over,
+});
+
+describe('helpers', () => {
+  it('duration, framework glyph (never a brand logo), main application', () => {
+    expect(durationText(420, 'fr')).toBe('420 ms');
+    expect(durationText(1840, 'fr')).toBe('1,8 s');
+    expect(durationText(1840, 'en')).toBe('1.8 s');
+    expect(frameworkGlyph(['Angular'], ['TypeScript'])).toEqual({ glyph: 'Ng', family: 'front' });
+    expect(frameworkGlyph(['Spring Boot'], ['Java'])).toEqual({ glyph: 'Sp', family: 'java' });
+    expect(frameworkGlyph([], ['Java'])).toEqual({ glyph: 'Jv', family: 'java' });
+    expect(frameworkGlyph([], [])).toEqual({ glyph: '?', family: 'other' });
+    expect(
+      principalApplication(resultOf({ applications: [app('web', { relevance: 0, reasons: [] })] })),
+    ).toBeUndefined();
+  });
 });
 
 describe('state', () => {
@@ -264,6 +283,14 @@ describe('renderScopeDiscovery', () => {
     ]);
     const html = renderScopeDiscovery(ctxOf(), { ...ui, root: '/srv/front' });
     expect(html).toContain('<h2 id="inc-sd-t" class="fl">');
+    // Sans résultat : les trois indicateurs attendent ; pendant l'analyse : en cours ; en échec : non réalisée.
+    expect(html).toContain('<li class="inc-sd-ind inc-sd-ind-idle">');
+    expect(html).toContain('<small>En attente d’un chemin</small>');
+    expect(html).not.toContain('inc-sd-done');
+    expect(renderScopeDiscovery(ctxOf(), ui, { busy: 'inc-disc-run' })).toContain(
+      '<li class="inc-sd-ind inc-sd-ind-running">',
+    );
+    expect(html).toContain('<span class="inc-sd-root-w">');
     expect(html).toContain('Applications et dépôts');
     expect(html).toContain('<form class="inc-sd-form" data-action="inc-disc-run" novalidate>');
     expect(html).toContain('<input id="inc-sd-root" data-inc="disc.root" class="mono" value="/srv/front"');
@@ -298,6 +325,26 @@ describe('renderScopeDiscovery', () => {
     const ui = withResult(emptyDiscoveryUi('inc_1'), resultOf());
     const html = renderScopeDiscovery(ctxOf(), ui);
     expect(html).toContain('Monorepo');
+    // Le bandeau de présentation reflète le résultat réel ; le résumé donne les comptes et la durée mesurée.
+    expect(html).toContain('<h2 id="inc-sd-hero-t">Périmètre d’investigation</h2>');
+    expect(html).toContain('<li class="inc-sd-ind inc-sd-ind-done">');
+    expect(html).toContain('<b>Détection des applications</b><small>4 détectée(s)</small>');
+    expect(html).toContain('<b>Analyse des modules</b><small>6 module(s)</small>');
+    expect(html).toContain('<b>Cartographie des dépendances</b><small>1 relation(s)</small>');
+    expect(html).toContain('<p class="inc-sd-done" role="status">');
+    expect(html).toContain(
+      '<b>Analyse terminée</b><span>4 application(s)</span><span>6 module(s)</span><span>3 fichier(s) lu(s)</span><span>en 1,8 s</span>',
+    );
+    // L'application principale : la proposée la plus pertinente, désignée par un mot de l'incident.
+    expect(principalApplication(resultOf())).toBe('web');
+    expect(html).toContain('<span class="inc-sd-pill main">Application principale</span>');
+    expect(html.split('Application principale')).toHaveLength(2);
+    expect(html).toContain(
+      '<span class="inc-sd-fw inc-sd-fw-front" role="img" aria-label="Cadre : Angular" title="Angular">Ng</span>',
+    );
+    expect(html).toContain(
+      '<span class="inc-sd-fw inc-sd-fw-node" role="img" aria-label="Cadre : NestJS" title="NestJS">Ns</span>',
+    );
     expect(html).toContain('4 application(s) détectée(s), 2 proposée(s) pour cet incident');
     expect(html).toContain('Outils : Nx, npm/yarn workspaces');
     expect(html).toContain('Mots de l’incident retenus : erreur, enregistrement, dossier');
@@ -353,6 +400,9 @@ describe('renderScopeDiscovery', () => {
     const html = renderScopeDiscovery(ctxOf(), withResult(emptyDiscoveryUi('inc_1'), failed));
     expect(html).toContain('<div class="inc-sd-problems" role="alert">');
     expect(html).toContain('<b>Analyse impossible</b>');
+    expect(html).toContain('<li class="inc-sd-ind inc-sd-ind-failed">');
+    expect(html).toContain('<small>Non réalisée</small>');
+    expect(html).not.toContain('inc-sd-done');
     expect(html).toContain('<b>Chemin introuvable : « /nowhere ».</b> Vérifiez le chemin.');
     expect(html).not.toContain('data-action="inc-disc-apply"');
     const partial = resultOf({
@@ -364,6 +414,7 @@ describe('renderScopeDiscovery', () => {
     const partialHtml = renderScopeDiscovery(ctxOf(), withResult(emptyDiscoveryUi('inc_1'), partial));
     expect(partialHtml).toContain('<div class="inc-sd-problems" role="status">');
     expect(partialHtml).toContain('<b>Analyse partielle</b>');
+    expect(partialHtml).toContain('<p class="inc-sd-done partial" role="status">');
     expect(partialHtml).toContain('Refus de lecture (1)');
     expect(partialHtml).toContain('<code>/repos/mono/.env</code>');
     expect(partialHtml).toContain('Lecture partielle</summary>');

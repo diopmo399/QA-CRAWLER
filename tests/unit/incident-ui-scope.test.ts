@@ -317,6 +317,37 @@ describe('reduceScope', () => {
   });
 });
 
+describe('selection summary and « Gérer »', () => {
+  it('counts the kept applications, names them, and the tree folds and unfolds', () => {
+    const ctx = ctxOf();
+    const ui = emptyScopeUi(ctx.incident.id);
+    const html = renderScopeEditor(ctx, ui, {});
+    expect(html).toContain('<b>3 application(s) sélectionnée(s) sur 3</b>');
+    expect(html).toContain(
+      '<span class="inc-sc-sel-a"><span class="inc-sc-layer inc-sc-l-frontend">Frontend</span>Frontend (React)</span>',
+    );
+    expect(html).toMatch(/data-action="inc-scope-manage" aria-expanded="true"[^>]*>.*Réduire/);
+    expect(html).toContain('id="inc-sc-apps-tree"');
+    const folded = reduceScope(ui, 'inc-scope-manage', {}) ?? ui;
+    expect(folded.treeHidden).toBe(true);
+    const foldedHtml = renderScopeEditor(ctx, folded, {});
+    expect(foldedHtml).toMatch(/data-action="inc-scope-manage" aria-expanded="false"[^>]*>.*Gérer/);
+    expect(foldedHtml).not.toContain('id="inc-sc-apps-tree"');
+    expect(foldedHtml).not.toContain('data-action="inc-scope-toggle"');
+    // Une application sans dossier retenu n'est plus comptée ; le pli survit à un enregistrement.
+    const removed =
+      reduceScope(
+        folded,
+        'inc-scope-remove',
+        { block: 'front', index: '' },
+        { incident: ctx.incident, trees: {} },
+      ) ?? folded;
+    expect(renderScopeEditor(ctx, removed, {})).toContain('<b>2 application(s) sélectionnée(s) sur 3</b>');
+    expect(reduceScope(removed, 'inc-scope-saved', {})?.treeHidden).toBe(true);
+    expect((reduceScope(folded, 'inc-scope-manage', {}) ?? folded).treeHidden).toBe(false);
+  });
+});
+
 describe('renderScopeEditor', () => {
   it('mode radios, the application tree with tri-state checkboxes, depth, included items, limits, next step', () => {
     const incident = incidentOf();

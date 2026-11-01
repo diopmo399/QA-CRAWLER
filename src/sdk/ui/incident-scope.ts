@@ -78,6 +78,8 @@ export interface ScopeUi {
   expanded: Record<string, boolean>;
   /** Les entrées refusées au dernier envoi : `limit:<champ>`, `app:<id>`. */
   invalid: string[];
+  /** L'arborescence des applications repliée (« Gérer » la rouvre) ; absente : dépliée. */
+  treeHidden?: boolean;
 }
 
 export const emptyScopeUi = (incidentId?: string): ScopeUi => ({
@@ -337,8 +339,8 @@ export const nodeKey = (applicationId: string, path: string): string =>
  * Le réducteur pur des actions de l'écran (préfixe `inc-scope-`) : `inc-scope-mode` (`mode`),
  * `inc-scope-depth` (`value`), `inc-scope-limit` (`field`, `value`), `inc-scope-expand` (`block` :
  * l'application, `index` : le chemin, `open` : l'état affiché), `inc-scope-toggle` et `inc-scope-remove`
- * (`block`, `index` ; `env` donne l'incident et les arborescences), `inc-scope-reset` (le brouillon
- * abandonné), `inc-scope-invalid` (`fields`, séparés par des virgules), `inc-scope-saved`. Undefined : action
+ * (`block`, `index` ; `env` donne l'incident et les arborescences), `inc-scope-manage` (l'arborescence
+ * repliée ou dépliée), `inc-scope-reset` (le brouillon abandonné), `inc-scope-invalid` (`fields`, séparés par des virgules), `inc-scope-saved`. Undefined : action
  * d'un autre écran.
  */
 export function reduceScope(
@@ -386,8 +388,14 @@ export function reduceScope(
         invalid: ui.invalid.filter((entry) => entry !== `app:${app.id}`),
       };
     }
+    case 'inc-scope-manage':
+      return { ...ui, treeHidden: !(ui.treeHidden ?? false) };
     case 'inc-scope-reset':
-      return { ...emptyScopeUi(ui.incidentId), expanded: ui.expanded };
+      return {
+        ...emptyScopeUi(ui.incidentId),
+        expanded: ui.expanded,
+        ...(ui.treeHidden ? { treeHidden: true } : {}),
+      };
     case 'inc-scope-invalid':
       return {
         ...ui,
@@ -397,7 +405,11 @@ export function reduceScope(
           .filter(Boolean),
       };
     case 'inc-scope-saved':
-      return { ...emptyScopeUi(ui.incidentId), expanded: ui.expanded };
+      return {
+        ...emptyScopeUi(ui.incidentId),
+        expanded: ui.expanded,
+        ...(ui.treeHidden ? { treeHidden: true } : {}),
+      };
     default:
       return undefined;
   }
@@ -420,6 +432,11 @@ const fr = {
       'Les vérifications sans effet de bord autorisées s’exécutent seules ; le périmètre ne s’étend jamais seul.',
   } as Record<ScopeMode, string>,
   applications: 'Applications',
+  selected: (count: number, total: number) =>
+    `${String(count)} application(s) sélectionnée(s) sur ${String(total)}`,
+  manage: 'Gérer',
+  manageClose: 'Réduire',
+  manageHint: 'Affiche ou masque les dossiers de chaque application.',
   noApplication:
     'Aucune application dans le périmètre : analysez un dépôt dans « Applications et dépôts », ci-dessus.',
   layers: { FRONTEND: 'Frontend', BFF: 'BFF', BACKEND: 'Backend' } as Record<CodeLayer, string>,
@@ -494,6 +511,10 @@ const en: typeof fr = {
       'Allowed verifications without side effects run on their own; the scope never grows by itself.',
   },
   applications: 'Applications',
+  selected: (count, total) => `${String(count)} application(s) selected out of ${String(total)}`,
+  manage: 'Manage',
+  manageClose: 'Collapse',
+  manageHint: 'Shows or hides the folders of each application.',
   noApplication:
     'No application in the scope: analyze a repository in “Applications and repositories”, above.',
   layers: { FRONTEND: 'Frontend', BFF: 'BFF', BACKEND: 'Backend' },
@@ -650,11 +671,24 @@ function treeBody(
   return `<p class="mu inc-sc-note" aria-busy="true"><span class="spin sm" aria-hidden="true"></span> ${esc(t.treeLoading)}</p>`;
 }
 
+/** Le résumé de la sélection : les applications retenues (entières ou par dossiers), leurs noms, « Gérer ». */
+function selectionSummary(ctx: ScopeContext, ui: ScopeUi): string {
+  const t = TEXT[ctx.lang];
+  const apps = ctx.incident.scope.applications;
+  if (apps.length === 0) return '';
+  const kept = apps.filter((app) => {
+    const selection = selectionOf(app, ui);
+    return selection.whole || selection.paths.length > 0;
+  });
+  const hidden = ui.treeHidden === true;
+  return `<div class="inc-sc-sel"><div class="inc-sc-sel-t"><b>${esc(t.selected(kept.length, apps.length))}</b><span class="inc-sc-sel-n">${kept.map((app) => `<span class="inc-sc-sel-a">${layerPill(ctx.lang, app.layer)}${esc(app.name)}</span>`).join('')}</span></div><button type="button" class="btn small" data-action="inc-scope-manage" aria-expanded="${String(!hidden)}"${hidden ? '' : ' aria-controls="inc-sc-apps-tree"'} title="${esc(t.manageHint)}">${icon(hidden ? 'down' : 'up')}<span>${esc(hidden ? t.manage : t.manageClose)}</span></button></div>`;
+}
+
 function applicationsTree(ctx: ScopeContext, ui: ScopeUi, trees: ScopeTrees, disabled: boolean): string {
   const t = TEXT[ctx.lang];
   const apps = ctx.incident.scope.applications;
   if (apps.length === 0) return `<p class="mu">${esc(t.noApplication)}</p>`;
-  return `<ul class="inc-sc-tree inc-sc-apps-list" role="list">${apps
+  return `<ul class="inc-sc-tree inc-sc-apps-list" id="inc-sc-apps-tree" role="list">${apps
     .map((app) => {
       const selection = selectionOf(app, ui);
       const state = nodeCheck(selection, '');
@@ -767,6 +801,7 @@ export function renderScopeEditor(
   const incident = ctx.incident;
   const editable = scopeEditable(ctx);
   const disabled = !editable || opts.busy === true;
+  const treeHidden = ui.treeHidden === true && incident.scope.applications.length > 0;
   const mode = ui.mode ?? incident.scope.mode;
   const modes = `<div class="inc-sc-modes" role="radiogroup" aria-label="${esc(t.modes)}">${SCOPE_MODES_ORDER.map(
     (key) =>
@@ -792,7 +827,7 @@ export function renderScopeEditor(
       ? `<button type="button" class="btn" data-action="inc-validate"${opts.busy || incident.state === 'CANCELLED' ? ' disabled' : ''}>${esc(t.check)}</button>`
       : '';
   const footer = `<div class="inc-sc-foot">${check}${dirty ? `<span class="mu">${esc(t.dirty)}</span><button type="button" class="btn ghost" data-action="inc-scope-reset"${opts.busy ? ' disabled' : ''}>${esc(t.reset)}</button>` : ''}${next}</div>`;
-  return `<section class="card wide inc-sc" aria-labelledby="inc-sc-t"><div class="inc-sc-head"><div><h2 id="inc-sc-t" class="fl">${esc(t.title)}</h2><p class="mu">${esc(t.sub)}</p></div></div>${notes}${modes}<div class="inc-sc-grid"><section class="inc-sc-box-s inc-sc-apps" aria-labelledby="inc-sc-apps-t"><h3 id="inc-sc-apps-t">${icon('code')}<span>${esc(t.applications)}</span></h3>${applicationsTree(ctx, ui, trees, disabled)}${editable && incident.scope.applications.length > 0 ? `<p class="mu inc-sc-note">${esc(t.replaceNote)}</p>` : ''}</section><div class="inc-sc-side">${depthControl(ctx, ui, disabled)}${includedList(ctx, ui, disabled)}${limitsBlock(ctx, ui, disabled)}</div></div>${problems}${validation}${footer}</section>`;
+  return `<section class="card wide inc-sc" aria-labelledby="inc-sc-t"><div class="inc-sc-head"><div><h2 id="inc-sc-t" class="fl">${esc(t.title)}</h2><p class="mu">${esc(t.sub)}</p></div></div>${notes}${modes}<div class="inc-sc-grid"><section class="inc-sc-box-s inc-sc-apps" aria-labelledby="inc-sc-apps-t"><h3 id="inc-sc-apps-t">${icon('code')}<span>${esc(t.applications)}</span></h3>${selectionSummary(ctx, ui)}${treeHidden ? '' : applicationsTree(ctx, ui, trees, disabled)}${editable && !treeHidden && incident.scope.applications.length > 0 ? `<p class="mu inc-sc-note">${esc(t.replaceNote)}</p>` : ''}</section><div class="inc-sc-side">${depthControl(ctx, ui, disabled)}${includedList(ctx, ui, disabled)}${limitsBlock(ctx, ui, disabled)}</div></div>${problems}${validation}${footer}</section>`;
 }
 
 /** Le texte de la profondeur (aria-valuetext et légende), pour la mise à jour pendant le glissement. */
@@ -822,6 +857,12 @@ export const INCIDENT_SCOPE_CSS = `
 .inc-sc-box-s h3,.inc-sc-h{margin:0;font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px}
 .inc-sc-box-s h3 .ico{width:16px;height:16px;color:var(--qa-color-muted)}
 .inc-sc-apps{max-height:min(62vh,560px);overflow:auto}
+.inc-sc-sel{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;padding:8px 10px;border-radius:10px;background:var(--qa-color-primary-soft-2);border:1px solid color-mix(in srgb,var(--qa-color-primary) 18%,var(--qa-color-border))}
+.inc-sc-sel-t{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 220px}
+.inc-sc-sel-t b{font-size:13px;color:var(--qa-color-primary-2)}
+.inc-sc-sel-n{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:13px}
+.inc-sc-sel-a{display:inline-flex;align-items:center;gap:6px;min-width:0}
+.inc-sc-sel .btn{align-self:center}
 .inc-sc-tree{list-style:none;margin:0;padding:0 0 0 18px;display:flex;flex-direction:column;gap:1px}
 .inc-sc-apps-list{padding-left:0}
 .inc-sc-row{display:flex;align-items:center;gap:2px;min-width:0}

@@ -236,6 +236,8 @@ export interface ScopeDiscovery {
   /** Les manifestes lus (relatifs à la racine), pour la traçabilité. */
   read: string[];
   discoveredAt: string;
+  /** La durée réelle de l'analyse, mesurée par le serveur. */
+  durationMs: number;
 }
 
 /** Un dépôt déjà connu de l'environnement d'investigation, proposé à la réutilisation. */

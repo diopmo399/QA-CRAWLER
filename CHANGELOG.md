@@ -32,6 +32,19 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Thème vert et blanc du Dashboard** : la palette (vert principal `#006B3F`, vert foncé `#004D2B`, vert très
+  foncé `#003B25`, vert secondaire `#008A4B`, verts clairs `#E6F4EA` et `#F2FAF5`, fond `#F7F9F8`, texte
+  `#172B24` et `#64746C`, bordures `#DCE5DF`, rouge `#DC3545`) remplace l'indigo dans les jetons `--qa-*`, avec
+  des jetons de panneau (`--qa-color-panel-*`) pour le menu latéral et la console, et un thème sombre assorti.
+  Menu latéral vert foncé de 240 px, logo araignée (icône SVG locale), « Pilotage & Investigation », entrée
+  active sur fond vert très clair en texte vert foncé, menu défilable. Étapes de l'investigation : terminée en
+  cercle vert à coche, active sur fond vert clair, non commencée en cercle blanc à bordure grise. Onglets actifs
+  en vert foncé sur fond vert clair. Étape Périmètre : bandeau de présentation avec trois indicateurs qui
+  reflètent l'état réel de la découverte (attente, en cours, comptes, échec), champ de chemin avec icône de
+  dossier, résumé « Analyse terminée » (applications, modules, fichiers lus, durée mesurée par le serveur :
+  `durationMs`), glyphe du cadre et badge « Application principale » sur les cartes, résumé de la sélection
+  des applications avec « Gérer » qui replie ou déplie les dossiers. Aucune règle métier ni route ne change.
+
 - **Découverte automatique du périmètre** (étape « Périmètre » de l'investigation, `src/incident/scope-discovery.ts`) :
   le bloc « Applications et dépôts » remplace la saisie manuelle des applications (identifiant, nom, couche, dossiers,
   classes, racine) par un chemin de projet — ou un dépôt déjà connu de l'environnement, réutilisé d'un clic — et

@@ -205,6 +205,7 @@ describe('a single Angular project', () => {
     expect(result.read).toEqual(['angular.json', 'package.json', 'proxy.conf.json']);
     expect(JSON.stringify(result)).not.toContain('never-read');
     expect(result.keywords).toEqual(['dossier', 'enregistrer', 'erreur']);
+    expect(Number.isInteger(result.durationMs) && result.durationMs >= 0).toBe(true);
   });
 
   it('is suggested alone when no word of the incident is found, and flagged when already in the scope', async () => {

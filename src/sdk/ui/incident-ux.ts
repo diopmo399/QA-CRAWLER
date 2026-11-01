@@ -1723,11 +1723,11 @@ export const INCIDENT_UX_CSS = `
 .ws-ux-sn{width:21px;height:21px;border-radius:50%;display:grid;place-items:center;font-size:11.5px;font-weight:700;border:1.5px solid var(--qa-color-border-strong);background:var(--qa-color-surface);color:var(--qa-color-muted);flex:none}
 .ws-ux-sn .ico{width:12px;height:12px;stroke-width:3}
 .ws-ux-sn .spin{width:12px;height:12px}
-.ws-ux-sr.ws-ux-s-todo .ws-ux-sn{border-style:dashed}
+.ws-ux-sr.ws-ux-s-todo .ws-ux-sn{border-style:solid;border-color:var(--qa-color-border-strong);background:var(--qa-color-surface)}
 .ws-ux-sr.ws-ux-s-done button{color:var(--qa-color-text)}
-.ws-ux-sr.ws-ux-s-done .ws-ux-sn{border-color:var(--qa-color-success);background:var(--qa-color-success-soft);color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text))}
-.ws-ux-sr button[aria-current="step"]{background:color-mix(in srgb,var(--qa-color-primary) 10%,var(--qa-color-surface));border-color:color-mix(in srgb,var(--qa-color-primary) 40%,transparent);color:var(--qa-color-primary);font-weight:600}
-.ws-ux-sr button[aria-current="step"] .ws-ux-sn{background:var(--qa-color-primary);border-color:var(--qa-color-primary);border-style:solid;color:var(--qa-color-surface)}
+.ws-ux-sr.ws-ux-s-done .ws-ux-sn{border-color:var(--qa-color-success);background:var(--qa-color-success);color:var(--qa-color-surface)}
+.ws-ux-sr button[aria-current="step"]{background:var(--qa-color-primary-soft);border-color:color-mix(in srgb,var(--qa-color-primary) 40%,transparent);color:var(--qa-color-primary-2);font-weight:600}
+.ws-ux-sr button[aria-current="step"] .ws-ux-sn{background:var(--qa-color-surface);border-color:var(--qa-color-primary);border-style:solid;color:var(--qa-color-primary-2)}
 .ws-ux-sr.ws-ux-s-blocked button{color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
 .ws-ux-sr.ws-ux-s-blocked .ws-ux-sn{border-color:var(--qa-color-danger);border-style:dashed;background:var(--qa-color-danger-soft);color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
 .ws-ux-sr.ws-ux-s-running .ws-ux-sn{box-shadow:0 0 0 3px color-mix(in srgb,var(--qa-color-primary) 20%,transparent)}
@@ -1743,12 +1743,12 @@ export const INCIDENT_UX_CSS = `
 .ws-ux-stage-t{display:flex;flex-direction:column;gap:1px;min-width:0}
 .ws-ux-stage-t b{font-size:13px;font-weight:600;overflow-wrap:normal;hyphens:manual}
 .ws-ux-stage-t small{font-size:12px;color:var(--qa-color-muted);display:inline-flex;align-items:center;justify-content:center;gap:4px}
-.ws-ux-s-done .ws-ux-dot{border-color:var(--qa-color-success);background:var(--qa-color-success-soft);color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text))}
-.ws-ux-s-current .ws-ux-dot{border-color:var(--qa-color-primary);background:var(--qa-color-primary);color:var(--qa-color-surface)}
+.ws-ux-s-done .ws-ux-dot{border-color:var(--qa-color-success);background:var(--qa-color-success);color:var(--qa-color-surface)}
+.ws-ux-s-current .ws-ux-dot{border-color:var(--qa-color-primary);background:var(--qa-color-primary-soft);color:var(--qa-color-primary-2)}
 .ws-ux-s-current .ws-ux-stage-t small{color:var(--qa-color-primary);font-weight:600}
 .ws-ux-s-blocked .ws-ux-dot{border-color:var(--qa-color-danger);border-style:dashed;background:var(--qa-color-danger-soft);color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
 .ws-ux-s-blocked .ws-ux-stage-t small{color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text));font-weight:600}
-.ws-ux-s-todo .ws-ux-dot{border-style:dashed}
+.ws-ux-s-todo .ws-ux-dot{border-style:solid;border-color:var(--qa-color-border-strong);background:var(--qa-color-surface)}
 .ws-ux-s-running .ws-ux-dot{box-shadow:0 0 0 4px color-mix(in srgb,var(--qa-color-primary) 20%,transparent)}
 .ws-ux-tabbar{display:flex;align-items:flex-end;justify-content:space-between;gap:4px 12px;min-width:0;border-bottom:1px solid var(--qa-color-border)}
 .ws-ux-tabbar>.ws-ux-tabs{flex:1 1 auto;min-width:0;border-bottom:0}

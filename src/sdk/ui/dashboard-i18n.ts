@@ -2,7 +2,7 @@
 const fr = {
   locale: 'fr' as 'fr' | 'en',
   product: 'QA-CRAWLER',
-  tag: 'Pilotage',
+  tag: 'Pilotage & Investigation',
   /** Les sections du menu et leurs entrées. */
   sections: {
     pilot: 'Piloter',
@@ -2245,7 +2245,7 @@ export type DashboardStrings = typeof fr;
 const en: DashboardStrings = {
   locale: 'en',
   product: 'QA-CRAWLER',
-  tag: 'Dashboard',
+  tag: 'Steering & Investigation',
   sections: {
     pilot: 'Operate',
     incidents: 'Investigate',

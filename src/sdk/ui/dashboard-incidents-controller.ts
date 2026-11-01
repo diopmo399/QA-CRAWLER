@@ -807,6 +807,11 @@ export class IncidentsController {
           this.focus('#inc-f-files');
         return true;
       }
+      case 'inc-scope-manage':
+        this.scopeAction('inc-scope-manage', {});
+        this.host.paint();
+        this.focus('[data-action="inc-scope-manage"]');
+        return true;
       case 'inc-scope-mode':
       case 'inc-scope-expand':
       case 'inc-scope-toggle':

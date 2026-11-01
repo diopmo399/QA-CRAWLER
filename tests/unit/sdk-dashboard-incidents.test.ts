@@ -1835,6 +1835,7 @@ describe('dashboard — incidents: controller', () => {
       keywords: ['livre'],
       read: ['package.json'],
       discoveredAt: at,
+      durationMs: 320,
     };
     const knownRepositories = vi.fn(() =>
       Promise.resolve({

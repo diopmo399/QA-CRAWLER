@@ -63,6 +63,10 @@ export { formatDate, pill, readiness } from './dashboard-parts.js';
  * du SDK tel quel ; un taux dit son numérateur, son dénominateur et son périmètre ; une valeur saisie
  * ou un secret n'apparaît jamais (le SDK ne les renvoie pas, et rien n'est reconstitué ici).
  */
+/** L'araignée du logo (icône locale, traits blancs sur le fond du menu) : QA-CRAWLER parcourt l'application. */
+const SPIDER_SVG =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="14" rx="3.6" ry="4.4"/><circle cx="12" cy="8.2" r="2.2"/><path d="M8.6 12.2 4.2 9.4 2.6 5.6M8.4 14.6H3.4l-1.4 3.2M8.8 16.8 5 19.4l-.6 3M15.4 12.2l4.4-2.8 1.6-3.8M15.6 14.6h5l1.4 3.2M15.2 16.8l3.8 2.6.6 3"/></svg>';
+
 export const PROJECT_TABS = ['launch', 'environments', 'scenarios', 'executions', 'security'] as const;
 export type ProjectTab = (typeof PROJECT_TABS)[number];
 
@@ -300,7 +304,7 @@ export function renderDashboard(state: DashboardState): string {
       : '';
   return `<div class="dash" data-menu="${state.menuOpen ? 'open' : 'closed'}">
 <nav class="side" aria-label="${esc(t.tag)}">
-<div class="top"><div class="brand"><span class="logo" aria-hidden="true">Q</span><span><b>${esc(t.product)}</b><small>${esc(t.tag)}</small></span></div><button class="menu-btn" data-action="menu" aria-expanded="${state.menuOpen ? 'true' : 'false'}" aria-controls="qa-drawer">${icon(state.menuOpen ? 'close' : 'menu')}<span>${esc(state.menuOpen ? t.menuClose : t.menu)}</span></button></div>
+<div class="top"><div class="brand"><span class="logo" aria-hidden="true">${SPIDER_SVG}</span><span><b>${esc(t.product)}</b><small>${esc(t.tag)}</small></span></div><button class="menu-btn" data-action="menu" aria-expanded="${state.menuOpen ? 'true' : 'false'}" aria-controls="qa-drawer">${icon(state.menuOpen ? 'close' : 'menu')}<span>${esc(state.menuOpen ? t.menuClose : t.menu)}</span></button></div>
 <div class="drawer" id="qa-drawer">${context}${sections}${foot}</div>
 </nav>
 <main class="main"${state.shown ? ' aria-busy="true" inert' : ''}>${state.notice ? `<p class="notice" role="status">${esc(state.notice)}</p>` : ''}${body(state.shown ? { ...state, route: state.shown } : state)}</main>
