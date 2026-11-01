@@ -24,6 +24,7 @@ const DARK_TOKENS = [
   '--qa-color-border-strong:#345244',
   '--qa-color-panel:#06201A',
   '--qa-color-panel-2:#0B2E24',
+  '--qa-color-panel-raised:#0F3A2D',
   '--qa-color-panel-border:#1B4A3A',
   '--qa-color-panel-hover:#12402F',
   '--qa-color-panel-text:#F2FAF5',

@@ -27,7 +27,7 @@ export const DASHBOARD_CSS = `
   --qa-color-surface:#FFFFFF;--qa-color-surface-2:#F2FAF5;
   --qa-color-text:#172B24;--qa-color-muted:#64746C;--qa-color-faint:#9AA8A0;
   --qa-color-border:#DCE5DF;--qa-color-border-strong:#C5D3CA;
-  --qa-color-panel:#004D2B;--qa-color-panel-2:#003B25;--qa-color-panel-border:#1D6A47;--qa-color-panel-hover:#136341;
+  --qa-color-panel:#004D2B;--qa-color-panel-2:#003B25;--qa-color-panel-raised:#005D38;--qa-color-panel-border:#1D6A47;--qa-color-panel-hover:#136341;
   --qa-color-panel-text:#FFFFFF;--qa-color-panel-muted:#BFE3CF;--qa-color-panel-link:#A8E6C3;
   --qa-color-success:#008A4B;--qa-color-success-soft:#E6F4EA;
   --qa-color-warning:#B86E00;--qa-color-warning-soft:#FFF4DF;
@@ -64,16 +64,19 @@ code{background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border
 .drawer{display:flex;flex-direction:column;gap:16px;flex:1}
 .ctx{display:flex;flex-direction:column;gap:6px;padding:0 6px}
 .ctx span{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--qa-color-panel-muted)}
-.ctx select{min-height:40px;border-radius:10px;border:1px solid var(--qa-color-panel-border);background:var(--qa-color-panel-2);color:var(--qa-color-panel-text);padding:0 10px;max-width:100%}
+.ctx select{min-height:40px;border-radius:10px;border:1px solid var(--qa-color-panel-border);background:var(--qa-color-panel-raised);color:var(--qa-color-panel-text);padding:0 10px;max-width:100%}
 .sec{display:flex;flex-direction:column;gap:2px}
 .sec-t{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--qa-color-panel-muted);padding:0 12px 4px}
 .side a{display:flex;align-items:center;gap:10px;padding:0 12px;min-height:36px;border-radius:10px;color:var(--qa-color-panel-text);text-decoration:none;font-size:13.5px}
 .side a .ico{opacity:.9}
 .side a:hover{background:var(--qa-color-panel-hover);color:var(--qa-color-panel-text)}
-.side a[aria-current="page"]{background:var(--qa-color-primary-soft-2);color:var(--qa-color-primary-2);font-weight:600}
+.side a[aria-current="page"]{background:var(--qa-color-primary-soft);color:var(--qa-color-primary-2);font-weight:600}
 .side a[aria-current="page"] .ico{opacity:1}
 .side a:focus-visible{outline:3px solid color-mix(in srgb,var(--qa-color-panel-text) 60%,transparent);outline-offset:1px}
-.foot{margin-top:auto;border-top:1px solid var(--qa-color-panel-border);padding:14px 12px 0;font-size:12px;color:var(--qa-color-panel-muted);display:flex;flex-direction:column;gap:4px}
+/* Le motif de la maquette : deux vagues vertes au bas du menu, derrière rien d'interactif. */
+.side-wave{display:block;flex:none;margin:auto -12px 0;width:calc(100% + 24px);height:96px;pointer-events:none}
+.side-wave+.foot{margin-top:0}
+.foot{margin-top:auto;padding:10px 12px 0;font-size:12px;color:var(--qa-color-panel-muted);display:flex;flex-direction:column;gap:4px;position:relative}
 .foot span{display:flex;align-items:center;gap:8px}
 .foot .on{width:8px;height:8px;border-radius:50%;background:var(--qa-color-panel-link);display:inline-block}
 .main{min-width:0;background:var(--qa-color-background);border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:20px}
@@ -752,6 +755,7 @@ details.tech[open] summary{margin-bottom:6px}
   .side{padding:12px 14px;gap:12px}
   .menu-btn{display:inline-flex}
   .dash[data-menu="closed"] .drawer{display:none}
+  .side-wave{display:none}
   .drawer{gap:16px}
   .foot{margin-top:0}
 }

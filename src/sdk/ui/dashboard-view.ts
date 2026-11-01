@@ -305,11 +305,15 @@ export function renderDashboard(state: DashboardState): string {
   return `<div class="dash" data-menu="${state.menuOpen ? 'open' : 'closed'}">
 <nav class="side" aria-label="${esc(t.tag)}">
 <div class="top"><div class="brand"><span class="logo" aria-hidden="true">${SPIDER_SVG}</span><span><b>${esc(t.product)}</b><small>${esc(t.tag)}</small></span></div><button class="menu-btn" data-action="menu" aria-expanded="${state.menuOpen ? 'true' : 'false'}" aria-controls="qa-drawer">${icon(state.menuOpen ? 'close' : 'menu')}<span>${esc(state.menuOpen ? t.menuClose : t.menu)}</span></button></div>
-<div class="drawer" id="qa-drawer">${context}${sections}${foot}</div>
+<div class="drawer" id="qa-drawer">${context}${sections}${SIDE_WAVE}${foot}</div>
 </nav>
 <main class="main"${state.shown ? ' aria-busy="true" inert' : ''}>${state.notice ? `<p class="notice" role="status">${esc(state.notice)}</p>` : ''}${body(state.shown ? { ...state, route: state.shown } : state)}</main>
 </div>`;
 }
+
+/** Les deux vagues vertes au bas du menu (décor de la maquette, en vert secondaire, l'une translucide). */
+const SIDE_WAVE =
+  '<svg class="side-wave" viewBox="0 0 240 96" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d="M0 44C38 16 76 70 122 42S196 6 240 28V50C196 36 160 70 122 62S60 34 0 66z" fill="var(--qa-color-secondary)" opacity=".45"/><path d="M0 62C46 30 90 84 138 52S210 30 240 44V72C200 60 170 88 138 80S70 60 0 90z" fill="var(--qa-color-secondary)"/></svg>';
 
 function body(state: DashboardState): string {
   const t = state.t;
