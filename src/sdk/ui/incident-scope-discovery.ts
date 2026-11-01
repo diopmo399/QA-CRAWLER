@@ -402,6 +402,29 @@ export function principalApplication(result: ScopeDiscovery): string | undefined
   return best?.application.id;
 }
 
+/** Le badge d'un cadre : un bouclier à la couleur du cadre, la lettre qui le désigne (comme la maquette). */
+const FRAMEWORK_BADGES: Record<string, { letter: string; color: string }> = {
+  Ng: { letter: 'A', color: '#DD0031' },
+  Re: { letter: 'R', color: '#149ECA' },
+  Vu: { letter: 'V', color: '#42B883' },
+  Sv: { letter: 'S', color: '#FF3E00' },
+  Io: { letter: 'I', color: '#3880FF' },
+  Ns: { letter: 'N', color: '#E0234E' },
+  Js: { letter: 'JS', color: '#3C873A' },
+  Sp: { letter: 'S', color: '#6DB33F' },
+  Jv: { letter: 'J', color: '#E76F00' },
+  Py: { letter: 'Py', color: '#3776AB' },
+  Go: { letter: 'Go', color: '#00ADD8' },
+  '.N': { letter: '.N', color: '#512BD4' },
+  Ts: { letter: 'TS', color: '#3178C6' },
+};
+const SHIELD_PATH = 'M12 2.5l8.5 3-1.3 11.3L12 21.5l-7.2-4.7L3.5 5.5z';
+function frameworkBadge(glyph: { glyph: string; family: string }): string {
+  const badge = FRAMEWORK_BADGES[glyph.glyph];
+  if (!badge) return `<span class="inc-sd-fw-t">${esc(glyph.glyph)}</span>`;
+  return `<svg class="inc-sd-fw-s" viewBox="0 0 24 24" aria-hidden="true"><path d="${SHIELD_PATH}" fill="${badge.color}"/><text x="12" y="${badge.letter.length > 1 ? '15.5' : '16.5'}" text-anchor="middle" font-size="${badge.letter.length > 1 ? '8' : '11'}" font-weight="700" fill="#FFFFFF">${esc(badge.letter)}</text></svg>`;
+}
+
 const pill = (text: string, extra = ''): string =>
   `<span class="inc-sd-pill${extra ? ` ${extra}` : ''}">${esc(text)}</span>`;
 const codes = (items: readonly string[]): string =>
@@ -440,8 +463,8 @@ function applicationCard(
   const glyph = frameworkGlyph(entry.frameworks, entry.languages);
   const framework = entry.frameworks[0] ?? entry.languages[0] ?? '';
   const glyphHtml = framework
-    ? `<span class="inc-sd-fw inc-sd-fw-${glyph.family}" role="img" aria-label="${esc(t.frameworkOf(framework))}" title="${esc(framework)}">${esc(glyph.glyph)}</span>`
-    : `<span class="inc-sd-fw inc-sd-fw-${glyph.family}" aria-hidden="true">${esc(glyph.glyph)}</span>`;
+    ? `<span class="inc-sd-fw inc-sd-fw-${glyph.family}" role="img" aria-label="${esc(t.frameworkOf(framework))}" title="${esc(framework)}" data-glyph="${esc(glyph.glyph)}">${frameworkBadge(glyph)}</span>`
+    : `<span class="inc-sd-fw inc-sd-fw-${glyph.family}" aria-hidden="true" data-glyph="${esc(glyph.glyph)}">${frameworkBadge(glyph)}</span>`;
   const inScope = entry.alreadyInScope !== undefined;
   const checked = inScope || ui.selected[id] === true;
   const layer = layerOf(ui, entry);
@@ -472,8 +495,8 @@ function applicationCard(
       ? `<ul class="inc-sd-q" role="list">${entry.questions.map((question) => `<li>${icon('alert')}<span>${esc(question)}</span></li>`).join('')}</ul>`
       : '';
   const reasons =
-    entry.reasons.length > 0 ? `<p class="mu inc-sd-why">${esc(entry.reasons.join(' · '))}</p>` : '';
-  return `<li class="inc-sd-app${checked ? ' on' : ''}${inScope ? ' known' : ''}" data-app="${esc(id)}"><div class="inc-sd-app-h"><label class="inc-sd-check"><input type="checkbox" data-inc="disc.app.${esc(id)}" data-block="${esc(id)}"${checked ? ' checked' : ''}${disabled || inScope ? ' disabled' : ''}>${glyphHtml}<b>${esc(entry.application.name)}</b><code title="${esc(entry.application.repository.root)}">${esc(location)}</code></label>${principal ? pill(t.principal, 'main') : ''}${layerSelect}${entry.frameworks.map((framework) => pill(framework, 'fw')).join('')}${entry.languages.map((language) => pill(language)).join('')}${pill(t.confidence[entry.confidence], `conf-${entry.confidence.toLowerCase()}`)}${inScope ? pill(t.alreadyInScope(entry.alreadyInScope ?? ''), 'in') : ''}</div>${reasons}${questions}${details}</li>`;
+    entry.reasons.length > 0 ? `<span class="mu inc-sd-why">${esc(entry.reasons.join(' · '))}</span>` : '';
+  return `<li class="inc-sd-app${checked ? ' on' : ''}${inScope ? ' known' : ''}" data-app="${esc(id)}"><div class="inc-sd-app-h"><label class="inc-sd-check"><input type="checkbox" data-inc="disc.app.${esc(id)}" data-block="${esc(id)}"${checked ? ' checked' : ''}${disabled || inScope ? ' disabled' : ''}>${glyphHtml}<span class="inc-sd-app-id"><span class="inc-sd-app-n"><b>${esc(entry.application.name)}</b><code title="${esc(entry.application.repository.root)}">${esc(location)}</code>${principal ? pill(t.principal, 'main') : ''}</span>${reasons}</span></label><span class="inc-sd-app-tags">${layerSelect}${entry.frameworks.map((framework) => pill(framework, 'fw')).join('')}${entry.languages.map((language) => pill(language)).join('')}${pill(t.confidence[entry.confidence], `conf-${entry.confidence.toLowerCase()}`)}${inScope ? pill(t.alreadyInScope(entry.alreadyInScope ?? ''), 'in') : ''}</span></div>${questions}${details}</li>`;
 }
 
 function resultBlock(
@@ -702,18 +725,17 @@ export const INCIDENT_SCOPE_DISCOVERY_CSS = `
 .inc-sd-done.partial .inc-sd-done-i{background:var(--qa-color-warning)}
 .inc-sd-done.partial .inc-sd-done-t b{color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text))}
 .inc-sd-done.partial .inc-sd-metric{border-left-color:color-mix(in srgb,var(--qa-color-warning) 30%,var(--qa-color-border))}
-.inc-sd-fw{width:28px;height:28px;border-radius:8px;display:inline-grid;place-items:center;font-size:11.5px;font-weight:700;flex:none;border:1px solid var(--qa-color-border);background:var(--qa-color-surface-2);color:var(--qa-color-muted)}
-.inc-sd-fw-front{color:var(--qa-color-primary);background:var(--qa-color-primary-soft)}
-.inc-sd-fw-java,.inc-sd-fw-py,.inc-sd-fw-go,.inc-sd-fw-net{color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text));background:var(--qa-color-success-soft)}
-.inc-sd-fw-node{color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text));background:var(--qa-color-warning-soft)}
+.inc-sd-fw{width:30px;height:30px;display:inline-grid;place-items:center;flex:none;font-size:11.5px;font-weight:700;color:var(--qa-color-muted)}
+.inc-sd-fw-s{width:30px;height:30px;display:block}
+.inc-sd-fw-t{width:28px;height:28px;border-radius:8px;display:inline-grid;place-items:center;border:1px solid var(--qa-color-border);background:var(--qa-color-surface-2)}
 .inc-sd-pill.main{color:var(--qa-color-primary-2);background:var(--qa-color-primary-soft);border-color:color-mix(in srgb,var(--qa-color-primary) 25%,var(--qa-color-border))}
 .inc-sd-more summary .ico{width:14px;height:14px;vertical-align:-2px;margin-right:4px}
 .inc-sd-head h2{margin:0;display:flex;align-items:center;gap:8px}
 .inc-sd-head h2 .ico{width:18px;height:18px;color:var(--qa-color-muted)}
 .inc-sd-head p{margin:2px 0 0}
 .inc-sd-form{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}
-.inc-sd-root{flex:1 1 320px;min-width:0}
-.inc-sd-form .btn{flex:none}
+.inc-sd-root{flex:1 1 320px;min-width:0;margin:0}
+.card>.inc-sd-form>.btn{flex:none;margin:0;align-self:flex-end;min-height:var(--qa-control,44px)}
 .inc-sd-known{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0;font-size:13px}
 .inc-sd-known{min-width:0;max-width:100%}
 .inc-sd-chips{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px;min-width:0;max-width:100%}
@@ -744,8 +766,11 @@ export const INCIDENT_SCOPE_DISCOVERY_CSS = `
 .inc-sd-app{border:1px solid var(--qa-color-border);border-radius:10px;padding:10px 12px;background:var(--qa-color-surface);display:flex;flex-direction:column;gap:6px;min-width:0}
 .inc-sd-app.on{border-color:var(--qa-color-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--qa-color-primary) 35%,transparent)}
 .inc-sd-app.known{opacity:.85}
-.inc-sd-app-h{display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;min-width:0}
-.inc-sd-check{display:inline-flex;align-items:center;gap:8px;min-width:0;cursor:pointer;flex:1 1 240px}
+.inc-sd-app-h{display:flex;align-items:center;gap:6px 12px;flex-wrap:wrap;min-width:0}
+.inc-sd-check{display:inline-flex;align-items:center;gap:10px;min-width:0;cursor:pointer;flex:1 1 320px}
+.inc-sd-app-id{display:flex;flex-direction:column;gap:2px;min-width:0}
+.inc-sd-app-n{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.inc-sd-app-tags{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto}
 .inc-sd-check input{width:16px;height:16px;accent-color:var(--qa-color-primary);margin:0;flex:none}
 .inc-sd-check b{white-space:nowrap}
 .inc-sd-check code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;background:transparent;border:0;padding:0;color:var(--qa-color-muted)}
@@ -753,7 +778,7 @@ export const INCIDENT_SCOPE_DISCOVERY_CSS = `
 .inc-sd-layer select.inc-sd-l-frontend{color:var(--qa-color-primary)}
 .inc-sd-layer select.inc-sd-l-bff{color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text))}
 .inc-sd-layer select.inc-sd-l-backend{color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text))}
-.inc-sd-why{margin:0;font-size:12.5px}
+.inc-sd-why{margin:0;font-size:12.5px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .inc-sd-q{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
 .inc-sd-q li{display:flex;gap:6px;align-items:flex-start;font-size:12.5px;color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text))}
 .inc-sd-q .ico{width:14px;height:14px;flex:none;margin-top:2px}

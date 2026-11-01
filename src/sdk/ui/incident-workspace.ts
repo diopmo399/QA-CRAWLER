@@ -1197,12 +1197,20 @@ export function renderWorkspace(view: WorkspaceView): string {
   };
   const subs = subTabsOf(ctx, route.tab);
   const tools = `${renderHiddenBar(ws.split, specs, splitOpts)}<button type="button" class="ws-tool" data-action="ws-ux-compact" aria-pressed="${String(ws.compact)}" title="${esc(t.compactHint)}">${icon('sliders')}<span>${esc(t.compact)}</span></button><button type="button" class="ws-tool" data-action="ws-split-reset" title="${esc(splitText(view.lang).reset)}">${icon('undo')}<span class="sr">${esc(splitText(view.lang).reset)}</span></button>`;
-  const mainBar = renderTabs(ctx, mainTabsOf(ctx), route.tab, { kind: 'main', tools });
+  // Les outils (panneaux masqués, mode compact, réinitialisation) : sur la ligne des sous-onglets quand il y en a une.
+  const hasSub = subs.length > 0 && route.sub !== undefined;
+  const mainBar = renderTabs(
+    ctx,
+    mainTabsOf(ctx),
+    route.tab,
+    hasSub ? { kind: 'main' } : { kind: 'main', tools },
+  );
   const subBar =
     subs.length > 0 && route.sub
       ? renderTabs(ctx, subs, route.sub, {
           kind: 'sub',
           label: ux.subTabsLabel(ux.mainTabs[route.tab] ?? route.tab),
+          tools,
         })
       : '';
   const labelledBy = route.sub && subs.length > 0 ? `ws-ux-sub-${route.sub}` : `ws-ux-tab-${route.tab}`;

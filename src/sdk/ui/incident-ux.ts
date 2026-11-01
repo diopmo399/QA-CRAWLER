@@ -1729,8 +1729,7 @@ export const INCIDENT_UX_CSS = `
 .ws-ux-stepper-row .ws-ux-step-row{flex-wrap:nowrap;gap:6px}
 .ws-ux-steps-row{list-style:none;margin:0;padding:2px 0;display:flex;align-items:center;gap:0;flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scroll-padding-inline:24px;background:linear-gradient(to right,var(--qa-color-background) 40%,transparent) left / 24px 100% no-repeat local,linear-gradient(to left,var(--qa-color-background) 40%,transparent) right / 24px 100% no-repeat local,radial-gradient(farthest-side at 0 50%,color-mix(in srgb,var(--qa-color-text) 22%,transparent),transparent) left / 10px 100% no-repeat scroll,radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--qa-color-text) 22%,transparent),transparent) right / 10px 100% no-repeat scroll}
 .ws-ux-sr{flex:none;display:flex;align-items:center}
-.ws-ux-sr+.ws-ux-sr::before{content:"";flex:none;width:8px;height:1px;background:var(--qa-color-border-strong)}
-.ws-ux-sr.ws-ux-s-done+.ws-ux-sr::before{background:var(--qa-color-success)}
+.ws-ux-sr+.ws-ux-sr{margin-left:2px}
 .ws-ux-sr button{display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:0 7px 0 3px;border:1px solid transparent;border-radius:999px;background:transparent;color:var(--qa-color-muted);font:inherit;font-size:12.5px;white-space:nowrap;cursor:pointer}
 .ws-ux-sr button:hover{background:var(--qa-color-surface-2);color:var(--qa-color-text)}
 .ws-ux-sn{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;border:1.5px solid var(--qa-color-border-strong);background:var(--qa-color-surface-2);color:var(--qa-color-muted);flex:none}

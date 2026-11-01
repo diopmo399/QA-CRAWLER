@@ -350,10 +350,10 @@ describe('renderScopeDiscovery', () => {
     expect(html).toContain('<span class="inc-sd-pill main">Application principale</span>');
     expect(html.split('Application principale')).toHaveLength(2);
     expect(html).toContain(
-      '<span class="inc-sd-fw inc-sd-fw-front" role="img" aria-label="Cadre : Angular" title="Angular">Ng</span>',
+      '<span class="inc-sd-fw inc-sd-fw-front" role="img" aria-label="Cadre : Angular" title="Angular" data-glyph="Ng"><svg class="inc-sd-fw-s"',
     );
     expect(html).toContain(
-      '<span class="inc-sd-fw inc-sd-fw-node" role="img" aria-label="Cadre : NestJS" title="NestJS">Ns</span>',
+      '<span class="inc-sd-fw inc-sd-fw-node" role="img" aria-label="Cadre : NestJS" title="NestJS" data-glyph="Ns"><svg class="inc-sd-fw-s"',
     );
     expect(html).toContain('4 application(s) détectée(s), 2 proposée(s) pour cet incident');
     expect(html).toContain('Outils : Nx, npm/yarn workspaces');

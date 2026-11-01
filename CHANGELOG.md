@@ -53,7 +53,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   Modules, Éléments, Durée d'analyse séparés par des filets, « Éléments » = fichiers lus + modules + points
   d'entrée + configurations + services) ; « Détails de la détection (modules, structure, dépendances) »,
   « Fichiers lus (n) » à droite, « Effacer le résultat » avec corbeille ; « Définition du périmètre » avec icône,
-  modes à icônes, « Gérer » avec crayon, « Profondeur d'analyse » avec infobulle.
+  modes à icônes, « Gérer » avec crayon, « Profondeur d'analyse » avec infobulle. Détails d'alignement : badge
+  du cadre en bouclier à la couleur du cadre (Angular, React, Vue, Svelte, Ionic, NestJS, Node, Spring, Java,
+  Python, Go, .NET, TypeScript) avec sa lettre, carte d'application sur deux colonnes (nom, badge et raisons à
+  gauche ; couche et pastilles à droite), bouton « Analyser automatiquement » aligné sur le champ, dix étapes sur
+  une ligne sans traits de liaison, outils de l'espace (« Mode compact », panneaux masqués, réinitialisation) sur
+  la ligne des sous-onglets, menu latéral plus compact (lignes de 36 px).
 
 - **Découverte automatique du périmètre** (étape « Périmètre » de l'investigation, `src/incident/scope-discovery.ts`) :
   le bloc « Applications et dépôts » remplace la saisie manuelle des applications (identifiant, nom, couche, dossiers,
