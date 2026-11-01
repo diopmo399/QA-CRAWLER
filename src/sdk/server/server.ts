@@ -3977,14 +3977,31 @@ async function readBytes(request: IncomingMessage, maxBytes: number): Promise<Ui
   if (declared > maxBytes)
     throw new HttpError(413, 'TOO_LARGE', `the file is larger than ${String(maxBytes)} bytes`);
   const chunks: Buffer[] = [];
+  const size = await readBounded(request, maxBytes, chunks);
+  if (size > maxBytes)
+    throw new HttpError(413, 'TOO_LARGE', `the file is larger than ${String(maxBytes)} bytes`);
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
+/** Au-delà de ce multiple de la limite, le corps n'est plus lu : la connexion est coupée (abus). */
+const DISCARD_FACTOR = 8;
+
+/**
+ * Lit un corps borné : au-delà de `maxBytes`, le reste est lu puis jeté (rien n'est gardé) pour que la
+ * réponse 413 parte sur une connexion proprement lue — répondre avant la fin de l'envoi fait échouer la
+ * requête (ou la suivante, en keep-alive) chez le client, surtout sous Windows. Rend la taille reçue.
+ */
+async function readBounded(request: IncomingMessage, maxBytes: number, chunks: Buffer[]): Promise<number> {
   let size = 0;
   for await (const chunk of request) {
     size += (chunk as Buffer).length;
-    if (size > maxBytes)
-      throw new HttpError(413, 'TOO_LARGE', `the file is larger than ${String(maxBytes)} bytes`);
-    chunks.push(chunk as Buffer);
+    if (size > maxBytes * DISCARD_FACTOR) {
+      request.destroy();
+      break;
+    }
+    if (size <= maxBytes) chunks.push(chunk as Buffer);
   }
-  return new Uint8Array(Buffer.concat(chunks));
+  return size;
 }
 
 const PIPELINE_STATUS: Record<PipelineError['code'], number> = {
@@ -4220,12 +4237,8 @@ async function readJson(
   if (!type.toLowerCase().startsWith('application/json'))
     throw new HttpError(415, 'UNSUPPORTED_MEDIA_TYPE', 'expected application/json');
   const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += (chunk as Buffer).length;
-    if (size > maxBytes) throw new HttpError(413, 'TOO_LARGE', 'request body too large');
-    chunks.push(chunk as Buffer);
-  }
+  const size = await readBounded(request, maxBytes, chunks);
+  if (size > maxBytes) throw new HttpError(413, 'TOO_LARGE', 'request body too large');
   try {
     const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
@@ -4369,11 +4382,6 @@ function sendError(response: ServerResponse, error: unknown): void {
     response.end();
     return;
   }
-  // Un corps refusé en cours de lecture (413) laisse la connexion à moitié lue : elle est fermée après la
-  // réponse pour qu'un client ne la réutilise pas (sinon sa requête suivante échoue sur un socket coupé).
-  response.writeHead(status, {
-    'content-type': JSON_TYPE,
-    ...(status === 413 ? { connection: 'close' } : {}),
-  });
+  response.writeHead(status, { 'content-type': JSON_TYPE });
   response.end(JSON.stringify(body));
 }
