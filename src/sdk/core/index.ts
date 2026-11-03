@@ -5,6 +5,7 @@
 export * from './contracts.js';
 export * from './lifecycle.js';
 export * from './verdicts.js';
+export * from './journey.js';
 export {
   createQaCrawler,
   isCompatible,

@@ -92,6 +92,7 @@ import type {
   RequirementsView,
   TrendsView,
 } from './contracts.js';
+import type { Journey, JourneyCheck, JourneySummary } from './journey.js';
 import { SDK_API_VERSION } from './contracts.js';
 import type {
   EnvironmentCapabilities,
@@ -340,6 +341,28 @@ export interface QaCrawlerClient {
     compareSource(projectId: string, name: string): Promise<BlockSourceComparison>;
     /** Reprend le contenu de la source : le bloc devient CHANGED (une nouvelle version à valider). */
     updateFromSource(projectId: string, name: string): Promise<LibraryBlockView>;
+  };
+  /**
+   * Les parcours visuels de la bibliothèque (mode linéaire ou diagramme) : enregistrés comme brouillons,
+   * vérifiés chemin par chemin, puis transformés en scénarios ordinaires (`run:` + `with:`).
+   */
+  journeys: {
+    list(projectId: string): Promise<JourneySummary[]>;
+    open(projectId: string, name: string): Promise<Journey>;
+    /** Enregistre (sans rien produire d'exécutable) ; 409 sur une révision périmée ou un nom pris. */
+    save(
+      projectId: string,
+      journey: Journey,
+      options?: { revision?: string; previous?: string },
+    ): Promise<Journey>;
+    check(projectId: string, journey: Journey): Promise<JourneyCheck>;
+    /** Crée le(s) scénario(s) d'un parcours enregistré ; `perPath` : un par chemin (parcours avec conditions). */
+    publish(
+      projectId: string,
+      name: string,
+      options?: { perPath?: boolean },
+    ): Promise<{ scenarios: string[] }>;
+    remove(projectId: string, name: string): Promise<{ removed: string }>;
   };
   /** Les exécutions : le rejeu des scénarios par le moteur, suivi comme une exploration. */
   executions: {
@@ -1001,6 +1024,17 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request('POST', `${project(projectId)}/scenarios/${encodeURIComponent(scenario)}/insert`, input),
       acceptBlocks: (projectId, scenario) =>
         request('POST', `${project(projectId)}/scenarios/${encodeURIComponent(scenario)}/accept`, {}),
+    },
+    journeys: {
+      list: (projectId) => request('GET', `${project(projectId)}/journeys`),
+      open: (projectId, name) =>
+        request('GET', `${project(projectId)}/journeys/open?name=${encodeURIComponent(name)}`),
+      save: (projectId, journey, options = {}) =>
+        request('POST', `${project(projectId)}/journeys`, { journey, ...options }),
+      check: (projectId, journey) => request('POST', `${project(projectId)}/journeys/check`, { journey }),
+      publish: (projectId, name, options = {}) =>
+        request('POST', `${project(projectId)}/journeys/publish`, { name, ...options }),
+      remove: (projectId, name) => request('POST', `${project(projectId)}/journeys/remove`, { name }),
     },
     library: {
       list: (projectId) => request('GET', `${project(projectId)}/library`),

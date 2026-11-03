@@ -69,7 +69,7 @@ export class LibraryError extends Error {
 
 type Raw = Record<string, unknown>;
 
-interface FlowEntry {
+export interface FlowEntry {
   name: string;
   /** Le fichier (absolu) et son chemin relatif au dossier des flows. */
   file: string;
@@ -79,7 +79,7 @@ interface FlowEntry {
   index?: number;
 }
 
-interface BlockRecord {
+export interface BlockRecord {
   id: string;
   version: number;
   hash: string;
@@ -90,12 +90,12 @@ interface BlockRecord {
   history: { version: number; at?: string; change: string }[];
 }
 
-interface CompositionRecord {
+export interface CompositionRecord {
   at: string;
   blocks: { name: string; id: string; version: number; hash: string }[];
 }
 
-interface Registry {
+export interface Registry {
   version: 2;
   blocks: Record<string, BlockRecord>;
   compositions: Record<string, CompositionRecord>;
@@ -120,7 +120,7 @@ const exists = (file: string): Promise<boolean> =>
 const locks = new Map<string, Promise<unknown>>();
 
 /** Les opérations de la bibliothèque d'un projet passent l'une après l'autre (jamais deux écritures mêlées). */
-function withLock<T>(projectDir: string, run: () => Promise<T>): Promise<T> {
+export function withLock<T>(projectDir: string, run: () => Promise<T>): Promise<T> {
   const previous = locks.get(projectDir) ?? Promise.resolve();
   const next = previous.then(run, run);
   locks.set(
@@ -173,7 +173,7 @@ const removeBackups = (staged: readonly { backup?: string }[]): Promise<unknown>
 // Le registre : version 2, l'ancien format (origines seules) est repris avec des valeurs explicites.
 // ---------------------------------------------------------------------------------------------
 
-async function readRegistry(projectDir: string): Promise<Registry> {
+export async function readRegistry(projectDir: string): Promise<Registry> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(path.join(projectDir, LIBRARY_FILE), 'utf8'));
@@ -204,7 +204,7 @@ async function readRegistry(projectDir: string): Promise<Registry> {
   };
 }
 
-const registryFile = (projectDir: string, registry: Registry): { file: string; content: string } => ({
+export const registryFile = (projectDir: string, registry: Registry): { file: string; content: string } => ({
   file: path.join(projectDir, LIBRARY_FILE),
   content: `${JSON.stringify(registry, null, 2)}\n`,
 });
@@ -213,7 +213,7 @@ const registryFile = (projectDir: string, registry: Registry): { file: string; c
 // Lecture des flows du projet.
 // ---------------------------------------------------------------------------------------------
 
-async function flowEntries(projectDir: string): Promise<{ root: string; entries: FlowEntry[] }> {
+export async function flowEntries(projectDir: string): Promise<{ root: string; entries: FlowEntry[] }> {
   const root = await flowsDirOf(projectDir);
   if (!(await exists(root))) return { root, entries: [] };
   const files = (await readdir(root, { withFileTypes: true, recursive: true }))
@@ -261,7 +261,7 @@ async function testDataOf(entry: FlowEntry): Promise<TestDataSet | undefined> {
   return parseTestDataSet(raw, entry.name);
 }
 
-interface BlockInfo {
+export interface BlockInfo {
   view: LibraryBlockView;
   data?: TestDataSet;
   /** L'enregistrement à écrire si le bloc vient d'être repris (pas encore dans le registre). */
@@ -359,7 +359,10 @@ async function describeBlock(
   };
 }
 
-async function blocksOf(entries: readonly FlowEntry[], registry: Registry): Promise<Map<string, BlockInfo>> {
+export async function blocksOf(
+  entries: readonly FlowEntry[],
+  registry: Registry,
+): Promise<Map<string, BlockInfo>> {
   const blocks = new Map<string, BlockInfo>();
   for (const entry of entries)
     if (entry.flow.reusable === true) blocks.set(entry.name, await describeBlock(entry, entries, registry));
@@ -394,7 +397,7 @@ export async function previewSource(projectDir: string, scenario: string): Promi
   };
 }
 
-function freeName(entries: readonly FlowEntry[], raw: unknown): string {
+export function freeName(entries: readonly FlowEntry[], raw: unknown): string {
   const name = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : '';
   if (!name || name.length > NAME_MAX || !slug(name))
     throw new LibraryError(`a name of 1 to ${String(NAME_MAX)} characters is required`, 400);
@@ -404,7 +407,7 @@ function freeName(entries: readonly FlowEntry[], raw: unknown): string {
 }
 
 /** Les fichiers d'un nouveau flow dans <flows>/<dossier>/<nom>/, avec son jeu de données ; jamais par-dessus un autre. */
-async function flowFiles(
+export async function flowFiles(
   root: string,
   folder: string,
   flow: Raw,
@@ -587,7 +590,7 @@ export function removeFromLibrary(projectDir: string, name: string): Promise<voi
 }
 
 /** Les blocs d'une composition, tels que la vérification les voit. */
-function partsOf(
+export function partsOf(
   names: readonly string[],
   blocks: Map<string, BlockInfo>,
   entries: readonly FlowEntry[],
@@ -632,14 +635,17 @@ function partsOf(
   });
 }
 
-const refsOf = (names: readonly string[], blocks: Map<string, BlockInfo>): CompositionRecord['blocks'] =>
+export const refsOf = (
+  names: readonly string[],
+  blocks: Map<string, BlockInfo>,
+): CompositionRecord['blocks'] =>
   names.flatMap((name) => {
     const block = blocks.get(name);
     return block ? [{ name, id: block.view.id, version: block.view.version, hash: block.view.hash }] : [];
   });
 
 /** Le registre, avec les blocs repris (lus pour la première fois) enregistrés tels qu'ils sont. */
-function withTakenOver(registry: Registry, blocks: Map<string, BlockInfo>): Registry {
+export function withTakenOver(registry: Registry, blocks: Map<string, BlockInfo>): Registry {
   const next: Registry = { ...registry, blocks: { ...registry.blocks } };
   for (const [name, block] of blocks)
     if ((next.blocks[name]?.version ?? 0) === 0) next.blocks[name] = block.record;

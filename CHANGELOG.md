@@ -32,6 +32,22 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Compositeur visuel de parcours** dans la Bibliothèque : le même parcours se construit en **mode
+  linéaire** (cartes glissées depuis le catalogue, insertion entre deux cartes, réordonnancement,
+  duplication, retrait) ou en **mode libre** (diagramme : début, blocs, conditions Oui/Non, jonctions,
+  fins ; connexions tirées depuis les ports ; zoom, ajustement à l'écran, déplacement de la vue). Annuler
+  et rétablir (Ctrl+Z, Ctrl+Y), suppression au clavier, panneau de propriétés (paramètres d'instance,
+  entrées et sorties, versions, diagnostics), erreurs affichées sur le nœud concerné. Passer en mode
+  linéaire n'est permis que sans perte (sinon la raison est dite) ; les branches ne sont jamais aplaties.
+  Le menu latéral ne change pas.
+- **Parcours enregistrés** (`journeys` dans le SDK et l'API) : graphe, disposition et révision dans
+  `sdk-journeys.json` ; vérification par chemin (structure, entrées, données en amont, conflits, boucles
+  refusées) ; création d'un scénario, ou d'un scénario par chemin après confirmation explicite quand le
+  parcours a des branches (le moteur n'évalue pas les conditions).
+- **`run:` avec `with:`** : une étape `run` peut renommer les données du bloc rejoué
+  (`with: { clé du bloc: clé du scénario }`), pour donner à chaque instance d'un même bloc ses propres
+  valeurs sans modifier le bloc.
+
 - **Thème vert et blanc du Dashboard** : la palette (vert principal `#006B3F`, vert foncé `#004D2B`, vert très
   foncé `#003B25`, vert secondaire `#008A4B`, verts clairs `#E6F4EA` et `#F2FAF5`, fond `#F7F9F8`, texte
   `#172B24` et `#64746C`, bordures `#DCE5DF`, rouge `#DC3545`) remplace l'indigo dans les jetons `--qa-*`, avec

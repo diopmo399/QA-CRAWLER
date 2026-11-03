@@ -11,8 +11,9 @@ import type {
 import { ROLE_RIGHTS } from '../../src/sdk/core/contracts.js';
 import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
 import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
+import { journeyOfParts } from '../../src/sdk/core/journey.js';
+import { emptyJourneyUi, logicKey, type JourneyUi } from '../../src/sdk/ui/dashboard-journey.js';
 import {
-  compositionKey,
   emptyLibraryUi,
   runnableScenarios,
   visibleBlocks,
@@ -240,11 +241,15 @@ describe('dashboard — scenario library', () => {
     expect(html).toContain('<ul class="plain lib-cards grid">');
     // Le retrait est dans la fiche, jamais sur la carte.
     expect(html).not.toContain('data-action="lib-remove"');
-    // Trois colonnes : le catalogue, le parcours, son contrat et ses diagnostics.
+    // Sous le catalogue : le compositeur visuel (palette des vrais blocs, scène, propriétés).
     expect(html).toContain('id="lib-composer"');
-    expect(html).toContain('Ajoutez des blocs depuis le catalogue');
-    expect(html).toContain('<h2 id="lib-diag-t">Contrat et diagnostics</h2>');
-    expect(html).toContain('La vérification du serveur apparaît ici');
+    expect(html).toContain('<h2 id="lib-composer-t">Compositeur de parcours</h2>');
+    expect(html).toMatch(/role="radio" id="jn-mode-LINEAR"[^>]*aria-checked="true"/);
+    expect(html).toContain('Mode libre (Diagramme)');
+    expect(html).toContain('Catalogue de blocs');
+    expect(html).toMatch(/<li class="jn-pal-item"[^>]*draggable="true" data-jn-block="Bloc seul">/);
+    expect(html).toContain('Aucun bloc : glissez-en un ici ou utilisez + dans le catalogue.');
+    expect(html).toContain('<p class="jn-props-k">Propriétés</p>');
   });
 
   it('display: grid or list, grouped by origin, recently opened, standalone or composite', () => {
@@ -488,69 +493,105 @@ describe('dashboard — scenario library', () => {
     expect(render({ block: 'Bloc connexion', tab: 'provenance' })).not.toContain('lib-compare');
   });
 
-  it('the composer: order, where each input comes from, the server check, create only when it holds', () => {
-    const compose = { name: 'Parcours', parts: ['Bloc <x>', 'Bloc connexion'] };
-    const html = renderDashboard(
-      base('library', {}, { compose, check, checkedFor: compositionKey(compose) }),
-    );
-    expect(html).toMatch(
-      /lib-steps[^]*<span class="n" aria-hidden="true">1<\/span>[^]*Bloc &lt;x&gt;[^]*<span class="n" aria-hidden="true">2<\/span>[^]*Bloc connexion/,
-    );
-    expect(html).toContain('<li class="lib-miss">user.name : non disponible</li>');
-    // Le contrat du parcours : ce qu'il reçoit de l'extérieur, ce qu'il produit.
-    expect(html).toMatch(/Reçoit<\/span><code class="lib-key">user\.name<\/code>/);
-    expect(html).toMatch(/Produit<\/span><code class="lib-key">user\.name<\/code>/);
-    expect(html).toContain('Produit : user.name');
-    expect(html).toContain(
-      'data-action="lib-part-move" data-index="0" data-direction="up" aria-label="Monter" title="Monter" disabled',
-    );
-    expect(html).toContain('aria-label="Retirer « Bloc connexion » du parcours"');
-    expect(html).toContain('Le parcours ne peut pas être créé tel quel.');
-    expect(html).toContain('2 bloc(s) · 3 étape(s) · Ordre : #1 Bloc &lt;x&gt; → #2 Bloc connexion');
-    expect(html).toContain('item.title est définie autrement par « A » et « B »');
-    expect(html).toContain('#1 &quot;Bloc &lt;x&gt;&quot; needs user.name');
-    expect(html).toContain('<code>user.name</code>');
-    expect(html).toMatch(/type="submit" class="btn primary" disabled aria-busy="false">Créer le scénario/);
-    const ok = {
-      ...check,
-      ok: true,
-      conflicts: [],
-      errors: [],
-      warnings: [],
-      dependencies: [{ key: 'user.name', from: 1, to: 2 }],
-      order: check.order.map((entry) => ({
-        ...entry,
-        missing: [],
-        satisfied: entry.position === 2 ? [{ key: 'user.name', from: 1 }] : [],
-      })),
+  it('the composer: linear cards, instance parameters from the real contract, the path check on the cards', () => {
+    const journey = journeyOfParts('Parcours', [
+      { block: 'Bloc <x>', version: 1 },
+      { block: 'Bloc connexion', version: 1 },
+    ]);
+    const [first, second] = journey.graph.nodes.filter((node) => node.kind === 'BLOCK');
+    const ui: JourneyUi = {
+      ...emptyJourneyUi(),
+      journey,
+      savedName: 'Parcours',
+      savedRevision: 'abcd1234',
+      selected: { kind: 'node', id: first?.id ?? '' },
+      check: {
+        ok: false,
+        linear: true,
+        publishable: 'NONE',
+        paths: [{ index: 0, nodes: [], choices: [], check: { ...check } }],
+        nodes: {
+          [first?.id ?? '']: {
+            errors: ['entrée user.name manquante'],
+            warnings: [],
+            available: [],
+            missing: [{ key: 'user.name', path: 1 }],
+            produces: [],
+            satisfied: [],
+          },
+          [second?.id ?? '']: {
+            errors: [],
+            warnings: [],
+            available: ['user.name'],
+            missing: [],
+            produces: ['user.name'],
+            satisfied: [],
+          },
+        },
+        edges: {},
+        errors: [],
+        warnings: [],
+      },
     };
-    const ready = renderDashboard(
-      base('library', {}, { compose, check: ok, checkedFor: compositionKey(compose) }),
+    ui.checkedFor = logicKey(journey);
+    const html = renderDashboard(base('library', {}, { journey: ui }));
+    // La suite : début, cartes numérotées dans l'ordre, fin ; poignée, actions, zones de dépôt.
+    expect(html).toMatch(
+      /jn-term start[^]*<span class="jn-num"[^>]*>1<\/span>[^]*Bloc &lt;x&gt;[^]*<span class="jn-num"[^>]*>2<\/span>[^]*Bloc connexion[^]*jn-term end/,
     );
-    expect(ready).toContain('Parcours vérifié : il peut être créé.');
-    expect(ready).toContain('user.name : produite par #1, utilisée par #2');
-    expect(ready).toContain('<li class="lib-src">user.name ← produite par #1</li>');
-    expect(ready).toMatch(/type="submit" class="btn primary" {2}aria-busy="false">Créer le scénario/);
-    // Une soumission en cours : le bouton le dit et ne se reclique pas.
-    const creating = renderDashboard(
-      base('library', {}, { compose, check: ok, checkedFor: compositionKey(compose), creating: true }),
+    expect(html).toContain('data-jn-gap="0"');
+    expect(html).toMatch(/class="jn-card sel ko" data-jn-node="[^"]+" draggable="true"/);
+    expect(html).toContain('<span class="jn-err">');
+    expect(html).toContain('entrée user.name manquante');
+    // La version retenue (v1) est plus ancienne que la version actuelle (v2) : à accepter explicitement.
+    expect(html).toContain('Utiliser la version 2');
+    expect(html).toMatch(/data-action="jn-move" data-node="[^"]+" data-to="-1"[^>]*disabled/);
+    // Le panneau de propriétés : le bloc choisi, ses paramètres tirés de son contrat réel.
+    expect(html).toContain('<h3 id="jn-props-t">Bloc &lt;x&gt;</h3>');
+    expect(html).toContain('<code class="lib-key">user.name</code><small class="mu">obligatoire</small>');
+    expect(html).toContain('<option value="INHERIT" selected>Amont ou données</option>');
+    // La vérification est à jour (positions exclues) et le parcours ne tient pas : créer est refusé.
+    expect(html).toContain('<li class="jn-chip ko">Parcours invalide</li>');
+    expect(html).toMatch(/data-action="jn-publish" disabled/);
+    // Un paramètre de valeur pour l'instance.
+    if (first) first.params = { 'user.name': { mode: 'VALUE', value: 'alice' } };
+    const valued = renderDashboard(base('library', {}, { journey: ui }));
+    expect(valued).toContain('<option value="VALUE" selected>Valeur</option>');
+    expect(valued).toContain('data-jn="param.value" data-key="user.name" value="alice"');
+    expect(valued).toContain(
+      '<li class="jn-chip warn">Vérification antérieure à la dernière modification</li>',
     );
-    expect(creating).toMatch(/type="submit" class="btn primary" disabled aria-busy="true">Création…/);
-    // Changé depuis la vérification : la vérification le dit.
-    const stale = renderDashboard(
-      base(
-        'library',
-        {},
-        { compose: { ...compose, name: 'Autre' }, check: ok, checkedFor: compositionKey(compose) },
-      ),
-    );
-    expect(stale).toContain('Le parcours a changé depuis cette vérification.');
     // Une erreur du serveur garde la saisie et détaille ses raisons.
     const failed = renderDashboard(
-      base('library', {}, { compose, error: 'refused', details: ['raison 1', 'raison 2'] }),
+      base('library', {}, { journey: { ...ui, error: 'refused', details: ['raison 1', 'raison 2'] } }),
     );
     expect(failed).toContain('<li>raison 1</li><li>raison 2</li>');
-    expect(failed).toContain('value="Parcours"');
+    expect(failed).toContain('data-jn="name" value="Parcours"');
+  });
+
+  it('the diagram: nodes positioned, connections with Oui/Non, tools; the linear mode refused with its reason', () => {
+    const journey = journeyOfParts('Parcours', [{ block: 'Bloc seul', version: 1 }]);
+    journey.mode = 'DIAGRAM';
+    journey.graph.nodes.push({ id: 'n9', kind: 'CONDITION', label: 'Urgent ?', x: 300, y: 100 });
+    journey.graph.edges.push({ id: 'e9', from: 'n9', to: 'n2', branch: 'YES' });
+    const ui: JourneyUi = {
+      ...emptyJourneyUi(),
+      journey,
+      modeMessage: 'Le mode linéaire n’est pas possible sans perte : le parcours contient 1 condition(s).',
+    };
+    const html = renderDashboard(base('library', {}, { journey: ui }));
+    expect(html).toMatch(/role="radio" id="jn-mode-DIAGRAM"[^>]*aria-checked="true"/);
+    expect(html).toContain('data-jn-canvas');
+    expect(html).toMatch(
+      /class="jn-node condition" data-jn-node="n9" style="left:300px;top:100px;width:208px;height:76px"/,
+    );
+    expect(html).toContain('data-jn-port="n9" data-branch="YES"');
+    expect(html).toContain('data-jn-port="n9" data-branch="NO"');
+    expect(html).toMatch(/<g class="jn-edge yes" data-jn-edge="e9"><path class="jn-e" d="M/);
+    expect(html).toContain('>Oui</text>');
+    expect(html).toContain('data-action="jn-fit"');
+    expect(html).toContain('data-jn-shape="CONDITION"');
+    expect(html).toContain('Le mode linéaire n’est pas possible sans perte');
   });
 
   it('the add panel: source preview (no value), name checked before sending, busy while adding', () => {
@@ -706,13 +747,15 @@ describe('dashboard — scenario library', () => {
     const html = renderDashboard(
       base('library', reader, {
         sheet: { block: 'Bloc seul', tab: 'contract' },
-        compose: { name: 'P', parts: ['Bloc seul'] },
+        journey: { ...emptyJourneyUi(), journey: journeyOfParts('P', [{ block: 'Bloc seul', version: 1 }]) },
       }),
     );
     expect(html).toContain('Bloc connexion');
     expect(html).not.toMatch(
       /data-action="lib-(remove|panel-open|part-add|part-move|check|contract-edit|validate-version|update-ask|update-yes)"/,
     );
+    expect(html).not.toMatch(/data-action="jn-(add|move|remove|duplicate|save|publish|check|shape)"/);
+    expect(html).not.toContain('data-jn-gap');
     expect(html).not.toContain('Créer le scénario');
     const scenarios = renderDashboard(base('scenarios', { ...reader, scenarioHistory: [], recordings: [] }));
     expect(scenarios).not.toContain('data-action="lib-insert"');

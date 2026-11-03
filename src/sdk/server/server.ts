@@ -40,6 +40,14 @@ import {
   validateVersion,
 } from './library.js';
 import { revisionOfText, type ExtractionSource } from './library-extract.js';
+import {
+  checkJourney,
+  getJourney,
+  listJourneys,
+  publishJourney,
+  removeJourney,
+  saveJourney,
+} from './library-journeys.js';
 import { parseTestDataSet, TestDataSetError } from '../../data/test-data-set.js';
 import {
   acceptStoredGroupProposals,
@@ -2213,6 +2221,62 @@ async function dataView(stored: StoredRecording): Promise<TestDataView> {
 }
 
 /** Une opération de la bibliothèque : ses refus deviennent des réponses HTTP, expliquées. */
+/**
+ * LES PARCOURS VISUELS de la bibliothèque : liste, ouverture (`open?name=`), enregistrement (brouillon),
+ * vérification (rien n'est écrit), création des scénarios, retrait. Voir library-journeys.ts.
+ */
+async function handleJourneys(
+  project: StoredProject,
+  item: string | undefined,
+  method: string,
+  request: IncomingMessage,
+  json: (value: unknown, status?: number) => void,
+): Promise<void> {
+  if (item === undefined && method === 'GET') {
+    json(await listJourneys(project.dir));
+    return;
+  }
+  if (item === 'open' && method === 'GET') {
+    const name = new URL(request.url ?? '/', 'http://localhost').searchParams.get('name') ?? '';
+    if (!name) throw new HttpError(400, 'BAD_REQUEST', 'name is required');
+    json(await libraryCall(() => getJourney(project.dir, name.slice(0, 120))));
+    return;
+  }
+  if (item === 'check' && method === 'POST') {
+    const body = await readJson(request);
+    json(await libraryCall(() => checkJourney(project.dir, body.journey)));
+    return;
+  }
+  if (method !== 'POST') throw new HttpError(404, 'NOT_FOUND', 'unknown journey route');
+  refuseArchived(project);
+  const body = await readJson(request);
+  if (item === undefined) {
+    const revision = textOf(body.revision, 40);
+    const previous = textOf(body.previous, 120);
+    json(
+      await libraryCall(() =>
+        saveJourney(project.dir, body.journey, {
+          ...(revision ? { revision } : {}),
+          ...(previous ? { previous } : {}),
+        }),
+      ),
+    );
+    return;
+  }
+  const name = textOf(body.name, 120);
+  if (!name) throw new HttpError(400, 'BAD_REQUEST', 'name is required');
+  if (item === 'publish') {
+    json(await libraryCall(() => publishJourney(project.dir, name, { perPath: body.perPath === true })), 201);
+    return;
+  }
+  if (item === 'remove') {
+    await libraryCall(() => removeJourney(project.dir, name));
+    json({ removed: name });
+    return;
+  }
+  throw new HttpError(404, 'NOT_FOUND', 'unknown journey route');
+}
+
 async function libraryCall<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
@@ -3109,6 +3173,11 @@ async function handlePlatform(
   if (sub === 'library') {
     const project = await projectOf(ctx, id);
     await handleLibrary(ctx, project, item, action, method, request, json);
+    return true;
+  }
+  if (sub === 'journeys' && action === undefined) {
+    const project = await projectOf(ctx, id);
+    await handleJourneys(project, item, method, request, json);
     return true;
   }
   if (sub === 'scenarios' && item === 'compose' && action === 'check' && method === 'POST') {

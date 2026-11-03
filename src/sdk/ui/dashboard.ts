@@ -10,7 +10,8 @@ import { applyEvent, emptyCounters, isTerminal } from '../core/lifecycle.js';
 import { dashboardStrings } from './dashboard-i18n.js';
 import { emptyAccessUi } from './dashboard-access.js';
 import { emptyRecordingsUi, newLiveRecording, type LiveRecording } from './dashboard-recordings.js';
-import { compositionKey, emptyLibraryUi, runnableScenarios, type LibraryUi } from './dashboard-library.js';
+import { emptyLibraryUi, runnableScenarios, type LibraryUi } from './dashboard-library.js';
+import { JourneyController, type JourneyHost } from './dashboard-journey-controller.js';
 import { activeRuns, emptyTestsUi, finishedRecordings } from './dashboard-tests.js';
 import { emptyEditorUi } from './dashboard-editor.js';
 import { EditorController, type EditorHost } from './dashboard-editor-controller.js';
@@ -114,6 +115,8 @@ export class QaCrawlerDashboard extends Base {
   private readonly editor: EditorController;
   private readonly publisher: PublishController;
   private readonly library: LibraryController;
+  /** Le compositeur visuel de parcours (Bibliothèque). */
+  private readonly journeys: JourneyController;
   /** Les incidents : déclaration, investigation, suivi d'une reproduction en cours. */
   private readonly incidents: IncidentsController;
   /** Le suivi des exécutions de tests générés en cours (écran Tests). */
@@ -187,6 +190,7 @@ export class QaCrawlerDashboard extends Base {
     };
     Object.defineProperty(libraryHost, 'state', { get: () => this.state });
     this.library = new LibraryController(libraryHost as LibraryHost);
+    this.journeys = new JourneyController(libraryHost as unknown as JourneyHost);
     const incidentsHost = {
       root: this.root,
       api: () => this.api,
@@ -243,6 +247,7 @@ export class QaCrawlerDashboard extends Base {
         this.libraryField(target.dataset.lib, target.value);
         return;
       }
+      if (target.dataset.jn !== undefined && this.journeys.field(target, false)) return;
       if (target.dataset.pub && this.publisher.input(target as HTMLInputElement)) return;
       if ((target.dataset.ed || target.dataset.edAdd) && this.editor.input(target as HTMLInputElement))
         return;
@@ -300,6 +305,7 @@ export class QaCrawlerDashboard extends Base {
       if (this.editor.keydown(event as KeyboardEvent)) return;
       if (this.publisher.keydown(event as KeyboardEvent)) return;
       if (this.library.keydown(event as KeyboardEvent)) return;
+      if (this.journeys.keydown(event as KeyboardEvent)) return;
       if (this.incidents.keydown(event as KeyboardEvent)) return;
       if ((event as KeyboardEvent).key === 'Escape' && this.state.lib.panel) {
         this.closePanel();
@@ -1194,39 +1200,6 @@ export class QaCrawlerDashboard extends Base {
     }
   }
 
-  private checkSequence = 0;
-
-  /** VÉRIFIER LE PARCOURS (dry run de composition, sur le serveur) : ordre, dépendances, données. */
-  private async checkJourney(): Promise<void> {
-    const api = this.api;
-    const project = this.state.project;
-    const lib = this.state.lib;
-    if (!api || !project) return;
-    if (lib.compose.parts.length === 0) {
-      lib.check = undefined;
-      lib.checkedFor = undefined;
-      this.paint();
-      return;
-    }
-    const sequence = ++this.checkSequence;
-    const key = compositionKey(lib.compose);
-    const input = { name: lib.compose.name, parts: [...lib.compose.parts] };
-    lib.checking = true;
-    this.paint();
-    try {
-      const check = await api.scenarios.checkComposition(project.id, input);
-      if (sequence !== this.checkSequence) return;
-      lib.check = check;
-      lib.checkedFor = key;
-    } catch (error) {
-      if (sequence !== this.checkSequence) return;
-      lib.error = message(error);
-      lib.details = detailsOf(error);
-    }
-    lib.checking = false;
-    this.paint();
-  }
-
   private openPanel(scenario?: string): void {
     const sources = runnableScenarios(this.state.project?.scenarios ?? []).filter(
       (entry) => entry.format === 'yaml',
@@ -1269,7 +1242,6 @@ export class QaCrawlerDashboard extends Base {
   private libraryClick(action: string, target: HTMLElement): boolean {
     const lib = this.state.lib;
     const route = this.state.route;
-    const index = Number(target.dataset.index);
     const block = target.dataset.block ?? '';
     switch (action) {
       case 'lib-panel-open':
@@ -1284,7 +1256,7 @@ export class QaCrawlerDashboard extends Base {
         return true;
       case 'lib-jump':
         this.root.querySelector('#lib-composer')?.scrollIntoView({ block: 'start' });
-        this.root.querySelector<HTMLElement>('[data-lib="compose.name"]')?.focus();
+        this.root.querySelector<HTMLElement>('[data-jn="name"]')?.focus();
         return true;
       case 'lib-open-scenario': {
         const name = target.dataset.name ?? '';
@@ -1308,27 +1280,8 @@ export class QaCrawlerDashboard extends Base {
         });
         return true;
       case 'lib-part-add':
-        if (block) lib.compose.parts = [...lib.compose.parts, block];
-        void this.checkJourney();
-        return true;
-      case 'lib-part-remove':
-        // Retirer du parcours en cours, jamais de la bibliothèque.
-        lib.compose.parts = lib.compose.parts.filter((_, at) => at !== index);
-        void this.checkJourney();
-        return true;
-      case 'lib-part-move': {
-        const to = target.dataset.direction === 'down' ? index + 1 : index - 1;
-        const parts = [...lib.compose.parts];
-        const [moved] = parts.splice(index, 1);
-        if (moved !== undefined && to >= 0 && to <= parts.length) {
-          parts.splice(to, 0, moved);
-          lib.compose.parts = parts;
-        }
-        void this.checkJourney();
-        return true;
-      }
-      case 'lib-check':
-        void this.checkJourney();
+        // Une carte ou la fiche d'un bloc : le bloc rejoint le parcours du compositeur.
+        if (block) this.journeys.addBlockNamed(block);
         return true;
       case 'lib-contract-edit': {
         const view = lib.blocks?.find((entry) => entry.name === block);
@@ -1443,36 +1396,6 @@ export class QaCrawlerDashboard extends Base {
             panel.busy = false;
           }
           this.paint();
-        })();
-        return;
-      }
-      case 'lib-compose': {
-        const api = this.api;
-        const project = this.state.project;
-        if (!api || !project || lib.creating || lib.busy) return;
-        const input = { name: lib.compose.name, parts: [...lib.compose.parts] };
-        lib.creating = true;
-        lib.error = undefined;
-        lib.details = undefined;
-        lib.notice = undefined;
-        this.paint();
-        void (async () => {
-          try {
-            const scenario = await api.scenarios.compose(project.id, input);
-            lib.compose = { name: '', parts: [] };
-            lib.check = undefined;
-            lib.checkedFor = undefined;
-            lib.notice = this.state.t.lib.composed(scenario.name);
-            lib.composed = scenario.name;
-            await this.load();
-          } catch (error) {
-            // La composition reste telle quelle ; la vérification dit pourquoi.
-            lib.error = message(error);
-            lib.details = detailsOf(error);
-          }
-          lib.creating = false;
-          this.paint();
-          if (lib.error) void this.checkJourney();
         })();
         return;
       }
@@ -1678,6 +1601,7 @@ export class QaCrawlerDashboard extends Base {
         if (generation !== this.generation) return;
         this.state.lib.blocks = blocks;
         this.library.restore(route.projectId);
+        void this.journeys.loadList();
         const panel = this.state.lib.panel;
         const scenarios = runnableScenarios(this.state.project?.scenarios ?? []).filter(
           (scenario) => scenario.format === 'yaml',
@@ -2363,6 +2287,7 @@ export class QaCrawlerDashboard extends Base {
     )
       return;
     if (action?.startsWith('lib-') && this.libraryClick(action, target)) return;
+    if (action?.startsWith('jn-') && this.journeys.click(action, target)) return;
     if (action?.startsWith('pub-') && this.publisher.click(action, target)) return;
     if (action?.startsWith('tst-') && this.testsClick(action, target)) return;
     if (action?.startsWith('ed-') && this.editor.click(action, target)) return;
@@ -2734,10 +2659,7 @@ export class QaCrawlerDashboard extends Base {
       lib.kind = value as LibraryUi['kind'];
     else if (part === 'groupBy' && ['none', 'origin'].includes(value))
       lib.groupBy = value as LibraryUi['groupBy'];
-    else if (part === 'compose' && key === 'name') {
-      lib.compose.name = value;
-      return;
-    } else if (part === 'panel' && lib.panel && (key === 'name' || key === 'description'))
+    else if (part === 'panel' && lib.panel && (key === 'name' || key === 'description'))
       lib.panel[key] = value;
     else if (part === 'panel' && lib.panel && key === 'scenario') {
       lib.panel.scenario = value;
@@ -2770,6 +2692,7 @@ export class QaCrawlerDashboard extends Base {
       this.libraryField(target.dataset.lib, target.value);
       return;
     }
+    if (target.dataset.jn !== undefined && this.journeys.field(target, true)) return;
     if (target.dataset.pub && this.publisher.change(target)) return;
     if (target.dataset.tst) {
       this.testsField(target.dataset.tst, target);

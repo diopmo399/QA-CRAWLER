@@ -13,6 +13,10 @@
  *         - run: creer-dossier
  *         - click: { role: button, name: Modifier }
  *
+ * `with:` (à côté de `run`) renomme les données du flow rejoué dans les étapes recopiées
+ * (`testData` et `${testData:…}`) : `- run: creer-dossier` suivi de `with: { dossier.code: dossier2.code }`
+ * rejoue le même flow avec une autre donnée, sans toucher au flow rejoué.
+ *
  * Travaille sur le YAML brut (avant zod) ; les erreurs sont des messages pour l'utilisateur.
  */
 
@@ -54,7 +58,9 @@ export function resolveFlowRuns(flows: readonly unknown[]): unknown[] {
       if (typeof step.run !== 'string' || step.run.trim() === '')
         throw new FlowIncludeError(`flow "${name}": "run" needs the name of a flow`);
       // `allow` d'une phrase Gherkin taguée n'élargit pas le flow rejoué : ses étapes gardent leurs propres droits.
-      const extra = Object.keys(step).filter((key) => !['run', 'name', 'allow', 'optional'].includes(key));
+      const extra = Object.keys(step).filter(
+        (key) => !['run', 'name', 'allow', 'optional', 'with'].includes(key),
+      );
       if (extra.length > 0)
         throw new FlowIncludeError(
           `flow "${name}": a "run" step only takes a name (got ${extra.join(', ')})`,
@@ -62,9 +68,10 @@ export function resolveFlowRuns(flows: readonly unknown[]): unknown[] {
       const target = step.run.trim();
       if (!byName.has(target))
         throw new FlowIncludeError(`flow "${name}": run "${target}": no flow has this name`);
+      const mapping = runMapping(name, target, step.with);
       const outer = typeof step.name === 'string' ? step.name : `run ${target}`;
       return stepsOf(target, [...chain, name]).map((inner) => ({
-        ...inner,
+        ...(mapping ? (renameTestData(inner, mapping) as RawStep) : inner),
         ...(step.optional === true ? { optional: true } : {}),
         name: `${outer} › ${typeof inner.name === 'string' ? inner.name : labelOf(inner)}`,
       }));
@@ -80,6 +87,45 @@ export function resolveFlowRuns(flows: readonly unknown[]): unknown[] {
       const { reusable: _reusable, ...rest } = flow;
       return { ...rest, steps: stepsOf(flow.name, []) };
     });
+}
+
+const DATA_KEY = /^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$/;
+
+/**
+ * `with:` d'une étape `run` : la correspondance des données de CETTE instance du bloc rejoué
+ * (`{ cléDuBloc: cléDuScénario }`). Les étapes recopiées lisent alors la clé du scénario à la place de
+ * celle du bloc ; le bloc lui-même n'est pas modifié. Deux instances d'un même bloc peuvent ainsi lire
+ * des données différentes sans s'écraser.
+ */
+function runMapping(name: string, target: string, raw: unknown): Map<string, string> | undefined {
+  if (raw === undefined) return undefined;
+  if (!isObject(raw))
+    throw new FlowIncludeError(`flow "${name}": run "${target}": "with" maps data keys to data keys`);
+  const mapping = new Map<string, string>();
+  for (const [from, to] of Object.entries(raw)) {
+    if (!DATA_KEY.test(from) || typeof to !== 'string' || !DATA_KEY.test(to))
+      throw new FlowIncludeError(
+        `flow "${name}": run "${target}": "with" needs data keys (got ${from}: ${String(to)})`,
+      );
+    mapping.set(from, to);
+  }
+  return mapping.size > 0 ? mapping : undefined;
+}
+
+/** Les références `{ testData: clé }` et `${testData:clé}` d'une étape, renommées selon `with:`. */
+export function renameTestData(node: unknown, mapping: ReadonlyMap<string, string>): unknown {
+  if (typeof node === 'string')
+    return node.replace(/\$\{testData:([^}]+)\}/g, (whole, key: string) => {
+      const target = mapping.get(key.trim());
+      return target ? `\${testData:${target}}` : whole;
+    });
+  if (Array.isArray(node)) return node.map((item) => renameTestData(item, mapping));
+  if (!isObject(node)) return node;
+  if (typeof node.testData === 'string' && Object.keys(node).length === 1)
+    return { testData: mapping.get(node.testData) ?? node.testData };
+  return Object.fromEntries(
+    Object.entries(node).map(([key, value]) => [key, renameTestData(value, mapping)]),
+  );
 }
 
 function hasRun(flow: RawFlow): boolean {

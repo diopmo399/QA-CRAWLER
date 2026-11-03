@@ -1,25 +1,19 @@
-import type {
-  BlockState,
-  CompositionCheck,
-  LibraryBlockView,
-  LibrarySourcePreview,
-  ScenarioView,
-} from '../core/contracts.js';
+import type { BlockState, LibraryBlockView, LibrarySourcePreview, ScenarioView } from '../core/contracts.js';
 import { can } from './dashboard-access.js';
+import { emptyJourneyUi, journeyWorkspace, type JourneyUi } from './dashboard-journey.js';
 import { blockSheet, type BlockSheet } from './dashboard-library-sheet.js';
 import { header, icon, visibleBrowserControl } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
 
 /**
- * LA BIBLIOTHÈQUE DE SCÉNARIOS : un catalogue de blocs réutilisables (jamais exécutés seuls) et un
- * compositeur de parcours, en trois colonnes : le catalogue, le parcours, son contrat et ses
- * diagnostics. Le catalogue (grille ou liste, regroupé par origine, récemment ouverts) se cherche et se
+ * LA BIBLIOTHÈQUE DE SCÉNARIOS : un catalogue de blocs réutilisables (jamais exécutés seuls) et, sous lui,
+ * le compositeur visuel de parcours (dashboard-journey : palette, mode linéaire ou diagramme, propriétés
+ * et diagnostics). Le catalogue (grille ou liste, regroupé par origine, récemment ouverts) se cherche et se
  * trie sur les données réelles des blocs (type autonome ou composé, origine, état du contrat,
  * utilisation) ; chaque carte compacte dit la version, les étapes, les groupes internes, les entrées et
  * sorties, l'origine et la date. La fiche d'un bloc s'ouvre dans un panneau à onglets
- * (dashboard-library-sheet). Le compositeur garde l'ordre des blocs, montre d'où vient chaque entrée et
- * la vérification du serveur (dry run de composition) à chaque changement, avant la création. L'ajout
+ * (dashboard-library-sheet). L'ajout
  * d'un scénario se fait dans un panneau latéral, avec l'aperçu de la source. L'insertion d'un bloc dans
  * un scénario existant reste dans l'écran Scénarios. Des fonctions pures.
  */
@@ -47,13 +41,8 @@ export interface LibraryUi {
   recent: string[];
   /** La fiche ouverte (panneau à onglets). */
   sheet?: BlockSheet;
-  /** Composer un parcours : son nom, les blocs choisis dans l'ordre. */
-  compose: { name: string; parts: string[] };
-  /** La dernière vérification du serveur, et pour quelle composition (nom et blocs). */
-  check?: CompositionCheck;
-  checkedFor?: string;
-  checking?: boolean;
-  creating?: boolean;
+  /** Le compositeur visuel : le parcours édité (mode linéaire ou diagramme), sa vérification, son historique. */
+  journey: JourneyUi;
   /** Le panneau d'ajout d'un bloc (scénario source, nom, description) et l'aperçu de la source. */
   panel?: {
     scenario: string;
@@ -98,7 +87,7 @@ export const emptyLibraryUi = (): LibraryUi => ({
   layout: 'grid',
   groupBy: 'none',
   recent: [],
-  compose: { name: '', parts: [] },
+  journey: emptyJourneyUi(),
   insert: { block: '', at: 'start' },
 });
 
@@ -114,10 +103,6 @@ export function replayVisibility(state: DashboardState): string {
     },
   );
 }
-
-/** La composition vérifiée : la vérification ne vaut que pour ce nom et ces blocs, dans cet ordre. */
-export const compositionKey = (compose: LibraryUi['compose']): string =>
-  JSON.stringify([compose.name.trim(), compose.parts]);
 
 /** Les scénarios qu'on lance : les blocs de la bibliothèque n'en sont pas (jamais exécutés seuls). */
 export const runnableScenarios = (scenarios: readonly ScenarioView[]): ScenarioView[] =>
@@ -194,7 +179,7 @@ function blockCard(state: DashboardState, block: LibraryBlockView, publish: bool
   const opened = ui.sheet?.block === block.name;
   const kind = kindOf(block);
   const when = block.updatedAt ?? block.createdAt;
-  const inJourney = ui.compose.parts.filter((part) => part === block.name).length;
+  const inJourney = ui.journey.journey.graph.nodes.filter((node) => node.block === block.name).length;
   // Un contrat valide est l'état attendu : une coche discrète ; à revalider ou invalide se voit.
   const status =
     block.state === 'VALID'
@@ -249,131 +234,6 @@ function catalogList(state: DashboardState, shown: readonly LibraryBlockView[], 
         `<section class="lib-bucket"><h3 class="lib-bucket-t">${esc(title)} <small class="mu">${String(blocks.length)}</small></h3>${list(blocks)}</section>`,
     )
     .join('');
-}
-
-function checkSummary(state: DashboardState, check: CompositionCheck, stale: boolean): string {
-  const l = state.t.lib;
-  const section = (title: string, items: string[], tone = ''): string =>
-    items.length > 0
-      ? `<div class="lib-sum ${tone}"><b>${esc(title)}</b><ul class="plain tight">${items.map((item) => `<li>${item}</li>`).join('')}</ul></div>`
-      : '';
-  // Les erreurs déjà dites par une section (entrée manquante, conflit) ne sont pas répétées.
-  const structural = check.errors
-    .filter((error) => !error.includes('no earlier block produces it') && !error.startsWith('test data '))
-    // Le nom du parcours se donne dans le formulaire : dit dans la langue du Dashboard.
-    .map((error) => (error === 'a name of 1 to 80 characters is required' ? l.journeyNameRequired : error));
-  // Seul le nom manque (il se donne en dernier) : le parcours tient, ce n'est pas une erreur.
-  const nameOnly =
-    !check.ok &&
-    check.errors.length === 1 &&
-    check.errors[0] === 'a name of 1 to 80 characters is required' &&
-    check.missing.length === 0 &&
-    check.conflicts.length === 0;
-  const tone = check.ok ? 'ok' : nameOnly ? 'wait' : 'ko';
-  const shown = nameOnly ? [] : structural;
-  return `<div class="lib-check ${tone}" role="status">
-<p class="lib-check-h">${icon(check.ok || nameOnly ? 'check' : 'alert')}<b>${esc(check.ok ? l.checkOk : nameOnly ? l.checkNeedsName : l.checkKo)}</b></p>
-${stale ? `<p class="warn-t">${esc(l.staleCheck)}</p>` : ''}
-<p class="mu">${esc(l.summary(check.blocks, check.steps))}${check.order.length > 0 ? ` · ${esc(l.orderLine(check.order.map((entry) => `#${String(entry.position)} ${entry.block}`).join(' → ')))}` : ''}</p>
-${section(
-  l.deps,
-  check.dependencies.map((dep) => esc(l.depLine(dep.key, dep.from, dep.to))),
-)}${section(
-    l.missingTitle,
-    check.missing.map((entry) => esc(l.missingLine(entry.key, entry.block, entry.position))),
-    'ko',
-  )}${section(
-    l.conflictsTitle,
-    check.conflicts.map(
-      (conflict) =>
-        `${esc(l.conflictLine(conflict.key, conflict.blocks))}<br><small class="mu">${esc(conflict.detail)}</small>`,
-    ),
-    'ko',
-  )}${section(l.errorsTitle, shown.map(esc), 'ko')}${section(
-    l.sharedTitle,
-    check.shared.map((entry) => esc(l.sharedLine(entry.key, entry.blocks))),
-  )}${section(
-    l.dynamicTitle,
-    check.dynamic.map((key) => `<code>${esc(key)}</code>`),
-    'inline',
-  )}${section(l.warningsTitle, check.warnings.map(esc), 'warn')}</div>`;
-}
-
-function composerView(state: DashboardState, publish: boolean): string {
-  const l = state.t.lib;
-  const t = state.t;
-  const ui = state.lib;
-  const blocks = ui.blocks ?? [];
-  const check = ui.check;
-  const fresh = check !== undefined && ui.checkedFor === compositionKey(ui.compose);
-  const rows = ui.compose.parts
-    .map((part, index) => {
-      const block = blocks.find((entry) => entry.name === part);
-      const checked = fresh ? check.order[index] : undefined;
-      const sources = (checked?.satisfied ?? []).map(
-        (entry) =>
-          `<li class="lib-src">${esc(typeof entry.from === 'number' ? l.fromBlock(entry.key, entry.from) : l.fromData(entry.key))}</li>`,
-      );
-      const lacking = (checked?.missing ?? []).map(
-        (key) => `<li class="lib-miss">${esc(l.missingInput(key))}</li>`,
-      );
-      const outputs = block?.contract.outputs ?? [];
-      const last = index === ui.compose.parts.length - 1;
-      return `<li class="lib-step${lacking.length > 0 ? ' ko' : ''}"><span class="n" aria-hidden="true">${String(index + 1)}</span><div class="lib-step-b"><div class="lib-step-h"><b>${esc(part)}</b>${block ? `<small class="mu">${esc(l.version(block.version))} · ${esc(l.steps(block.steps))}</small>${block.state === 'VALID' ? '' : stateBadge(state, block.state)}` : `<small class="ko-t">${esc(l.unknownBlock)}</small>`}</div>${
-        sources.length + lacking.length > 0
-          ? `<ul class="plain lib-links">${[...sources, ...lacking].join('')}</ul>`
-          : ''
-      }${outputs.length > 0 ? `<p class="lib-gives mu">${esc(l.gives(outputs.map((output) => output.key).join(', ')))}</p>` : ''}</div><span class="lib-step-a">${
-        publish
-          ? `<button type="button" class="btn small ghost icon-only" data-action="lib-part-move" data-index="${String(index)}" data-direction="up" aria-label="${esc(t.review.moveUp)}" title="${esc(t.review.moveUp)}" ${index === 0 ? 'disabled' : ''}>↑</button><button type="button" class="btn small ghost icon-only" data-action="lib-part-move" data-index="${String(index)}" data-direction="down" aria-label="${esc(t.review.moveDown)}" title="${esc(t.review.moveDown)}" ${last ? 'disabled' : ''}>↓</button><button type="button" class="btn small ghost icon-only" data-action="lib-part-remove" data-index="${String(index)}" aria-label="${esc(l.removePart(part))}" title="${esc(l.removePart(part))}">✕</button>`
-          : ''
-      }</span></li>`;
-    })
-    .join('');
-  const busy = Boolean(ui.creating) || Boolean(ui.checking);
-  const canCreate =
-    publish && ui.compose.parts.length > 0 && ui.compose.name.trim() !== '' && !busy && (!fresh || check.ok);
-  // Le contrat du parcours : ce qu'il reçoit de l'extérieur (données de test, ou manquant) et ce qu'il produit.
-  const external = fresh
-    ? [
-        ...new Set([
-          ...check.order.flatMap((entry) => [
-            ...entry.satisfied.filter((item) => typeof item.from !== 'number').map((item) => item.key),
-            ...entry.missing,
-          ]),
-          ...check.missing.map((entry) => entry.key),
-        ]),
-      ]
-    : [];
-  const produced = [
-    ...new Set(
-      ui.compose.parts.flatMap(
-        (part) =>
-          blocks.find((entry) => entry.name === part)?.contract.outputs.map((output) => output.key) ?? [],
-      ),
-    ),
-  ];
-  const chips = (items: readonly string[]): string =>
-    items.length > 0
-      ? items.map((key) => `<code class="lib-key">${esc(key)}</code>`).join('')
-      : `<small class="mu">${esc(l.none)}</small>`;
-  const journey = `<section class="card lib-composer" id="lib-composer" aria-labelledby="lib-composer-t">
-<h2 id="lib-composer-t">${esc(l.composeTitle)}</h2>
-<form class="col" data-action="lib-compose">
-<label class="field">${esc(l.composeName)}<input data-lib="compose.name" value="${esc(ui.compose.name)}" maxlength="80" autocomplete="off" ${publish ? '' : 'disabled'}></label>
-${rows ? `<ol class="plain lib-steps" aria-label="${esc(l.orderLabel)}">${rows}</ol>` : `<p class="mu lib-empty">${esc(l.composeEmpty)}</p>`}
-${publish ? `<div class="form-acts start"><button type="button" class="btn" data-action="lib-check" ${ui.compose.parts.length === 0 || busy ? 'disabled' : ''}>${esc(ui.checking ? l.checking : l.check)}</button><button type="submit" class="btn primary" ${canCreate ? '' : 'disabled'} aria-busy="${String(Boolean(ui.creating))}">${esc(ui.creating ? l.creating : l.create)}</button></div>` : ''}
-</form></section>`;
-  const diagnostics = `<aside class="card lib-diag" aria-labelledby="lib-diag-t" aria-live="polite">
-<h2 id="lib-diag-t">${esc(l.diagTitle)}</h2>
-${
-  ui.compose.parts.length === 0
-    ? `<p class="mu">${esc(l.diagEmpty)}</p>`
-    : `<div class="lib-ios lib-ios-col"><span class="lib-io"><span class="lib-io-l">${esc(l.journeyNeeds)}</span>${fresh ? chips(external) : `<small class="mu">${esc(l.checking)}</small>`}</span><span class="lib-io"><span class="lib-io-l">${esc(l.journeyGives)}</span>${chips(produced)}</span></div>`
-}
-${ui.checking ? `<p class="mu" role="status"><span class="spin" aria-hidden="true"></span> ${esc(l.checking)}</p>` : check ? checkSummary(state, check, !fresh) : ''}
-</aside>`;
-  return `${journey}${diagnostics}`;
 }
 
 function addPanel(state: DashboardState): string {
@@ -519,11 +379,12 @@ export function libraryView(state: DashboardState): string {
   const actions = publish
     ? `<button class="btn primary" data-action="lib-panel-open">${icon('plus')}<span>${esc(l.addBlock)}</span></button>`
     : '';
+  const inJourney = ui.journey.journey.graph.nodes.filter((node) => node.kind === 'BLOCK').length;
   const jump =
-    ui.compose.parts.length > 0
-      ? `<button class="btn small lib-jump" data-action="lib-jump">${esc(l.jump(ui.compose.parts.length))}</button>`
+    inJourney > 0
+      ? `<button class="btn small lib-jump" data-action="lib-jump">${esc(l.jump(inJourney))}</button>`
       : '';
-  return `${header(esc(l.title), { sub: esc(l.sub(p.name, all.length)), actions })}<p class="mu lib-intro">${esc(l.intro)}</p>${sheetOpen ? '' : messages}${toolbar}${recents}${jump}<div class="lib-layout"><section class="lib-catalog" aria-label="${esc(l.blocksTitle)}">${catalog}</section>${composerView(state, publish)}</div>${addPanel(state)}${blockSheet(state)}`;
+  return `${header(esc(l.title), { sub: esc(l.sub(p.name, all.length)), actions })}<p class="mu lib-intro">${esc(l.intro)}</p>${sheetOpen ? '' : messages}${toolbar}${recents}${jump}<div class="lib-layout"><section class="lib-catalog" aria-label="${esc(l.blocksTitle)}">${catalog}</section>${journeyWorkspace(state, publish)}</div>${addPanel(state)}${blockSheet(state)}`;
 }
 
 /** L'insertion d'un bloc dans le scénario affiché (écran Scénarios). */
