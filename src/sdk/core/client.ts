@@ -99,6 +99,7 @@ import type {
   Incident,
   IncidentAttachmentContent,
   IncidentAttachmentInput,
+  IncidentAccessInput,
   IncidentInput,
   IncidentSummary,
   InvestigationReport,
@@ -123,6 +124,7 @@ import type {
 } from './incident-ai-contracts.js';
 import type {
   TriggerBudget,
+  TriggerDepth,
   TriggerInvestigationInput,
   TriggerRunReport,
 } from './incident-trigger-contracts.js';
@@ -731,6 +733,26 @@ export interface QaCrawlerClient {
      * (409 TOO_MANY) ; le nom est nettoyé (aucun chemin).
      */
     addAttachment(projectId: string, incidentId: string, input: IncidentAttachmentInput): Promise<Incident>;
+    /**
+     * Enregistre le scénario d'accès (droit RUN) : départ, URL, texte libre, étapes, attendu, observé,
+     * conditions, données de test (masquées) ; `recording` associe un enregistrement du projet (404 s'il
+     * n'existe pas) ou le dissocie (null). La démonstration et l'analyse précédente sont gardées.
+     */
+    saveAccess(projectId: string, incidentId: string, input: IncidentAccessInput): Promise<Incident>;
+    /**
+     * Analyse le parcours (droit RUN) : étapes structurées, interprétations avec confiance, portions de
+     * code candidates (MATCHED / UNCERTAIN, jamais confirmées), pistes, limites. Lecture seule.
+     */
+    analyzeAccess(projectId: string, incidentId: string): Promise<Incident>;
+    /**
+     * Localise l'écran cible (droit RUN) dans la navigation lue par l'analyseur Angular : candidats avec
+     * indices et confiance, parcours d'accès, gardes, limites ; `route` impose un candidat.
+     */
+    locateAccessTarget(projectId: string, incidentId: string, route?: string): Promise<Incident>;
+    /** Joue le parcours d'accès dans un navigateur : écran atteint ou blocage, inventaire, requêtes, erreurs. */
+    prepareAccessTarget(projectId: string, incidentId: string): Promise<Incident>;
+    /** Lance le moteur de déclencheurs depuis l'écran cible préparé (point d'entrée imposé). */
+    exploreAccessTarget(projectId: string, incidentId: string, depth?: TriggerDepth): Promise<Incident>;
     /** Le contenu (droit RUN) : `{ dataUrl }` pour une image, `{ text }` masqué pour un texte. */
     attachment(
       projectId: string,
@@ -1281,6 +1303,16 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request('GET', `${incident(projectId, incidentId)}/regression/spec`),
       addAttachment: (projectId, incidentId, input) =>
         request('POST', `${incident(projectId, incidentId)}/attachments`, input),
+      saveAccess: (projectId, incidentId, input) =>
+        request('POST', `${incident(projectId, incidentId)}/access`, input),
+      analyzeAccess: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/access/analyze`, {}),
+      locateAccessTarget: (projectId, incidentId, route) =>
+        request('POST', `${incident(projectId, incidentId)}/access/locate`, route ? { route } : {}),
+      prepareAccessTarget: (projectId, incidentId) =>
+        request('POST', `${incident(projectId, incidentId)}/access/prepare`, {}),
+      exploreAccessTarget: (projectId, incidentId, depth) =>
+        request('POST', `${incident(projectId, incidentId)}/access/explore`, depth ? { depth } : {}),
       attachment: (projectId, incidentId, attachmentId) =>
         request('GET', `${incident(projectId, incidentId)}/attachments/${encodeURIComponent(attachmentId)}`),
       removeAttachment: (projectId, incidentId, attachmentId) =>

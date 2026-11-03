@@ -3461,6 +3461,21 @@ function incidentService(ctx: Context, project: StoredProject): IncidentService 
         ? { id: environment.id, baseUrl: environment.baseUrl, kind: environment.kind }
         : { baseUrl: project.targetUrl };
     },
+    recordingSteps: async (name) => {
+      // Un enregistrement écrit sur disque ; une session encore en cours n'a pas de flow à relire.
+      try {
+        const stored = await storedRecordingOf(ctx, project, name);
+        const view = await studioView(stored, [], ctx.rules.reportLanguage);
+        return {
+          name,
+          startAt: view.startAt,
+          startedAt: stored.startedAt,
+          steps: view.steps.map((step) => ({ id: step.id, kind: step.kind, description: step.description })),
+        };
+      } catch {
+        return undefined;
+      }
+    },
     listScenarios: async () => {
       const root = await flowsDirOf(project.dir);
       const out: { name: string; file: string; text?: string }[] = [];

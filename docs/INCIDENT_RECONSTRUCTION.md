@@ -100,6 +100,49 @@ périmètre de l'incident, autres incidents du projet) pour les réutiliser d'un
 provenance (`origin` : découverte ou saisie, racine analysée, preuves). Le périmètre initial n'est pas une limite :
 pendant l'investigation, le même bloc demande des extensions `ADD_APPLICATION` à décider.
 
+**Scénario d'accès et exploration** (`src/incident/access.ts`, `src/incident/target-screen.ts`, routes
+`POST …/access`, `…/access/analyze`, `…/access/locate`, `…/access/prepare`, `…/access/explore`, droit `RUN`) :
+la personne indique l'écran ou la fonctionnalité cible et décrit le problème ; l'URL, des indications de navigation,
+des étapes connues (mode guidé), un point de départ, l'attendu, l'observé, des conditions et des données de test
+sont facultatifs. Tout est masqué à l'enregistrement (masqueur, puis paires « mot de passe : … », jeton, cookie,
+clé d'API). La démonstration passe par un enregistrement du module Enregistrements (lancé depuis la carte ou
+associé par son nom vérifié) : ses étapes, sans valeur saisie, sont relues et son départ compte comme route
+observée. Aucune vidéo n'est acceptée.
+
+1. **Localiser l'écran** (lecture seule) : l'analyse Angular (`code/angular.ts`) relève les routes (composant,
+   redirection, gardes `canActivate`, `canMatch`, `canActivateChild`), les liens des templates (`routerLink`,
+   `href`) et les titres `h1`–`h3`. Chaque route est notée sur des indices cités : URL indiquée, départ de
+   l'enregistrement, mots de la route, libellé d'un lien entrant (ou des indications), titre de l'écran, nom du
+   composant. Un écran qui ne correspond que par des noms est marqué « nom seul » et plafonné à 0,45. Le
+   parcours part de l'entrée de l'application (redirection de la racine) et suit les liens en largeur ; les liens
+   d'un composant sans route (coquille, menu) valent depuis tout écran ; les étapes guidées sont rapprochées des
+   liens, et une étape sans lien est gardée comme indication. Sans lien, l'accès direct par l'URL est proposé et
+   dit. Les gardes de la route et de ses parents, ainsi que les routes paramétrées, sont des limites : QA-CRAWLER
+   ne crée pas de session et ne contourne aucune garde. La personne peut choisir un autre candidat.
+2. **Préparer l'exploration** : le parcours est vérifié par le Scope Policy Engine (navigation autorisée, hôtes du
+   périmètre) puis joué dans un navigateur sans interface sur l'environnement de test. L'écran atteint est
+   inventorié (boutons, champs, liens, listes, éléments désactivés, dialogues, requêtes et erreurs vues) et une
+   capture est gardée sous le dossier de l'incident. Un autre écran atteint, une étape impossible, une page de
+   connexion (aucun identifiant n'est saisi) ou une navigation refusée bloquent l'exploration et sont dits.
+3. **Lancer l'investigation** : seulement quand l'écran retenu a été atteint. Le moteur des déclencheurs démarre
+   avec le parcours comme point d'entrée imposé (`TriggerInvestigationInput.entry`, gardé dans `TriggerRun.entry`
+   pour la reprise), rejoué avant chaque essai ; le texte du scénario sert de description. Stratégies,
+   déduplication, répétitions, réduction, budgets, pause, reprise et annulation sont ceux du moteur. La carte
+   suit le run réel : neuf phases (recherche de l'écran, parcours identifié, écran atteint, analyse des
+   interactions, exploration des combinaisons, anomalie suspectée, reproduction en cours, anomalie confirmée —
+   au moins deux reproductions —, diagnostic), séquences exécutées, états explorés, dernière action, anomalies,
+   durée et limites restantes, sans pourcentage. Les résultats donnent la séquence déclenchante et sa fréquence,
+   les conditions découvertes, les preuves (première erreur, première action sans effet), les hypothèses du run
+   (proposées, jamais confirmées par le moteur seul) et les actions recommandées.
+
+« Analyser le parcours » reste disponible : il réutilise l'interprète (`interpretBrief`), un lexique FR/EN des
+actions, l'analyse Angular et l'index du code, puis la découverte du périmètre (`trigger/discovery.ts`) : étapes
+comprises avec l'étape critique, interprétations avec leur confiance, portions de code candidates `MATCHED` ou
+`UNCERTAIN` (jamais confirmées), ressources transversales au-delà de l'écran visible, pistes d'un blocage global
+et limites. Une ressource refusée reste `DENIED` : la carte propose l'extension (`ADD_PATH`, `ADD_HOST`), décidée
+par une personne. Le Résumé, l'Exécution et le rapport (JSON et Markdown) reprennent l'écran cible, sa
+localisation, sa préparation et l'exploration lancée.
+
 Le Scope Policy Engine refuse par défaut et agit dans les adaptateurs (lecture de fichiers, journaux,
 tests, commandes, OpenShift) — pas seulement dans l'interface :
 
@@ -155,6 +198,11 @@ jouer un environnement qui permet les écritures ou approuver une vérification 
 | GET        | `/incidents/:i/scope/tree?application=&depth=`                                                  | dossiers d'un dépôt pour le périmètre (`RUN`)                                    |
 | POST       | `/incidents/:i/scope/discover` `{ root }`                                                       | découverte automatique d'un dépôt (lecture seule, `RUN`)                         |
 | GET        | `/incidents/:i/scope/repositories`                                                              | dépôts déjà connus de l'environnement (`RUN`)                                    |
+| POST       | `/incidents/:i/access`                                                                          | enregistre le scénario d'accès (masqué ; `recording` associe ou dissocie)        |
+| POST       | `/incidents/:i/access/analyze`                                                                  | analyse le parcours (candidats, pistes, limites ; lecture seule)                 |
+| POST       | `/incidents/:i/access/locate` `{route?}`                                                        | localise l'écran cible et son parcours (lecture seule)                           |
+| POST       | `/incidents/:i/access/prepare`                                                                  | atteint l'écran dans un navigateur, inventaire (`RUN`)                           |
+| POST       | `/incidents/:i/access/explore` `{depth?}`                                                       | lance le moteur depuis l'écran atteint (`RUN`)                                   |
 | GET        | `/incidents/:i/report?format=json\|markdown\|html\|pdf&sections=`                               | rapport, sections choisies                                                       |
 | GET        | `/incidents/:i/regression/spec`                                                                 | test Playwright généré depuis le flow proposé                                    |
 | GET        | `/incidents/:i/ai/capabilities`                                                                 | modes IA disponibles, fournisseur, budget, politique de données                  |
@@ -196,6 +244,14 @@ joue toute l'investigation avec le vrai moteur et Chromium. Résultat obtenu sur
 - annulation et reprise ; capacités lues pour LOCAL, REMOTE et ARO avec le même contrat.
 
 ## 8. Limites connues
+
+- Scénario d'accès : la localisation de l'écran lit les routes et les liens Angular déclarés dans le code ; une
+  navigation construite dynamiquement (`router.navigate` calculé, menus chargés depuis une API) n'est pas suivie et
+  l'accès direct par l'URL est alors proposé. Un écran derrière une garde ou une page de connexion exige une
+  session autorisée que QA-CRAWLER ne crée pas : la préparation s'arrête et le dit. « Enregistrer le parcours »
+  lance une vraie session du module Enregistrements, qui ouvre un navigateur visible sur la machine du serveur :
+  sans écran (CI, conteneur), la session échoue et l'erreur est affichée. Le rapprochement du texte et du code est
+  lexical : un écran nommé autrement dans le code reste un candidat incertain.
 
 - ARO : aucun cluster n'est disponible pour les tests. L'adaptateur (détection dans le cluster, montage des
   dépôts, `oc logs` par le ServiceAccount) est testé avec un exécuteur simulé ; le manifeste de Job est généré,

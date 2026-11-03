@@ -20,6 +20,24 @@ import {
   sniffAttachment,
   writeAttachment,
 } from './attachments.js';
+import {
+  AccessInputError,
+  accessKeywords,
+  accessText,
+  buildAccessAnalysis,
+  interpretations,
+  parseAccessPath,
+  sanitizeAccess,
+} from './access.js';
+import { discoverScope as discoverResources } from './trigger/discovery.js';
+import { entryActions, locateTarget, preparationOf } from './target-screen.js';
+import { ExplorationSession, describeAction } from './trigger/session.js';
+import {
+  type IncidentAccess,
+  type IncidentAccessInput,
+  type TargetLocation,
+  type TargetPreparation,
+} from '../sdk/core/incident-contracts.js';
 import { analyzeCode } from './code/index.js';
 import { buildGraph } from './correlator.js';
 import { buildFrontendTrace } from './frontend-trace.js';
@@ -144,6 +162,19 @@ export interface IncidentHost {
   environment(environmentId?: string): Promise<{ id?: string; baseUrl?: string; kind?: string }>;
   /** Les dépôts que le projet déclare (dossier des sources Angular…), proposés à la réutilisation par la découverte du périmètre. */
   sourceRoots?(): Promise<{ root: string; label: string }[]>;
+  /**
+   * Les étapes d'un enregistrement du module Enregistrements (décrites sans valeur saisie) pour le
+   * scénario d'accès ; undefined : introuvable, ou session encore en cours.
+   */
+  recordingSteps?(name: string): Promise<
+    | {
+        name: string;
+        startAt?: string;
+        startedAt?: string;
+        steps: { id: string; kind: string; description: string }[];
+      }
+    | undefined
+  >;
   /** Le dossier d'un run du moteur (captures, trace). */
   runDir(run: string): string;
 }
@@ -1036,6 +1067,404 @@ export class IncidentService {
    * Les dépôts déjà connus de l'environnement d'investigation : ceux du projet (sources déclarées), du
    * périmètre de cet incident, et des autres incidents du projet (cinquante au plus) ; une racine une fois.
    */
+  // ── Scénario d'accès et démonstration ───────────────────────────────────────────────────────
+
+  /**
+   * Enregistre le scénario d'accès (texte, étapes, départ, données de test sans secret : tout est
+   * masqué) ; la démonstration et l'analyse précédente sont gardées. `recording` associe un
+   * enregistrement existant du projet (vérifié) ou le dissocie (null).
+   */
+  async saveAccess(id: string, input: IncidentAccessInput, actor: string): Promise<Incident> {
+    const incident = await this.incident(id);
+    if (incident.state === 'CANCELLED')
+      throw new IncidentServiceError(
+        'STATE',
+        'the incident is cancelled: resume it before editing the access scenario',
+      );
+    const at = this.now().toISOString();
+    let next: IncidentAccess;
+    try {
+      next = sanitizeAccess(input, incident.access, actor, at);
+    } catch (error) {
+      if (error instanceof AccessInputError) throw new IncidentServiceError('INVALID', error.message);
+      throw error;
+    }
+    if ('recording' in input) {
+      const raw: unknown = input.recording;
+      if (raw === null) delete next.recording;
+      else if (typeof raw === 'string' && raw.trim() !== '' && raw.length <= 200) {
+        const name = raw.trim();
+        const found = this.host.recordingSteps ? await this.host.recordingSteps(name) : undefined;
+        if (!found)
+          throw new IncidentServiceError(
+            'NOT_FOUND',
+            `recording ${name} not found (or still being recorded)`,
+          );
+        next.recording =
+          incident.access?.recording?.name === name
+            ? incident.access.recording
+            : { name, linkedAt: at, linkedBy: actor };
+      } else throw new IncidentServiceError('INVALID', 'recording must be a recording name or null');
+    }
+    const parts = [
+      next.narrative ? 'parcours' : '',
+      next.steps.length > 0 ? `${String(next.steps.length)} étape(s)` : '',
+      next.recording ? `enregistrement ${next.recording.name}` : '',
+    ].filter(Boolean);
+    return this.store.mutate(
+      id,
+      actor,
+      (current) => {
+        current.access = next;
+      },
+      {
+        kind: 'UPDATED',
+        message: `scénario d’accès enregistré${parts.length > 0 ? ` (${parts.join(', ')})` : ''}`,
+      },
+    );
+  }
+
+  /** Les modèles Angular des applications frontend du périmètre (lecture contrôlée par la politique). */
+  private async frontendModels(incident: Incident): Promise<Awaited<ReturnType<typeof analyzeAngular>>[]> {
+    if (!incident.scope.permissions.readSources) return [];
+    const policy = await this.policy(incident);
+    const files = this.adapter(incident).files(policy);
+    const frontends = incident.scope.applications.filter((application) => application.layer === 'FRONTEND');
+    return (await Promise.all(frontends.map((application) => analyzeAngular(application, files)))).filter(
+      (model) => model.nodes.length > 0,
+    );
+  }
+
+  /**
+   * LOCALISER L'ÉCRAN : l'écran cible (texte, URL, indications, étapes connues, départ d'un enregistrement)
+   * est cherché dans la navigation lue par l'analyseur Angular (routes, redirections, gardes, liens, titres) ;
+   * les candidats citent leurs indices, le parcours d'accès est le plus court par liens. `route` impose un
+   * candidat. Lecture seule, dans la politique du périmètre.
+   */
+  async locateAccessTarget(id: string, actor: string, options: { route?: string } = {}): Promise<Incident> {
+    const incident = await this.incident(id);
+    const access = incident.access;
+    const query = [access?.target, access?.hints].filter(Boolean).join(' ').trim();
+    if (!access || (query === '' && !access.url))
+      throw new IncidentServiceError('INVALID', 'indicate the target screen (or its URL) before locating it');
+    if (options.route !== undefined && (typeof options.route !== 'string' || options.route.length > 500))
+      throw new IncidentServiceError('INVALID', 'route must be a path');
+    const models = await this.frontendModels(incident);
+    let recordingStart: string | undefined;
+    if (access.mode === 'DEMO' && access.recording && this.host.recordingSteps) {
+      const recording = await this.host.recordingSteps(access.recording.name).catch(() => undefined);
+      recordingStart = recording?.startAt;
+    }
+    const location: TargetLocation = locateTarget({
+      query: access.target ?? access.url ?? '',
+      ...(access.url ? { url: access.url } : {}),
+      ...(access.hints ? { hints: access.hints } : {}),
+      ...(access.mode === 'GUIDED' ? { steps: access.steps.map((step) => step.text) } : {}),
+      ...(recordingStart ? { recordingStart } : {}),
+      ...(options.route ? { route: options.route } : {}),
+      models,
+      actor,
+      at: this.now().toISOString(),
+    });
+    if (!incident.scope.permissions.readSources)
+      location.limits.unshift(
+        'La lecture des sources n’est pas autorisée par le périmètre : aucune route n’est lue.',
+      );
+    else if (!incident.scope.applications.some((application) => application.layer === 'FRONTEND'))
+      location.limits.unshift(
+        'Aucune application frontend dans le périmètre : ajoutez-la depuis « Applications et dépôts ».',
+      );
+    return this.store.mutate(
+      id,
+      actor,
+      (current) => {
+        if (!current.access) return;
+        current.access.location = location;
+        // Un autre écran : la préparation précédente ne vaut plus.
+        if (current.access.preparation && current.access.preparation.route !== location.chosen)
+          delete current.access.preparation;
+      },
+      {
+        kind: 'SCOPE',
+        message: location.chosen
+          ? `écran cible localisé : ${location.chosen} (${String(location.candidates.length)} candidat(s), parcours de ${String(location.path.length)} étape(s))`
+          : 'écran cible non localisé',
+      },
+    );
+  }
+
+  /**
+   * PRÉPARER L'EXPLORATION : le parcours d'accès est joué dans un vrai navigateur (session du moteur de
+   * déclencheurs, chaque navigation vérifiée par la politique) ; l'écran atteint est inventorié (boutons,
+   * champs, liens, listes, éléments désactivés, dialogues, messages), avec les requêtes et erreurs vues et une
+   * capture. Aucune action n'est déclenchée sur l'écran cible ; un blocage (connexion, garde, mauvais écran)
+   * est dit précisément.
+   */
+  async prepareAccessTarget(id: string, actor: string): Promise<Incident> {
+    const incident = await this.incident(id);
+    const location = incident.access?.location;
+    if (!location?.chosen || location.path.length === 0)
+      throw new IncidentServiceError('INVALID', 'locate the target screen before preparing the exploration');
+    if (incident.state === 'CANCELLED') throw new IncidentServiceError('STATE', 'the incident is cancelled');
+    if (!incident.scope.permissions.navigate)
+      throw new IncidentServiceError('SCOPE', 'navigation is not allowed by the scope');
+    const target = await this.host.environment(incident.environmentId);
+    if (!target.baseUrl)
+      throw new IncidentServiceError(
+        'INVALID',
+        'no environment URL: the exploration runs on a test environment',
+      );
+    const policy = await this.policy(incident);
+    const actions = entryActions(location.path, target.baseUrl);
+    const blockers: string[] = [];
+    for (const action of actions.filter((item) => item.kind === 'NAVIGATE')) {
+      const decision = await policy.check({ kind: 'NAVIGATE', url: action.target ?? target.baseUrl });
+      if (!decision.allowed)
+        blockers.push(`navigation refusée vers ${action.target ?? ''} : ${decision.reason}`);
+    }
+    const started = Date.now();
+    const directory = path.join(this.host.projectDir, 'incidents', id, 'target');
+    const session = new ExplorationSession({
+      baseUrl: target.baseUrl,
+      allowedHosts: incident.scope.allowedHosts,
+      headless: true,
+      screenshotDir: directory,
+      now: () => this.now(),
+    });
+    const steps: TargetPreparation['steps'] = [];
+    let preparation: TargetPreparation;
+    try {
+      if (blockers.length === 0) {
+        await session.open();
+        for (const [index, action] of actions.entries()) {
+          const outcome = await session.perform(action, index);
+          steps.push({
+            summary: describeAction(action),
+            ok: outcome.ok,
+            ...(outcome.error ? { error: outcome.error } : {}),
+          });
+          if (!outcome.ok) {
+            blockers.push(`étape impossible : ${describeAction(action)} (${outcome.error ?? 'échec'})`);
+            break;
+          }
+        }
+      }
+      const snapshot = await session.snapshot();
+      const shot = blockers.length === 0 ? `prepare-${String(Date.now())}.png` : undefined;
+      const saved = shot ? await session.screenshot(path.join(directory, shot)) : false;
+      preparation = preparationOf({
+        route: location.chosen,
+        snapshot,
+        steps,
+        events: session.events,
+        blockers,
+        actor,
+        at: this.now().toISOString(),
+        durationMs: Date.now() - started,
+        ...(saved && shot ? { screenshot: shot } : {}),
+      });
+    } finally {
+      await session.close();
+    }
+    return this.store.mutate(
+      id,
+      actor,
+      (current) => {
+        if (current.access) current.access.preparation = preparation;
+      },
+      {
+        kind: 'SCOPE',
+        message: preparation.reached
+          ? `écran cible atteint : ${preparation.route} (${String(preparation.inventory.buttons.length)} bouton(s), ${String(preparation.inventory.fields.length)} champ(s))`
+          : `écran cible non atteint : ${preparation.blockers.join(' ; ') || preparation.finalUrl}`,
+      },
+    );
+  }
+
+  /**
+   * LANCER L'INVESTIGATION depuis l'écran cible : le moteur de découverte des déclencheurs démarre avec le
+   * parcours vérifié comme point d'entrée (rejoué avant chaque essai) et le texte du scénario comme
+   * description ; stratégies, déduplication, réduction, répétitions, budgets, pause et reprise sont les siens.
+   */
+  async exploreAccessTarget(
+    id: string,
+    actor: string,
+    options: { depth?: TriggerInvestigationInput['depth'] } = {},
+  ): Promise<Incident> {
+    const incident = await this.incident(id);
+    const access = incident.access;
+    const location = access?.location;
+    const preparation = access?.preparation;
+    if (!access || !location?.chosen || !preparation)
+      throw new IncidentServiceError(
+        'INVALID',
+        'prepare the exploration (target screen reached) before launching it',
+      );
+    if (!preparation.reached || preparation.route !== location.chosen)
+      throw new IncidentServiceError(
+        'INVALID',
+        `the target screen was not reached: ${preparation.blockers.join(' ; ') || preparation.finalUrl}`,
+      );
+    const target = await this.host.environment(incident.environmentId);
+    if (!target.baseUrl) throw new IncidentServiceError('INVALID', 'no environment URL');
+    const description = [access.target ? `Écran : ${access.target}.` : '', accessText(access)]
+      .filter(Boolean)
+      .join('\n');
+    const started = await this.startTrigger(id, actor, {
+      description,
+      ...(options.depth ? { depth: options.depth } : {}),
+      entry: {
+        route: location.chosen,
+        actions: entryActions(location.path, target.baseUrl),
+        source: 'TARGET',
+      },
+    });
+    const run = this.activeTriggerRun(started) ?? started.investigation.trigger?.runs.at(-1);
+    if (!run) return started;
+    return this.store.mutate(
+      id,
+      actor,
+      (current) => {
+        if (current.access)
+          current.access.exploration = {
+            runId: run.id,
+            startedAt: run.startedAt,
+            startedBy: actor,
+            route: location.chosen ?? '',
+          };
+      },
+      { kind: 'TRIGGER', message: `${run.id} : exploration lancée depuis l’écran cible ${location.chosen}` },
+    );
+  }
+
+  /**
+   * ANALYSER LE PARCOURS : le texte, les étapes et l'enregistrement associé deviennent un parcours
+   * structuré (interprète FR/EN existant + lexique des actions), puis des portions de code candidates
+   * (analyse Angular et index du code, découverte du périmètre). Lecture seule, dans la politique du
+   * périmètre : une ressource refusée reste DENIED (une extension se demande, jamais d'office).
+   */
+  async analyzeAccess(id: string, actor: string): Promise<Incident> {
+    const incident = await this.incident(id);
+    const access = incident.access;
+    if (!access || (access.narrative.trim() === '' && access.steps.length === 0 && !access.recording))
+      throw new IncidentServiceError(
+        'INVALID',
+        'describe the path, add steps or link a recording before the analysis',
+      );
+    const fr = interpretBrief(accessText(access), {}).language === 'fr';
+    const say = (french: string, english: string): string => (fr ? french : english);
+    const limits: string[] = [];
+    let recordingSteps: { description: string; kind?: string }[] = [];
+    const observedRoutes: string[] = [];
+    if (access.recording) {
+      const recording = this.host.recordingSteps
+        ? await this.host.recordingSteps(access.recording.name).catch(() => undefined)
+        : undefined;
+      if (recording) {
+        recordingSteps = recording.steps;
+        if (recording.startAt) {
+          try {
+            observedRoutes.push(new URL(recording.startAt, 'http://local.invalid').pathname);
+          } catch {
+            // un départ illisible n'est pas une route observée
+          }
+        }
+      } else
+        limits.push(
+          say(
+            `L’enregistrement « ${access.recording.name} » est introuvable ou encore en cours : ses étapes ne sont pas reprises.`,
+            `Recording “${access.recording.name}” is missing or still running: its steps are not used.`,
+          ),
+        );
+    }
+    const parsed = parseAccessPath({
+      narrative: access.narrative,
+      steps: access.steps,
+      recording: recordingSteps,
+    });
+    const interpreted = this.briefOf(incident, accessText(access, recordingSteps));
+    const found = interpretations(parsed, interpreted, incident.application);
+    const urlWords = access.url
+      ? keywordsOf(access.url.replace(/^https?:\/\/[^/]+/, '').replace(/[/?#=&_-]+/g, ' '), 6)
+      : [];
+    const keywords = accessKeywords(parsed, found, [...urlWords, ...interpreted.keywords]);
+    const brief: IncidentBrief = { ...interpreted, keywords };
+    let angular: Awaited<ReturnType<typeof analyzeAngular>>[] = [];
+    let graph: Awaited<ReturnType<typeof discoverResources>> | undefined;
+    if (!incident.scope.permissions.readSources)
+      limits.push(
+        say(
+          'La lecture des sources n’est pas autorisée par le périmètre : aucune portion de code n’est localisée.',
+          'Reading sources is not allowed by the scope: no code is located.',
+        ),
+      );
+    else if (incident.scope.applications.length === 0)
+      limits.push(
+        say(
+          'Aucune application dans le périmètre : ajoutez-en depuis « Applications et dépôts » pour localiser le code.',
+          'No application in the scope: add one from “Applications and repositories” to locate code.',
+        ),
+      );
+    else {
+      const policy = await this.policy(incident);
+      const files = this.adapter(incident).files(policy);
+      const frontends = incident.scope.applications.filter((application) => application.layer === 'FRONTEND');
+      angular = (
+        await Promise.all(frontends.map((application) => analyzeAngular(application, files)))
+      ).filter((model) => model.nodes.length > 0);
+      if (frontends.length > 0 && angular.length === 0)
+        limits.push(
+          say(
+            'Aucun code Angular reconnu dans les applications frontend lues : seuls les scénarios et les endpoints sont rapprochés.',
+            'No Angular code recognised in the frontend applications read: only scenarios and endpoints are matched.',
+          ),
+        );
+      const code =
+        incident.investigation.code ??
+        (incident.scope.applications.some((application) => application.layer !== 'FRONTEND')
+          ? await analyzeCode(incident.scope, files, {})
+          : undefined);
+      const target = await this.host.environment(incident.environmentId).catch(() => undefined);
+      graph = await discoverResources({
+        incident,
+        brief,
+        ...(code ? { code } : {}),
+        angular,
+        scenarios: (await this.host.listScenarios?.()) ?? [],
+        observedRoutes,
+        check: (operation) => policy.check(operation),
+        ...(target?.baseUrl ? { baseUrl: target.baseUrl } : {}),
+        now: this.now().toISOString(),
+      });
+    }
+    const analysis = buildAccessAnalysis({
+      access,
+      brief,
+      parsed,
+      found,
+      keywords,
+      graph,
+      angular,
+      limits,
+      recordingUsed: recordingSteps.length > 0,
+      actor,
+      at: this.now().toISOString(),
+      lang: fr ? 'fr' : 'en',
+    });
+    const matched = analysis.candidates.filter((item) => item.match === 'MATCHED').length;
+    return this.store.mutate(
+      id,
+      actor,
+      (current) => {
+        if (current.access) current.access.analysis = analysis;
+      },
+      {
+        kind: 'SCOPE',
+        message: `parcours analysé : ${String(analysis.path.length)} étape(s), ${String(matched)} correspondance(s), ${String(analysis.candidates.length - matched)} incertaine(s)`,
+      },
+    );
+  }
+
   async knownRepositories(id: string): Promise<{ repositories: KnownRepository[] }> {
     const incident = await this.incident(id);
     const seen = new Set<string>();
@@ -1752,10 +2181,14 @@ export class IncidentService {
         'INVALID',
         'aucun environnement avec une URL : la découverte explore un environnement de test',
       );
+    // Le scénario d'accès, quand il existe, guide la découverte du déclencheur (sans dupliquer sa saisie).
+    const accessDescription = incident.access ? accessText(incident.access) : '';
     const text =
       input.description ??
       incident.investigation.trigger?.brief?.rawText ??
-      `${incident.description}\n${incident.observed}`;
+      (accessDescription !== ''
+        ? `${incident.description}\n${accessDescription}`
+        : `${incident.description}\n${incident.observed}`);
     const brief = resumeFrom?.brief ?? this.briefOf(incident, text);
     const policy = await this.policy(incident);
     const files = this.adapter(incident).files(policy);
@@ -1858,6 +2291,7 @@ export class IncidentService {
           ? { proposeWithAi: createAiSequenceProposer(aiClient, { signal: abort.signal }) }
           : {}),
         resumeFrom,
+        ...(input.entry ? { entry: input.entry } : {}),
       });
       this.triggerEngines.set(id, engine);
       const outcome = await engine.execute();

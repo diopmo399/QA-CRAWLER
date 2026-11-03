@@ -46,6 +46,29 @@ const CONTROL_KEYS = /^\s*(\w+)\s*:\s*(?:\[|new\s+FormControl|this\.fb\.control|
 const VALIDATOR = /\bValidators\.(\w+)/g;
 const ASYNC_VALIDATOR = /asyncValidators?\s*:|AsyncValidatorFn|\basyncValidator/;
 const ROUTE_ENTRY = /\{\s*path\s*:\s*['"`]([^'"`]*)['"`]\s*,\s*(?:[^}]*?)component\s*:\s*(\w+)/g;
+/** Un objet de route sans accolade imbriquée : `{ path: 'x', component: X, canActivate: [g] }`. */
+const ROUTE_OBJECT = /\{[^{}]*?\bpath\s*:\s*['"`]([^'"`]*)['"`][^{}]*\}/g;
+/** Un lien ou un bouton de navigation d'un template, et son contenu. */
+const NAV_ELEMENT = /<(a|button)\b([^>]*)>([\s\S]{0,240}?)<\/\1>/gi;
+const HEADING = /<(h[1-3])\b[^>]*>([\s\S]{1,160}?)<\/\1>/gi;
+/** Le texte visible d'un fragment de template : balises et interpolations retirées. */
+const visibleText = (html: string): string =>
+  html
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\{\{[^}]*\}\}/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+/** La cible d'un lien : `routerLink="x"`, `[routerLink]="'x'"`, `[routerLink]="['/x']"`, `href="/x"`. */
+function linkTarget(attributes: string): string | undefined {
+  const plain = /\brouterLink\s*=\s*"([^"]+)"/.exec(attributes)?.[1];
+  if (plain) return plain;
+  const bound = /\[routerLink\]\s*=\s*"\s*\[?\s*'([^']+)'/.exec(attributes)?.[1];
+  if (bound) return bound;
+  const href = /\bhref\s*=\s*"(\/[^"#?]*)/.exec(attributes)?.[1];
+  return href;
+}
 
 interface FileText {
   absolute: string;
@@ -107,6 +130,11 @@ export class AngularAnalyzer {
   private files = 0;
 
   private readonly routeEntries: { path: string; component: string }[] = [];
+  private readonly navigation: NonNullable<AngularModel['navigation']> = {
+    routes: [],
+    links: [],
+    headings: [],
+  };
 
   constructor(private readonly app: ScopeApplication) {}
 
@@ -150,6 +178,28 @@ export class AngularAnalyzer {
     for (const source of sources.filter((file) => file.relative.endsWith('.ts')))
       for (const match of source.text.matchAll(ROUTE_ENTRY))
         this.routeEntries.push({ path: match[1] ?? '', component: match[2] ?? '' });
+    // La navigation : chaque objet de route (composant, redirection, gardes), pour le parcours d'accès.
+    for (const source of sources.filter(
+      (file) => file.relative.endsWith('.ts') && /\bpath\s*:/.test(file.text),
+    ))
+      for (const match of source.text.matchAll(ROUTE_OBJECT)) {
+        const body = match[0];
+        const guards = [...body.matchAll(/\b(?:canActivate|canMatch|canActivateChild)\s*:\s*\[([^\]]*)\]/g)]
+          .flatMap((entry) => (entry[1] ?? '').split(','))
+          .map((name) => name.trim().replace(/\(.*$/, ''))
+          .filter((name) => /^\w+$/.test(name));
+        const component = /\bcomponent\s*:\s*(\w+)/.exec(body)?.[1];
+        const redirectTo = /\bredirectTo\s*:\s*['"`]([^'"`]*)['"`]/.exec(body)?.[1];
+        if (!component && redirectTo === undefined) continue;
+        this.navigation.routes.push({
+          path: match[1] ?? '',
+          ...(component ? { component } : {}),
+          ...(redirectTo !== undefined ? { redirectTo } : {}),
+          guards,
+          file: source.relative,
+          line: lineAt(source.text, match.index),
+        });
+      }
     for (const source of sources.filter((file) => file.relative.endsWith('.ts'))) this.analyzeTs(source);
     for (const [componentId, template] of this.componentTemplates)
       this.analyzeTemplate(componentId, template);
@@ -159,6 +209,7 @@ export class AngularAnalyzer {
       features: this.features,
       nodes: [...this.nodes.values()],
       links: this.links,
+      navigation: this.navigation,
       files: this.files,
       denied: this.denied,
       truncated: this.truncated,
@@ -616,6 +667,30 @@ export class AngularAnalyzer {
       line: component.line,
     });
     if (/\[\(ngModel\)\]/.test(template.text)) this.features.templateForms = true;
+    // Les liens de navigation (libellé visible) et les titres de l'écran : indices pour localiser un écran cible.
+    for (const match of template.text.matchAll(NAV_ELEMENT)) {
+      const target = linkTarget(match[2] ?? '');
+      const label =
+        visibleText(match[3] ?? '') || /aria-label\s*=\s*"([^"]*)"/.exec(match[2] ?? '')?.[1] || '';
+      if (target && label)
+        this.navigation.links.push({
+          componentId,
+          file: template.file,
+          line: lineAt(template.text, match.index),
+          target,
+          label,
+        });
+    }
+    for (const match of template.text.matchAll(HEADING)) {
+      const text = visibleText(match[2] ?? '');
+      if (text)
+        this.navigation.headings.push({
+          componentId,
+          file: template.file,
+          line: lineAt(template.text, match.index),
+          text,
+        });
+    }
     const handlers = this.handlersByComponent.get(componentId) ?? new Set<string>();
     for (const match of template.text.matchAll(EVENT_BINDING)) {
       const [, event, expression] = match;

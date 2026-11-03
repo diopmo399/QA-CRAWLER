@@ -26,6 +26,7 @@ import {
 } from './incident-parts.js';
 import { INCIDENT_SCOPE_CSS } from './incident-scope.js';
 import { INCIDENT_SCOPE_DISCOVERY_CSS } from './incident-scope-discovery.js';
+import { INCIDENT_ACCESS_CSS } from './incident-access.js';
 import { esc } from './view.js';
 
 /**
@@ -1874,4 +1875,5 @@ export const INCIDENT_UX_CSS = `
 @media (prefers-reduced-motion:reduce){.ws-ux-s-running .ws-ux-dot,.ws-ux-s-running .ws-ux-sn{box-shadow:none}}
 ${INCIDENT_SCOPE_CSS}
 ${INCIDENT_SCOPE_DISCOVERY_CSS}
+${INCIDENT_ACCESS_CSS}
 ${INCIDENT_FLOW_CSS}`;

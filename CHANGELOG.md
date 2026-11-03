@@ -71,6 +71,28 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   l'astérisque tiennent sur une ligne et l'aide reste sous son champ (plus de colonne orpheline pour « Cible ») ;
   titres de section du menu plus lisibles, marges du contenu resserrées (24 px).
 
+- **Scénario d'accès et exploration à partir d'un écran cible** (étape « Périmètre », `src/incident/access.ts`,
+  `src/incident/target-screen.ts`, `src/sdk/ui/incident-access.ts`) : une carte entre « Applications et dépôts » et
+  « Définition du périmètre ». L'utilisateur indique l'écran ou la fonctionnalité cible et décrit le problème (URL et
+  indications de navigation facultatives) ; trois modes : « Explorer automatiquement » (recommandé), « Parcours
+  guidé » (étapes connues) et « Démonstration » (un enregistrement du module Enregistrements, lancé ou associé ;
+  aucune vidéo). « Localiser l'écran » lit le code : l'analyse Angular relève désormais les routes (redirections,
+  gardes `canActivate`/`canMatch`), les liens des templates et les titres ; les écrans candidats sont notés sur des
+  indices cités (URL, lien entrant, titre, route ; un nom seul reste incertain, plafonné à 45 %), et le parcours est
+  trouvé par les liens depuis l'entrée de l'application. Gardes et routes paramétrées sont dites comme limites,
+  jamais contournées. « Préparer l'exploration » joue ce parcours dans un vrai navigateur (hôtes du périmètre,
+  environnement de test) et inventorie l'écran atteint (boutons, champs, liens, listes, désactivés, requêtes,
+  erreurs, capture) ; une page de connexion bloque sans qu'aucun identifiant soit saisi. « Lancer l'investigation »
+  démarre le moteur des déclencheurs avec ce parcours comme point d'entrée imposé, rejoué avant chaque essai
+  (stratégies, déduplication, répétitions, réduction, budgets, pause, reprise et annulation inchangés). La
+  progression vient du run réel (neuf phases, séquences exécutées, états explorés, dernière action, anomalies,
+  durée, limites restantes ; aucun pourcentage) ; les résultats donnent la séquence déclenchante et sa fréquence,
+  les conditions, les preuves, les hypothèses proposées (jamais confirmées par le moteur seul) et les actions
+  recommandées. « Analyser le parcours » (étapes comprises, portions de code candidates, pistes, limites) reste
+  disponible. Routes `POST …/access`, `…/access/analyze`, `…/access/locate`, `…/access/prepare`,
+  `…/access/explore` (droit `RUN`) ; client `saveAccess`, `analyzeAccess`, `locateAccessTarget`,
+  `prepareAccessTarget`, `exploreAccessTarget`. Le scénario est repris dans le Résumé, l'Exécution et le rapport.
+
 - **Découverte automatique du périmètre** (étape « Périmètre » de l'investigation, `src/incident/scope-discovery.ts`) :
   le bloc « Applications et dépôts » remplace la saisie manuelle des applications (identifiant, nom, couche, dossiers,
   classes, racine) par un chemin de projet — ou un dépôt déjà connu de l'environnement, réutilisé d'un clic — et

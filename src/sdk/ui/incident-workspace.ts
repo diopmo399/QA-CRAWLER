@@ -1,3 +1,4 @@
+import { renderAccessSummary } from './incident-access.js';
 import {
   incidentReproduction,
   type CodeLayer,
@@ -903,7 +904,8 @@ function documentBody(ctx: WorkspaceContext, ws: WorkspaceUi, tab: WorkspaceTab,
       return `${renderEnvironmentSelector(ctx, ws.ux, ws.capabilities, ws.environment ? { environment: ws.environment } : {})}${failed}`;
     }
     case 'run':
-      return renderReproductionRun(ctx, ws.repro, reproductionMedia(ws));
+      // Le scénario d'accès guide la reproduction : rappelé au-dessus de l'exécution.
+      return `${renderAccessSummary(ctx.lang, ctx.incident.access, ctx.incident)}${renderReproductionRun(ctx, ws.repro, reproductionMedia(ws))}`;
     case 'evidence':
       return renderEvidence(ctx, ws.repro, reproductionMedia(ws));
     case 'timeline':
@@ -943,7 +945,7 @@ function documentBody(ctx: WorkspaceContext, ws: WorkspaceUi, tab: WorkspaceTab,
     case 'regression':
       return renderRegressionTest(ctx, ws.dx, ws.regressionSpec);
     default:
-      return `${renderOverview(ctx)}${renderAttachmentsCard(ctx, ws.att, ws.busy)}`;
+      return `${renderOverview(ctx)}${renderAccessSummary(ctx.lang, ctx.incident.access, ctx.incident)}${renderAttachmentsCard(ctx, ws.att, ws.busy)}`;
   }
 }
 

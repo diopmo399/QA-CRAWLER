@@ -37,6 +37,7 @@ import {
   renderScopeDiscovery,
   type DiscoveryUi,
 } from './incident-scope-discovery.js';
+import { emptyAccessUi, renderAccess, type AccessUi } from './incident-access.js';
 import { uxText, type WorkspaceProgress } from './incident-ux.js';
 import {
   disableForDemo,
@@ -152,6 +153,8 @@ export interface IncidentsUi {
   scopeTrees: Record<string, ScopeTrees[string]>;
   /** Le bloc « Applications et dépôts » : chemin saisi, dépôts connus, résultat de la découverte, sélection. */
   discovery: DiscoveryUi;
+  /** La carte « Scénario d'accès et démonstration » : onglet, brouillon, enregistrements lus, aperçu vidéo. */
+  access: AccessUi;
   /** La liste « Investigations » : les incidents qui ne sont plus des brouillons, avec leur progression. */
   investigations?: InvestigationRow[];
   /** L'incident ouvert, tel que lu (sa révision sert aux modifications). */
@@ -189,6 +192,7 @@ export const emptyIncidentsUi = (): IncidentsUi => ({
   scope: emptyScopeUi(),
   scopeTrees: {},
   discovery: emptyDiscoveryUi(),
+  access: emptyAccessUi(),
   extension: emptyExtensionForm(),
   confirmCancel: false,
   ws: emptyWorkspaceUi(),
@@ -1249,7 +1253,10 @@ function scopeTab(state: DashboardState, ui: IncidentsUi, incident: Incident): s
     discoveryUi.advanced || ui.scopeForm !== undefined,
     `<section class="card wide inc-sc-other" aria-label="${esc(f.otherScope)}">${head}${draft}${body}</section>`,
   );
-  return `${discovery}${editor}${advanced}${extensions}`;
+  // Le scénario d'accès : après « Applications et dépôts », avant « Définition du périmètre ».
+  const accessUi = ui.access.incidentId === incident.id ? ui.access : emptyAccessUi(incident.id);
+  const access = renderAccess(scopeCtx, accessUi, ui.busy !== undefined ? { busy: ui.busy } : {});
+  return `${discovery}${access}${editor}${advanced}${extensions}`;
 }
 
 function scopeEditor(state: DashboardState, ui: IncidentsUi): string {

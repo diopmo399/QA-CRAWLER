@@ -14,8 +14,10 @@ import {
   SCOPE_EXTENSION_KINDS,
   SCOPE_TREE_DEFAULT_DEPTH,
   SCOPE_TREE_MAX_DEPTH,
+  TRIGGER_DEPTHS,
   type AttachmentType,
   type ExperimentKind,
+  type IncidentAccessInput,
   type IncidentInput,
   type ReportFormat,
   type ReportSection,
@@ -58,6 +60,7 @@ async function route(ctx: IncidentRouteContext): Promise<boolean> {
   const { service, rest, method, actor, json } = ctx;
   const [id, action, part, item, decision] = rest;
   if (id !== undefined && action === 'attachments') return attachmentRoutes(ctx, id, part, item);
+  if (id !== undefined && action === 'access') return accessRoutes(ctx, id, part, item);
   if (id !== undefined && action === 'ai') return handleIncidentAiRoutes(ctx, id, part, item, decision);
   if (id !== undefined && action === 'trigger')
     return handleIncidentTriggerRoutes(ctx, id, part, item, decision);
@@ -287,6 +290,60 @@ async function attachmentRoutes(
   }
   if (ctx.method === 'DELETE') {
     ctx.json(await ctx.service.removeAttachment(id, attachmentId, ctx.actor));
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Le scénario d'accès : POST …/access (enregistrer), …/access/analyze (analyser le parcours),
+ * …/access/locate (localiser l'écran cible), …/access/prepare (le parcours joué dans le navigateur),
+ * …/access/explore (le moteur de déclencheurs lancé depuis l'écran cible). Droit RUN (access.ts).
+ */
+async function accessRoutes(
+  ctx: IncidentRouteContext,
+  id: string,
+  part: string | undefined,
+  extra: string | undefined,
+): Promise<boolean> {
+  if (extra !== undefined) return false;
+  const { service, method, actor, json } = ctx;
+  if (part === undefined && method === 'POST') {
+    const input: IncidentAccessInput = await ctx.body();
+    json(await service.saveAccess(id, input, actor));
+    return true;
+  }
+  if (part === 'analyze' && method === 'POST') {
+    json(await service.analyzeAccess(id, actor));
+    return true;
+  }
+  if (part === 'locate' && method === 'POST') {
+    const body = await ctx.body();
+    const route = body.route;
+    if (route !== undefined && (typeof route !== 'string' || route.length > 500))
+      throw ctx.fail(400, 'BAD_REQUEST', 'route must be a path');
+    json(await service.locateAccessTarget(id, actor, typeof route === 'string' ? { route } : {}));
+    return true;
+  }
+  if (part === 'prepare' && method === 'POST') {
+    json(await service.prepareAccessTarget(id, actor));
+    return true;
+  }
+  if (part === 'explore' && method === 'POST') {
+    const body = await ctx.body();
+    const depth = body.depth;
+    if (
+      depth !== undefined &&
+      (typeof depth !== 'string' || !(TRIGGER_DEPTHS as readonly string[]).includes(depth))
+    )
+      throw ctx.fail(400, 'BAD_REQUEST', `depth must be one of ${TRIGGER_DEPTHS.join(', ')}`);
+    json(
+      await service.exploreAccessTarget(
+        id,
+        actor,
+        typeof depth === 'string' ? { depth: depth as (typeof TRIGGER_DEPTHS)[number] } : {},
+      ),
+    );
     return true;
   }
   return false;
