@@ -6,9 +6,11 @@ import {
   compileJourneyPath,
   freeId,
   instanceKey,
+  instanceOutputs,
   JOURNEY_LIMITS,
   JOURNEY_MODES,
   JOURNEY_NODE_KINDS,
+  journeyOutputs,
   journeyPaths,
   journeyRevision,
   journeyStructure,
@@ -31,6 +33,7 @@ import {
   flowFiles,
   freeName,
   LibraryError,
+  newBlock,
   partsOf,
   readRegistry,
   refsOf,
@@ -39,6 +42,8 @@ import {
   withTakenOver,
 } from './library.js';
 import { checkComposition, mergeData, type CompositionPart } from './library-contract.js';
+import { validateBlockFlow } from './library-extract.js';
+import type { LibraryBlockView } from '../core/contracts.js';
 
 /**
  * LES PARCOURS VISUELS DE LA BIBLIOTHÈQUE (modèle : src/sdk/core/journey.ts). Un parcours s'enregistre tel
@@ -295,6 +300,7 @@ export async function checkJourney(projectDir: string, raw: unknown): Promise<Jo
   );
   const paths: JourneyCheck['paths'] = [];
   const availableBy = new Map<string, Set<string>[]>();
+  const outputsByPath: string[][] = [];
   if (!cyclic)
     for (const [index, found1] of found.slice(0, JOURNEY_LIMITS.paths).entries()) {
       const blockNodes = blockNodesOf(graph, found1.nodes);
@@ -347,6 +353,14 @@ export async function checkJourney(projectDir: string, raw: unknown): Promise<Jo
           }));
         for (const output of parts[at]?.block?.contract.outputs ?? []) produced.add(output.key);
       }
+      outputsByPath.push(
+        blockNodes.flatMap((node, at) =>
+          instanceOutputs(
+            node,
+            (parts[at]?.block?.contract.outputs ?? []).map((output) => output.key),
+          ),
+        ),
+      );
       for (const conflict of check.conflicts) {
         errors.push(`données en conflit${label} : ${conflict.detail}`);
         for (const node of blockNodes)
@@ -393,6 +407,7 @@ export async function checkJourney(projectDir: string, raw: unknown): Promise<Jo
     edges: structure.edges,
     errors,
     warnings,
+    outputs: journeyOutputs(outputsByPath),
   };
 }
 
@@ -477,6 +492,81 @@ export function publishJourney(
       storeFile(projectDir, { version: 1, journeys }),
     ]);
     return { scenarios };
+  });
+}
+
+/**
+ * TRANSFORMER UN PARCOURS EN BLOC : ses étapes (`run:` + `with:`, les blocs rejoués restent liés par leur
+ * nom) et son jeu de données fusionné deviennent un bloc de la bibliothèque, réutilisable dans d'autres
+ * parcours. Son contrat est déclaré d'emblée : ses sorties sont celles que le parcours produit (vérifiées).
+ * Seul un parcours valide et sans condition le peut : ses chemins donneraient des sorties différentes.
+ * Un nom déjà pris est refusé (409) ; le parcours et ses scénarios ne changent pas.
+ */
+export function journeyToBlock(
+  projectDir: string,
+  name: string,
+  input: { block: unknown; description?: unknown },
+): Promise<{ block: LibraryBlockView; outputs: string[] }> {
+  return withLock(projectDir, async () => {
+    const store = await readStore(projectDir);
+    const journey = store.journeys[name];
+    if (!journey) throw new LibraryError(`no journey named "${name}"`, 404);
+    const check = await checkJourney(projectDir, journey);
+    if (!check.ok) {
+      const details = [
+        ...check.errors,
+        ...Object.entries(check.nodes).flatMap(([id, diag]) =>
+          diag.errors.map((error) => `${id} : ${error}`),
+        ),
+        ...Object.entries(check.edges).flatMap(([id, list]) => list.map((error) => `${id} : ${error}`)),
+      ];
+      throw new LibraryError(details[0] ?? 'the journey does not hold', 422, details);
+    }
+    const only = check.paths[0];
+    if (!check.linear || check.paths.length !== 1 || !only)
+      throw new LibraryError(
+        `this journey has conditions (${check.linearReason ?? ''}): its paths produce different data, it cannot become one block`,
+        422,
+      );
+    const { root, entries } = await flowEntries(projectDir);
+    const blockName = freeName(entries, input.block);
+    const registry = await readRegistry(projectDir);
+    const blocks = await blocksOf(entries, registry);
+    const { steps } = compileJourneyPath(journey.graph, only.nodes);
+    const blockNodes = blockNodesOf(journey.graph, only.nodes);
+    const names = blockNodes.map((node) => node.block ?? '');
+    const parts = pathParts(blockNodes, partsOf(names, blocks, entries));
+    const merged = mergeData(
+      parts.map((part) => ({ from: part.name, data: part.block?.data })),
+      blockName,
+    ).merged;
+    const first = entries.find((entry) => entry.name === names[0]);
+    const startAt = typeof first?.flow.startAt === 'string' ? first.flow.startAt : undefined;
+    const raw = typeof input.description === 'string' ? input.description.replace(/\s+/g, ' ').trim() : '';
+    const description = (raw || journey.description || `Parcours visuel « ${journey.name} »`).slice(0, 500);
+    const flow = {
+      name: blockName,
+      description,
+      reusable: true,
+      ...(startAt ? { startAt } : {}),
+      steps,
+    };
+    const invalid = validateBlockFlow(flow, merged);
+    if (invalid.length > 0)
+      throw new LibraryError(`the journey is not a valid block: ${invalid[0] ?? ''}`, 422, invalid);
+    const outputs = check.outputs.guaranteed.slice(0, 50);
+    const block = await newBlock(
+      projectDir,
+      root,
+      flow,
+      merged,
+      { kind: 'scenario', name: journey.name, journey: journey.name },
+      {
+        contract: { inputs: [], outputs, preconditions: [], postconditions: [] },
+        uses: { at: new Date().toISOString(), blocks: refsOf(names, blocks) },
+      },
+    );
+    return { block, outputs };
   });
 }
 

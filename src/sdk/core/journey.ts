@@ -95,6 +95,15 @@ export interface JourneyNodeDiagnostics {
   satisfied: { key: string; from: string }[];
 }
 
+/**
+ * Les sorties d'un parcours : les données que ses blocs produisent. Garanties : produites sur TOUS les
+ * chemins ; sinon, seulement sur certains (numéros de chemins, à partir de 1).
+ */
+export interface JourneyOutputs {
+  guaranteed: string[];
+  partial: { key: string; paths: number[] }[];
+}
+
 export interface JourneyCheck {
   ok: boolean;
   /** Le parcours se lit sans perte en mode linéaire. */
@@ -107,6 +116,7 @@ export interface JourneyCheck {
   edges: Record<string, string[]>;
   errors: string[];
   warnings: string[];
+  outputs: JourneyOutputs;
 }
 
 export const JOURNEY_LIMITS = { nodes: 60, edges: 120, paths: 16, blocksPerPath: 30 } as const;
@@ -493,4 +503,30 @@ export function journeyRevision(journey: Pick<Journey, 'name' | 'description' | 
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
+ * Les sorties d'une instance de bloc : celles de son contrat, renommées par une correspondance (`MAP`) ;
+ * une valeur propre à l'instance (`VALUE`) n'en est pas une (clé interne).
+ */
+export function instanceOutputs(node: JourneyNode, outputs: readonly string[]): string[] {
+  return outputs.flatMap((key) => {
+    const param = node.params?.[key];
+    if (!param) return [key];
+    return param.mode === 'MAP' ? [param.key] : [];
+  });
+}
+
+/** Garanties (sur tous les chemins) et partielles (sur certains), à partir des sorties de chaque chemin. */
+export function journeyOutputs(perPath: readonly (readonly string[])[]): JourneyOutputs {
+  const all = [...new Set(perPath.flat())].sort();
+  const guaranteed =
+    perPath.length === 0 ? [] : all.filter((key) => perPath.every((keys) => keys.includes(key)));
+  const partial = all
+    .filter((key) => !guaranteed.includes(key))
+    .map((key) => ({
+      key,
+      paths: perPath.flatMap((keys, index) => (keys.includes(key) ? [index + 1] : [])),
+    }));
+  return { guaranteed, partial };
 }

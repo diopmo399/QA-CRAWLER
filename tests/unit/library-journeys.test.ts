@@ -2,13 +2,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { resolveFlowRuns } from '../../src/flows/flow-includes.js';
+import { expandedStepsOf, resolveFlowRuns } from '../../src/flows/flow-includes.js';
 import { loadProjectConfig, loadProjectMission } from '../../src/project/project-config.js';
 import {
   chain,
   compileJourneyPath,
   createQaCrawler,
+  instanceOutputs,
   journeyOfParts,
+  journeyOutputs,
   journeyPaths,
   journeyStructure,
   linearOrder,
@@ -140,6 +142,36 @@ describe('modèle du parcours', () => {
     );
     const again = linearOrder(reordered);
     expect(again.ok && again.blocks.map((entry) => entry.block)).toEqual(['B', 'A']);
+  });
+
+  it('sorties : garanties sur tous les chemins, partielles nommées par chemin ; une valeur d’instance n’en est pas une', () => {
+    expect(journeyOutputs([['a', 'b'], ['b', 'c'], ['b']])).toEqual({
+      guaranteed: ['b'],
+      partial: [
+        { key: 'a', paths: [1] },
+        { key: 'c', paths: [2] },
+      ],
+    });
+    expect(journeyOutputs([])).toEqual({ guaranteed: [], partial: [] });
+    const instance = node('n', 'BLOCK', {
+      block: 'B',
+      params: { x: { mode: 'VALUE', value: '1' }, y: { mode: 'MAP', key: 'z' } },
+    }) as JourneyGraph['nodes'][number];
+    expect(instanceOutputs(instance, ['x', 'y', 'w'])).toEqual(['z', 'w']);
+  });
+
+  it('un flow qui rejoue des blocs se lit déplié (with: compris) ; un run qui ne se résout pas ne casse rien', () => {
+    const flows = [
+      { name: 'B', reusable: true, steps: [{ fill: { label: 'X', value: { testData: 'b.x' } } }] },
+      { name: 'Outer', reusable: true, steps: [{ run: 'B', with: { 'b.x': 'o.x' } }] },
+      { name: 'Broken', steps: [{ run: 'Nobody' }] },
+      { name: 'Loop', reusable: true, steps: [{ run: 'Loop' }] },
+    ];
+    expect(expandedStepsOf(flows, 'Outer')).toEqual([
+      { fill: { label: 'X', value: { testData: 'o.x' } }, name: 'run B › fill "X"' },
+    ]);
+    expect(expandedStepsOf(flows, 'Loop')).toBeUndefined();
+    expect(expandedStepsOf(flows, 'Broken')).toBeUndefined();
   });
 
   it('compilation : run: par bloc, with: pour les données propres à une instance', () => {
@@ -395,6 +427,60 @@ describe('SDK — parcours visuels', () => {
     expect(first?.uses).toEqual(['Numéroter (bloc)', 'Vérifier']);
     expect(scenarios.find((entry) => entry.name === split.scenarios[1])?.uses).toEqual(['Numéroter (bloc)']);
     expect(first?.description).toMatch(/chemin : Vérifier \? = Oui/);
+  });
+
+  it('un parcours sans condition devient un bloc : ses sorties déclarées, réutilisable et rejoué ailleurs', async () => {
+    // Les sorties d'un parcours à conditions : celles de tous les chemins sont garanties.
+    const branching = await client.journeys.check(
+      project.id,
+      await client.journeys.open(project.id, 'Numéroter puis vérifier'),
+    );
+    expect(branching.outputs).toEqual({ guaranteed: ['item.number'], partial: [] });
+    expect(
+      await refusal(client.journeys.toBlock(project.id, 'Numéroter puis vérifier', { block: 'Par chemin' })),
+    ).toMatch(/^422 .*cannot become one block/);
+
+    const single = journeyOfParts('Numéroter un élément', [{ block: 'Numéroter (bloc)', version: 1 }]);
+    await client.journeys.save(project.id, single);
+    const converted = await client.journeys.toBlock(project.id, 'Numéroter un élément', {
+      block: 'Élément numéroté',
+    });
+    expect(converted.outputs).toEqual(['item.number']);
+    expect(converted.block).toMatchObject({
+      name: 'Élément numéroté',
+      version: 1,
+      contract: { source: 'DECLARED', outputs: [{ key: 'item.number' }] },
+      origin: { journey: 'Numéroter un élément' },
+    });
+    // Rien n'est écrasé : le même nom est refusé.
+    expect(
+      await refusal(
+        client.journeys.toBlock(project.id, 'Numéroter un élément', { block: 'Élément numéroté' }),
+      ),
+    ).toMatch(/^409/);
+
+    // Le nouveau bloc fournit item.number à « Vérifier » dans un autre parcours, rejoué par le moteur.
+    const reuse = journeyOfParts('Réutiliser le bloc', [
+      { block: 'Élément numéroté', version: 1 },
+      { block: 'Vérifier', version: 1 },
+    ]);
+    const check = await client.journeys.check(project.id, reuse);
+    expect(check).toMatchObject({ ok: true, publishable: 'SINGLE' });
+    const [, verify] = reuse.graph.nodes.filter((entry) => entry.kind === 'BLOCK');
+    expect(check.nodes[verify?.id ?? '']?.satisfied).toContainEqual({
+      key: 'item.number',
+      from: reuse.graph.nodes.filter((entry) => entry.kind === 'BLOCK')[0]?.id,
+    });
+    await client.journeys.save(project.id, reuse);
+    await client.journeys.publish(project.id, 'Réutiliser le bloc');
+    const config = await loadProjectConfig(path.join(projectDir, PROJECT_FILE));
+    const loaded = await loadProjectMission(config, { command: 'replay', flows: ['Réutiliser le bloc'] });
+    const flow = loaded.config.flows[0];
+    expect(flow?.steps.map((step) => step.name)).toEqual([
+      expect.stringContaining('run Élément numéroté › run Numéroter (bloc) › fill'),
+      expect.stringContaining('run Vérifier › expect'),
+    ]);
+    expect(flow?.testData?.values['item.number']).toBeDefined();
   });
 
   it('retire un parcours ; les scénarios créés restent', async () => {

@@ -322,6 +322,18 @@ export class JourneyController {
         ui.confirmPerPath = false;
         this.host.paint();
         return true;
+      case 'jn-to-block':
+        ui.blockName = `${ui.savedName ?? ui.journey.name} (bloc)`.slice(0, 80);
+        this.host.paint();
+        this.focus('[data-jn="blockName"]');
+        return true;
+      case 'jn-to-block-cancel':
+        ui.blockName = undefined;
+        this.host.paint();
+        return true;
+      case 'jn-to-block-confirm':
+        void this.toBlock();
+        return true;
       case 'jn-new':
         if (ui.dirty) {
           ui.confirmDiscard = '\u0000new';
@@ -378,6 +390,10 @@ export class JourneyController {
           ui.journey.name = value.slice(0, 80);
           ui.dirty = true;
         }
+        return true;
+      case 'blockName':
+        // Pas de redessin (comme le nom du parcours) : le clic sur « Créer le bloc » n'est pas avalé.
+        ui.blockName = value.slice(0, 80);
         return true;
       case 'description':
         ui.journey.description = value.slice(0, 500);
@@ -590,6 +606,31 @@ export class JourneyController {
       ui.details = detailsOf(error);
     }
     ui.publishing = false;
+    this.host.paint();
+  }
+
+  /** Le parcours enregistré devient un bloc de la bibliothèque (contrat : ses sorties garanties). */
+  private async toBlock(): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    const ui = this.ui;
+    const t = journeyText(this.host.state);
+    if (!api || !projectId || ui.converting || !ui.savedName || ui.blockName === undefined) return;
+    ui.converting = true;
+    ui.error = undefined;
+    ui.details = undefined;
+    ui.notice = undefined;
+    this.host.paint();
+    try {
+      const result = await api.journeys.toBlock(projectId, ui.savedName, { block: ui.blockName });
+      ui.notice = t.toBlockDone(result.block.name, result.outputs.length);
+      ui.blockName = undefined;
+      await this.host.refresh();
+    } catch (error) {
+      ui.error = message(error);
+      ui.details = detailsOf(error);
+    }
+    ui.converting = false;
     this.host.paint();
   }
 

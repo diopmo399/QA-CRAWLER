@@ -114,4 +114,30 @@ describe('parcours visuel — exécution réelle', () => {
     // L'application a reçu deux demandes, chacune avec le titre de son instance.
     expect(app.records().map((record) => record.title)).toEqual(['Titre A', 'Titre B']);
   }, 180_000);
+
+  it('le parcours devenu bloc se rejoue dans un autre parcours : mêmes étapes, mêmes valeurs d’instance', async () => {
+    const converted = await client.journeys.toBlock(project.id, 'Deux demandes', {
+      block: 'Deux demandes (bloc)',
+    });
+    expect(converted.block).toMatchObject({
+      name: 'Deux demandes (bloc)',
+      origin: { journey: 'Deux demandes' },
+    });
+    const reuse = journeyOfParts('Réutiliser deux demandes', [{ block: 'Deux demandes (bloc)', version: 1 }]);
+    await client.journeys.save(project.id, reuse);
+    expect(await client.journeys.check(project.id, reuse)).toMatchObject({ ok: true, publishable: 'SINGLE' });
+    await client.journeys.publish(project.id, 'Réutiliser deux demandes');
+
+    const started = await client.executions.start(project.id, {
+      environmentId: environment.id,
+      scenarios: ['Réutiliser deux demandes'],
+    });
+    const last = await finished(started);
+    expect(last.status).toBe('COMPLETED');
+    const detail = await client.executions.get(project.id, started.run ?? '');
+    expect(detail).toMatchObject({ verdict: 'PASSED', scenarios: ['Réutiliser deux demandes'] });
+    expect(detail.flowsDetail[0]?.steps.every((step) => step.status === 'PASSED')).toBe(true);
+    // Deux demandes de plus, avec les valeurs des instances du parcours d'origine.
+    expect(app.records().map((record) => record.title)).toEqual(['Titre A', 'Titre B', 'Titre A', 'Titre B']);
+  }, 180_000);
 });

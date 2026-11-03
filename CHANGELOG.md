@@ -44,6 +44,11 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   `sdk-journeys.json` ; vérification par chemin (structure, entrées, données en amont, conflits, boucles
   refusées) ; création d'un scénario, ou d'un scénario par chemin après confirmation explicite quand le
   parcours a des branches (le moteur n'évalue pas les conditions).
+- **Sorties d'un parcours et parcours transformé en bloc** : le panneau du parcours liste ses sorties,
+  garanties (produites sur tous les chemins) ou seulement sur certains chemins (nommés). « Transformer en
+  bloc » fait d'un parcours enregistré, valide et sans condition, un bloc de la bibliothèque dont le
+  contrat déclare ces sorties ; il se réutilise dans d'autres parcours et se rejoue comme eux. Le contrat
+  d'un bloc qui rejoue d'autres blocs (`run:`) se lit désormais sur ses étapes dépliées.
 - **`run:` avec `with:`** : une étape `run` peut renommer les données du bloc rejoué
   (`with: { clé du bloc: clé du scénario }`), pour donner à chaque instance d'un même bloc ses propres
   valeurs sans modifier le bloc.

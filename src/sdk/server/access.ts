@@ -272,7 +272,7 @@ export function rightFor(segments: readonly string[], method: string): Right {
       if (sub === 'scenarios' && item === 'compose' && action === 'check') return 'VIEW';
       return 'PUBLISH';
     case 'journeys':
-      // Vérifier un parcours visuel ne change rien ; l'enregistrer, le retirer, en créer des scénarios : publier.
+      // Vérifier un parcours visuel ne change rien ; l'enregistrer, le retirer, en créer des scénarios ou un bloc : publier.
       return item === 'check' ? 'VIEW' : 'PUBLISH';
     case 'executions':
     case 'explorations':
@@ -346,6 +346,7 @@ const KEYWORDS = new Set([
   'scenarios',
   'library',
   'journeys',
+  'to-block',
   'open',
   'publish',
   'compose',

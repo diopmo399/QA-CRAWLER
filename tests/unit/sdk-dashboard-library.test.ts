@@ -507,6 +507,7 @@ describe('dashboard — scenario library', () => {
       selected: { kind: 'node', id: first?.id ?? '' },
       check: {
         ok: false,
+        outputs: { guaranteed: [], partial: [] },
         linear: true,
         publishable: 'NONE',
         paths: [{ index: 0, nodes: [], choices: [], check: { ...check } }],
@@ -592,6 +593,46 @@ describe('dashboard — scenario library', () => {
     expect(html).toContain('data-action="jn-fit"');
     expect(html).toContain('data-jn-shape="CONDITION"');
     expect(html).toContain('Le mode linéaire n’est pas possible sans perte');
+  });
+
+  it('the journey outputs: guaranteed and per path; « Transformer en bloc » only for a saved, valid journey without conditions', () => {
+    const journey = journeyOfParts('Parcours', [{ block: 'Bloc connexion', version: 1 }]);
+    const valid = {
+      ok: true,
+      outputs: { guaranteed: ['user.name'], partial: [{ key: 'user.role', paths: [2] }] },
+      linear: true,
+      publishable: 'SINGLE' as const,
+      paths: [{ index: 0, nodes: [], choices: [], check: { ...check } }],
+      nodes: {},
+      edges: {},
+      errors: [],
+      warnings: [],
+    };
+    const ui: JourneyUi = { ...emptyJourneyUi(), journey, savedName: 'Parcours', check: valid };
+    ui.checkedFor = logicKey(journey);
+    const html = renderDashboard(base('library', {}, { journey: ui }));
+    expect(html).toContain('<h4 id="jn-out-t">Sorties du parcours</h4>');
+    expect(html).toMatch(/Produites sur tous les chemins<\/dt><dd><code class="lib-key">user\.name<\/code>/);
+    expect(html).toContain(
+      '<code class="lib-key warn">user.role</code> <small class="mu">chemin(s) B</small>',
+    );
+    expect(html).toMatch(/<button type="button" class="btn small" data-action="jn-to-block" title="/);
+    // Le formulaire : le nom du bloc proposé, puis « Créer le bloc ».
+    const form = renderDashboard(base('library', {}, { journey: { ...ui, blockName: 'Parcours (bloc)' } }));
+    expect(form).toContain('data-jn="blockName" value="Parcours (bloc)"');
+    expect(form).toContain('data-action="jn-to-block-confirm"');
+    // Modifié depuis l'enregistrement, ou avec des conditions : refusé, la raison est dite.
+    const dirty = renderDashboard(base('library', {}, { journey: { ...ui, dirty: true } }));
+    expect(dirty).toMatch(/data-action="jn-to-block" disabled/);
+    expect(dirty).toContain('Enregistrez le parcours avant de créer ses scénarios.');
+    const paths = renderDashboard(
+      base(
+        'library',
+        {},
+        { journey: { ...ui, check: { ...valid, linear: false, publishable: 'PER_PATH' } } },
+      ),
+    );
+    expect(paths).toContain('Un parcours avec conditions ne devient pas un bloc');
   });
 
   it('the add panel: source preview (no value), name checked before sending, busy while adding', () => {

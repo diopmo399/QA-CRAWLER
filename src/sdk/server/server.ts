@@ -44,6 +44,7 @@ import {
   checkJourney,
   getJourney,
   listJourneys,
+  journeyToBlock,
   publishJourney,
   removeJourney,
   saveJourney,
@@ -2267,6 +2268,15 @@ async function handleJourneys(
   if (!name) throw new HttpError(400, 'BAD_REQUEST', 'name is required');
   if (item === 'publish') {
     json(await libraryCall(() => publishJourney(project.dir, name, { perPath: body.perPath === true })), 201);
+    return;
+  }
+  if (item === 'to-block') {
+    json(
+      await libraryCall(() =>
+        journeyToBlock(project.dir, name, { block: body.block, description: body.description }),
+      ),
+      201,
+    );
     return;
   }
   if (item === 'remove') {

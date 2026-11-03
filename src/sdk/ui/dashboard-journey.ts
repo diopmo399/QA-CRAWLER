@@ -64,6 +64,9 @@ export interface JourneyUi {
   error?: string;
   details?: string[];
   notice?: string;
+  /** Le nom du bloc à créer depuis le parcours (absent : formulaire fermé). */
+  blockName?: string;
+  converting?: boolean;
 }
 
 export const emptyJourneyUi = (): JourneyUi => ({
@@ -508,6 +511,22 @@ const FR = {
   nameRequired: 'Donnez un nom au parcours pour l’enregistrer.',
   saveFirst: 'Enregistrez le parcours avant de créer ses scénarios.',
   checkFirst: 'La vérification doit être à jour et sans erreur.',
+  outputsTitle: 'Sorties du parcours',
+  outputsGuaranteed: 'Produites sur tous les chemins',
+  outputsPartial: 'Seulement sur certains chemins',
+  outputsOnly: (paths: string) => `chemin(s) ${paths}`,
+  outputsNone: 'Ce parcours ne produit aucune donnée déclarée par ses blocs.',
+  toBlockTitle: 'Réutiliser comme bloc',
+  toBlockInfo:
+    'Le parcours devient un bloc de la bibliothèque, utilisable dans d’autres parcours. Son contrat déclare les sorties produites sur tous les chemins.',
+  toBlock: 'Transformer en bloc',
+  toBlockName: 'Nom du bloc',
+  toBlockConfirm: 'Créer le bloc',
+  toBlockBusy: 'Création du bloc…',
+  toBlockPaths:
+    'Un parcours avec conditions ne devient pas un bloc : ses chemins produisent des données différentes.',
+  toBlockDone: (name: string, outputs: number) =>
+    `Le bloc « ${name} » est dans la bibliothèque, avec ${String(outputs)} sortie(s) déclarée(s).`,
 };
 
 type Text = typeof FR;
@@ -634,6 +653,21 @@ const EN: Text = {
   nameRequired: 'Name the journey to save it.',
   saveFirst: 'Save the journey before creating its scenarios.',
   checkFirst: 'The check must be up to date and without error.',
+  outputsTitle: 'Journey outputs',
+  outputsGuaranteed: 'Produced on every path',
+  outputsPartial: 'Only on some paths',
+  outputsOnly: (paths: string) => `path(s) ${paths}`,
+  outputsNone: 'This journey produces no data declared by its blocks.',
+  toBlockTitle: 'Reuse as a block',
+  toBlockInfo:
+    'The journey becomes a library block, usable in other journeys. Its contract declares the outputs produced on every path.',
+  toBlock: 'Turn into a block',
+  toBlockName: 'Block name',
+  toBlockConfirm: 'Create the block',
+  toBlockBusy: 'Creating the block…',
+  toBlockPaths: 'A journey with conditions does not become a block: its paths produce different data.',
+  toBlockDone: (name: string, outputs: number) =>
+    `The block “${name}” is in the library, with ${String(outputs)} declared output(s).`,
 };
 
 export const journeyText = (state: DashboardState): Text => (state.t.locale === 'en' ? EN : FR);
@@ -969,7 +1003,48 @@ function journeyProps(state: DashboardState, publish: boolean): string {
   const global = check
     ? `${check.errors.length > 0 ? `<ul class="plain jn-diag">${check.errors.map((item) => `<li class="ko">${icon('alert')}<span>${esc(item)}</span></li>`).join('')}</ul>` : ''}${check.warnings.length > 0 ? `<ul class="plain jn-diag">${check.warnings.map((item) => `<li class="warn">${icon('info')}<span>${esc(item)}</span></li>`).join('')}</ul>` : ''}`
     : '';
-  return `<div class="jn-props-h"><span class="jn-ic" aria-hidden="true">${icon('explorations')}</span><div><h3 id="jn-props-t">${esc(t.propsJourney)}</h3><p class="mu">${esc(t.propsNone)}</p></div></div><label class="field"><span>${esc(t.description)}</span><textarea data-jn="description" rows="2" maxlength="500"${publish ? '' : ' disabled'}>${esc(journey.description ?? '')}</textarea></label>${journey.published && journey.published.length > 0 ? `<p class="mu">${esc(t.published(journey.published.join(', ')))}</p>` : ''}<section class="jn-sec" aria-labelledby="jn-chk-t"><h4 id="jn-chk-t">${esc(t.checkTitle)}</h4>${summary}${global}</section>`;
+  return `<div class="jn-props-h"><span class="jn-ic" aria-hidden="true">${icon('explorations')}</span><div><h3 id="jn-props-t">${esc(t.propsJourney)}</h3><p class="mu">${esc(t.propsNone)}</p></div></div><label class="field"><span>${esc(t.description)}</span><textarea data-jn="description" rows="2" maxlength="500"${publish ? '' : ' disabled'}>${esc(journey.description ?? '')}</textarea></label>${journey.published && journey.published.length > 0 ? `<p class="mu">${esc(t.published(journey.published.join(', ')))}</p>` : ''}<section class="jn-sec" aria-labelledby="jn-chk-t"><h4 id="jn-chk-t">${esc(t.checkTitle)}</h4>${summary}${global}</section>${outputsSection(state, check)}${publish ? toBlockSection(state, check) : ''}`;
+}
+
+/** Les sorties du parcours : garanties (tous les chemins) et partielles (certains chemins, nommés). */
+function outputsSection(state: DashboardState, check: JourneyCheck | undefined): string {
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const body = !check
+    ? `<p class="mu">${esc(ui.checking ? t.checking : t.notChecked)}</p>`
+    : check.outputs.guaranteed.length === 0 && check.outputs.partial.length === 0
+      ? `<p class="mu">${esc(t.outputsNone)}</p>`
+      : `<dl class="jn-dl jn-out"><dt>${esc(t.outputsGuaranteed)}</dt><dd>${check.outputs.guaranteed.length > 0 ? check.outputs.guaranteed.map((key) => `<code class="lib-key">${esc(key)}</code>`).join('') : `<small class="mu">${esc(t.none)}</small>`}</dd>${
+          check.outputs.partial.length > 0
+            ? `<dt>${esc(t.outputsPartial)}</dt><dd><ul class="plain tight jn-out-partial">${check.outputs.partial
+                .map(
+                  (item) =>
+                    `<li><code class="lib-key warn">${esc(item.key)}</code> <small class="mu">${esc(t.outputsOnly(item.paths.map((path) => pathLetter(path - 1)).join(', ')))}</small></li>`,
+                )
+                .join('')}</ul></dd>`
+            : ''
+        }</dl>`;
+  return `<section class="jn-sec jn-outputs" aria-labelledby="jn-out-t"><h4 id="jn-out-t">${esc(t.outputsTitle)}</h4>${body}</section>`;
+}
+
+/** Réutiliser le parcours comme un bloc : seulement valide, enregistré, sans condition. */
+function toBlockSection(state: DashboardState, check: JourneyCheck | undefined): string {
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const busy = Boolean(ui.saving || ui.publishing || ui.checking || ui.converting);
+  const ready =
+    check?.ok === true && check.publishable === 'SINGLE' && !ui.dirty && ui.savedName !== undefined;
+  const reason =
+    check?.publishable === 'PER_PATH'
+      ? t.toBlockPaths
+      : ui.dirty || !ui.savedName
+        ? t.saveFirst
+        : t.checkFirst;
+  const form =
+    ui.blockName !== undefined && ready
+      ? `<div class="jn-toblock" role="group" aria-labelledby="jn-blk-t"><label class="field"><span>${esc(t.toBlockName)}</span><input data-jn="blockName" value="${esc(ui.blockName)}" maxlength="80" autocomplete="off"></label><div class="form-acts start"><button type="button" class="btn small primary" data-action="jn-to-block-confirm"${busy ? ' disabled' : ''} aria-busy="${String(Boolean(ui.converting))}">${icon('library')}<span>${esc(ui.converting ? t.toBlockBusy : t.toBlockConfirm)}</span></button><button type="button" class="btn small ghost" data-action="jn-to-block-cancel">${esc(t.cancel)}</button></div></div>`
+      : `<button type="button" class="btn small" data-action="jn-to-block"${ready && !busy ? '' : ' disabled'} title="${esc(ready ? t.toBlockInfo : reason)}">${icon('library')}<span>${esc(t.toBlock)}</span></button>${ready ? '' : `<small class="mu block">${esc(reason)}</small>`}`;
+  return `<section class="jn-sec" aria-labelledby="jn-blk-t"><h4 id="jn-blk-t">${esc(t.toBlockTitle)}</h4><p class="mu">${esc(t.toBlockInfo)}</p>${form}</section>`;
 }
 
 function otherProps(state: DashboardState, node: JourneyNode, publish: boolean): string {
@@ -1072,7 +1147,7 @@ export const JOURNEY_CSS = `
 .jn-body{display:grid;grid-template-columns:230px minmax(0,1fr) 320px;gap:12px;align-items:start;min-width:0}
 .jn-palette,.jn-props{border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface);padding:12px;display:flex;flex-direction:column;gap:8px;min-width:0;max-height:640px;overflow:auto}
 .jn-palette h3,.jn-props h3{margin:0;font-size:14px}
-.jn-pal-search{display:flex}
+.jn-palette .jn-pal-search{display:flex;flex:none}
 .jn-pal-g summary{cursor:pointer;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--qa-color-muted);padding:4px 0}
 .jn-pal-list{display:flex;flex-direction:column;gap:6px;margin:4px 0}
 .jn-pal-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface);cursor:grab;min-width:0}
@@ -1118,6 +1193,10 @@ export const JOURNEY_CSS = `
 .jn-ios{display:flex;flex-wrap:wrap;gap:8px}
 .jn-io{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:11.5px;color:var(--qa-color-muted)}
 .jn-io .lib-key.set{border-color:var(--qa-color-primary)}
+.jn-out dd{display:flex;flex-wrap:wrap;gap:4px}
+.jn-out-partial li{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.jn-out .lib-key.warn{border-color:var(--qa-color-warning)}
+.jn-toblock{display:flex;flex-direction:column;gap:8px}
 .jn-err{display:flex;gap:4px;align-items:center;font-size:12px;color:var(--qa-color-danger)}
 .jn-err .ico{width:13px;height:13px}
 .jn-card-a{display:flex;gap:2px;flex:none}

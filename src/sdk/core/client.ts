@@ -362,6 +362,15 @@ export interface QaCrawlerClient {
       name: string,
       options?: { perPath?: boolean },
     ): Promise<{ scenarios: string[] }>;
+    /**
+     * Transforme un parcours enregistré, valide et sans condition, en bloc de la bibliothèque ; son contrat
+     * déclare les sorties produites par le parcours. 409 sur un nom pris, 422 si le parcours ne tient pas.
+     */
+    toBlock(
+      projectId: string,
+      name: string,
+      input: { block: string; description?: string },
+    ): Promise<{ block: LibraryBlockView; outputs: string[] }>;
     remove(projectId: string, name: string): Promise<{ removed: string }>;
   };
   /** Les exécutions : le rejeu des scénarios par le moteur, suivi comme une exploration. */
@@ -1034,6 +1043,8 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       check: (projectId, journey) => request('POST', `${project(projectId)}/journeys/check`, { journey }),
       publish: (projectId, name, options = {}) =>
         request('POST', `${project(projectId)}/journeys/publish`, { name, ...options }),
+      toBlock: (projectId, name, input) =>
+        request('POST', `${project(projectId)}/journeys/to-block`, { name, ...input }),
       remove: (projectId, name) => request('POST', `${project(projectId)}/journeys/remove`, { name }),
     },
     library: {

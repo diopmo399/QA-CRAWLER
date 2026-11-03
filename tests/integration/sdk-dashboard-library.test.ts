@@ -247,6 +247,25 @@ describe('Dashboard — scenario library in Chromium', () => {
     await composer.locator('[data-action="jn-publish"]').click();
     await composer.locator('.err[role="alert"]', { hasText: 'already named' }).waitFor({ timeout: 15_000 });
     expect(await composer.locator('.jn-card').count()).toBe(2);
+
+    // Ses sorties, puis le parcours devient un bloc du catalogue (contrat déclaré).
+    if (await composer.locator('[data-action="jn-deselect"]').count())
+      await composer.locator('[data-action="jn-deselect"]').click();
+    await composer.locator('.jn-outputs', { hasText: 'Sorties du parcours' }).waitFor();
+    await composer.locator('[data-action="jn-to-block"]').click();
+    await composer.locator('input[data-jn="blockName"]').fill('Créer et chercher (bloc)');
+    await composer.locator('[data-action="jn-to-block-confirm"]').click();
+    await composer
+      .locator('.notice', { hasText: 'Le bloc « Créer et chercher (bloc) » est dans la bibliothèque' })
+      .waitFor({ timeout: 15_000 });
+    await dashboard().locator('.lib-card', { hasText: 'Créer et chercher (bloc)' }).first().waitFor();
+    const created = (await client.library.list(project.id)).find(
+      (block) => block.name === 'Créer et chercher (bloc)',
+    );
+    expect(created).toMatchObject({
+      origin: { journey: 'Créer puis chercher' },
+      contract: { source: 'DECLARED' },
+    });
   });
 
   it('branches in the diagram: ports connect Oui/Non, a loop is refused on its connection, one scenario per path after confirmation', async () => {

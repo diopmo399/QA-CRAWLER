@@ -164,11 +164,13 @@ export function keys(
 export function originText(state: DashboardState, block: LibraryBlockView): string {
   const l = state.t.lib;
   return block.origin
-    ? block.origin.kind === 'scenario'
-      ? l.fromScenario(block.origin.name)
-      : (block.origin.groups?.length ?? 0) > 1
-        ? l.fromRecordingGroups(block.origin.name, block.origin.groups ?? [])
-        : l.fromRecording(block.origin.name, block.origin.group ?? '')
+    ? block.origin.journey
+      ? l.fromJourney(block.origin.journey)
+      : block.origin.kind === 'scenario'
+        ? l.fromScenario(block.origin.name)
+        : (block.origin.groups?.length ?? 0) > 1
+          ? l.fromRecordingGroups(block.origin.name, block.origin.groups ?? [])
+          : l.fromRecording(block.origin.name, block.origin.group ?? '')
     : l.unknownOrigin;
 }
 

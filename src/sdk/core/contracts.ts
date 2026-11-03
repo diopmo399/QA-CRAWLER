@@ -1473,6 +1473,8 @@ export interface LibraryBlockView {
 export interface BlockOrigin {
   kind: 'scenario' | 'recording';
   name: string;
+  /** Bloc créé depuis un parcours visuel de la bibliothèque (son nom). */
+  journey?: string;
   group?: string;
   groupIds?: string[];
   groups?: string[];

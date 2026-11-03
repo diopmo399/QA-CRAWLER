@@ -89,6 +89,23 @@ export function resolveFlowRuns(flows: readonly unknown[]): unknown[] {
     });
 }
 
+/**
+ * Les étapes d'UN flow, ses `run:` dépliés (avec `with:`), sans rien modifier : ce que le moteur rejouera.
+ * Sert à analyser ce qu'un bloc fait de ses données quand il rejoue d'autres blocs. Undefined si un `run`
+ * ne se résout pas (flow inconnu, boucle) : l'appelant garde alors les étapes telles quelles.
+ */
+export function expandedStepsOf(flows: readonly unknown[], name: string): unknown[] | undefined {
+  try {
+    // Seul le flow demandé est déplié : un autre flow cassé ne le concerne pas.
+    const only = flows.map((flow) => (isObject(flow) ? { ...flow, reusable: flow.name !== name } : flow));
+    const flow = resolveFlowRuns(only).find((item) => isObject(item) && item.name === name);
+    return isObject(flow) && Array.isArray(flow.steps) ? (flow.steps as unknown[]) : undefined;
+  } catch (error) {
+    if (error instanceof FlowIncludeError) return undefined;
+    throw error;
+  }
+}
+
 const DATA_KEY = /^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$/;
 
 /**

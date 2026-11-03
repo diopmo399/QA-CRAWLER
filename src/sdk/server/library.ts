@@ -35,6 +35,7 @@ import {
   type ExtractionSource,
 } from './library-extract.js';
 import { describeStep, flowSchema } from '../../config/flow-schema.js';
+import { expandedStepsOf } from '../../flows/flow-includes.js';
 import { flowsDirOf, revisionOf } from './platform.js';
 
 /**
@@ -301,9 +302,17 @@ async function describeBlock(
           ...(known?.origin ? { origin: known.origin } : {}),
           history: [{ version: 1, change: 'taken over: no earlier record of this block' }],
         };
+  // Un bloc qui rejoue d'autres blocs (`run:`) : son contrat se lit sur les étapes que le moteur rejouera.
+  const analyzed =
+    runsOf(entry.flow).length > 0
+      ? (expandedStepsOf(
+          entries.map((other) => other.flow),
+          entry.name,
+        ) ?? steps)
+      : steps;
   const { contract, problems: contradictions } = contractOf({
     name: entry.name,
-    steps,
+    steps: analyzed,
     ...(data ? { data } : {}),
     ...(record.contract ? { declared: record.contract } : {}),
   });
@@ -311,7 +320,7 @@ async function describeBlock(
   const changed = record.hash !== hash;
   if (changed) problems.push(`its content changed since version ${String(record.version)}`);
   const state: BlockState = problems.length > (changed ? 1 : 0) ? 'INVALID' : changed ? 'CHANGED' : 'VALID';
-  const use = dataUse(steps);
+  const use = dataUse(analyzed);
   const pinnedBy = Object.entries(registry.compositions).flatMap(([scenario, composition]) =>
     composition.blocks
       .filter((ref) => ref.name === entry.name)
@@ -440,12 +449,17 @@ export async function flowFiles(
   };
 }
 
-async function newBlock(
+/**
+ * Écrit un nouveau bloc (version 1) et son entrée au registre. `extra.contract` le déclare d'emblée ;
+ * `extra.uses` suit les blocs qu'il rejoue (comme un parcours composé). À appeler sous `withLock`.
+ */
+export async function newBlock(
   projectDir: string,
   root: string,
   flow: Raw,
   data: TestDataSet | undefined,
   origin: NonNullable<LibraryBlockView['origin']>,
+  extra: { contract?: DeclaredContract; uses?: CompositionRecord } = {},
 ): Promise<LibraryBlockView> {
   const name = String(flow.name);
   const { files } = await flowFiles(root, 'library', flow, data);
@@ -458,17 +472,20 @@ async function newBlock(
     createdAt: at,
     updatedAt: at,
     origin,
+    ...(extra.contract ? { contract: extra.contract } : {}),
     history: [
       {
         version: 1,
         at,
-        change:
-          origin.kind === 'scenario'
+        change: origin.journey
+          ? `created from the journey "${origin.journey}"`
+          : origin.kind === 'scenario'
             ? `created from the scenario "${origin.name}"`
             : `created from the group "${origin.group ?? ''}" of the recording ${origin.name}`,
       },
     ],
   };
+  if (extra.uses) registry.compositions[name] = extra.uses;
   await commitFiles([...files, registryFile(projectDir, registry)]);
   return blockNamed(projectDir, name);
 }

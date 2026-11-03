@@ -310,6 +310,7 @@ const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisate
 | `journeys.check(projectId, journey)`               | `POST /api/projects/:id/journeys/check` (`VIEW`)                 |
 | `journeys.publish(projectId, name, options?)`      | `POST /api/projects/:id/journeys/publish`                        |
 | `journeys.remove(projectId, name)`                 | `POST /api/projects/:id/journeys/remove`                         |
+| `journeys.toBlock(projectId, name, input)`         | `POST /api/projects/:id/journeys/to-block` (201)                 |
 | `scenarios.acceptBlocks(projectId, scenario)`      | `POST /api/projects/:id/scenarios/:name/accept`                  |
 | `assertions.list(projectId, name)`                 | `GET /api/projects/:id/recordings/:name/assertions`              |
 | `data.get(projectId, name)`                        | `GET /api/projects/:id/recordings/:name/data`                    |
@@ -444,6 +445,15 @@ il est compilé en `run: <bloc>` + `with: { clé du bloc: clé du scénario }`, 
 du même bloc ne s'écrasent pas et que le bloc source ne change jamais. Une nouvelle version d'un bloc
 n'est retenue qu'après acceptation explicite sur le nœud. Limites : 60 nœuds, 120 connexions, 16
 chemins, 30 blocs par chemin.
+
+`check` donne aussi les **sorties du parcours** (`outputs`) : `guaranteed`, les données produites sur
+tous les chemins, et `partial`, celles qui ne le sont que sur certains (numéros de chemins). Une valeur
+propre à une instance n'est pas une sortie ; une correspondance (`MAP`) renomme la sortie. `toBlock`
+transforme un parcours enregistré, valide et sans condition, en bloc de la bibliothèque (version 1,
+origine `journey`) : ses étapes `run:` + `with:` et son jeu de données fusionné, avec un contrat déclaré
+dont les sorties sont les sorties garanties. Les blocs rejoués restent liés par leur nom. Un parcours à
+conditions est refusé (422 : ses chemins produisent des données différentes), un nom pris aussi (409).
+Le contrat d'un bloc qui rejoue d'autres blocs se lit sur ses étapes dépliées, comme le moteur les rejoue.
 
 **Intentions** (`intents`) : l'intention que l'analyse prête à chaque action (créer, rechercher,
 ouvrir…). Confirmer, corriger (avec une raison) ou réinitialiser ajoute une décision au registre

@@ -1167,6 +1167,7 @@ const fr = {
     version: (version: number) => `v${String(version)}`,
     versionLabel: 'Version',
     fromScenario: (name: string) => `Scénario « ${name} »`,
+    fromJourney: (name: string) => `Parcours visuel « ${name} »`,
     fromRecording: (name: string, group: string) => `Groupe « ${group} » de l’enregistrement ${name}`,
     fromRecordingGroups: (name: string, groups: string[]) =>
       `Groupes ${groups.map((group) => `« ${group} »`).join(', ')} de l’enregistrement ${name}`,
@@ -3332,6 +3333,7 @@ const en: DashboardStrings = {
     version: (version) => `v${String(version)}`,
     versionLabel: 'Version',
     fromScenario: (name) => `Scenario “${name}”`,
+    fromJourney: (name) => `Visual journey “${name}”`,
     fromRecording: (name, group) => `Group “${group}” of recording ${name}`,
     fromRecordingGroups: (name, groups) =>
       `Groups ${groups.map((group) => `“${group}”`).join(', ')} of the recording ${name}`,
