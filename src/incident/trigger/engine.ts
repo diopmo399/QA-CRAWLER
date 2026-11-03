@@ -21,6 +21,7 @@ import {
   type ReactionSignature,
   type SilentFailureKind,
   type TriggerAction,
+  type TriggerEntry,
   type TriggerBudget,
   type TriggerDepth,
   type TriggerRun,
@@ -82,6 +83,8 @@ export interface TriggerEngineInput {
   proposeWithAi?: (context: AiProposalContext) => Promise<string[][]>;
   /** Le run à reprendre (ses essais sont conservés, les séquences jouées ne le sont pas à nouveau). */
   resumeFrom?: TriggerRun;
+  /** Le point d'entrée imposé (écran cible) ; absent : la route la plus pertinente de la découverte. */
+  entry?: TriggerEntry;
 }
 
 export interface AiProposalContext {
@@ -360,22 +363,34 @@ export class TriggerEngine {
       baseUrl: this.input.baseUrl,
       now: this.now().toISOString(),
     });
-    const routes = this.run.scope.resources
-      .filter((resource) => resource.kind === 'ROUTE' && resource.status === 'AUTHORIZED')
-      .sort((a, b) => b.relevance - a.relevance || b.ref.length - a.ref.length);
-    const route = routes[0]?.ref ?? '/';
     const base = this.input.baseUrl.replace(/\/$/, '');
-    this.entry = [
-      {
-        kind: 'NAVIGATE',
-        target: route.startsWith('http') ? route : `${base}${route.startsWith('/') ? route : `/${route}`}`,
-      },
-    ];
-    // La navigation vers la page d'entrée passe par le Scope Policy Engine : refusée, rien n'est exploré.
-    const entryUrl = this.entry[0]?.target ?? base;
-    const navigation = await this.input.check({ kind: 'NAVIGATE', url: entryUrl });
-    if (!navigation.allowed)
-      throw new ScopeStop(`navigation refusée vers ${entryUrl} : ${navigation.reason}`);
+    const imposed = this.input.entry ?? this.run.entry;
+    if (imposed && imposed.actions.length > 0) {
+      // L'écran cible : son parcours vérifié (navigation, clics sur des liens) est rejoué avant chaque essai.
+      this.entry = imposed.actions;
+      this.run.entry = imposed;
+      this.run.limitations.push(
+        `point d'entrée imposé : écran cible ${imposed.route} (${String(imposed.actions.length)} action(s) de parcours)`,
+      );
+    } else {
+      const routes = this.run.scope.resources
+        .filter((resource) => resource.kind === 'ROUTE' && resource.status === 'AUTHORIZED')
+        .sort((a, b) => b.relevance - a.relevance || b.ref.length - a.ref.length);
+      const route = routes[0]?.ref ?? '/';
+      this.entry = [
+        {
+          kind: 'NAVIGATE',
+          target: route.startsWith('http') ? route : `${base}${route.startsWith('/') ? route : `/${route}`}`,
+        },
+      ];
+    }
+    // Chaque navigation du parcours d'entrée passe par le Scope Policy Engine : refusée, rien n'est exploré.
+    for (const action of this.entry.filter((item) => item.kind === 'NAVIGATE')) {
+      const entryUrl = action.target ?? base;
+      const navigation = await this.input.check({ kind: 'NAVIGATE', url: entryUrl });
+      if (!navigation.allowed)
+        throw new ScopeStop(`navigation refusée vers ${entryUrl} : ${navigation.reason}`);
+    }
     const denied = this.run.scope.resources.filter((resource) => resource.status === 'DENIED');
     if (denied.length > 0)
       this.run.limitations.push(

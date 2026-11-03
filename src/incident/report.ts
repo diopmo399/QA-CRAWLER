@@ -7,6 +7,7 @@ import type {
   GraphEdge,
   HttpExchange,
   Incident,
+  IncidentAccess,
   InvestigationGraph,
   InvestigationMemory,
   InvestigationReport,
@@ -201,6 +202,7 @@ export function buildReport(
     },
     scope: incident.scope,
     ...(incident.scenario ? { scenario: incident.scenario } : {}),
+    ...(incident.access ? { access: incident.access } : {}),
     timeline: reproduction ? timelineOf(reproduction) : [],
     requests: (reproduction?.requests ?? []).map(redactRequest),
     code: { files, symbols, denied: code?.denied ?? [], truncated: code?.truncated ?? [] },
@@ -340,6 +342,100 @@ function summaryMarkdown(report: InvestigationReport, out: string[]): void {
   out.push(`- **Attendu** : ${escapeMarkdown(incident.expected)}`);
   if (report.scenario) out.push(`- **Scénario** : ${escapeMarkdown(report.scenario)}`);
   out.push('');
+  if (report.access) accessMarkdown(report.access, out);
+}
+
+/** Le scénario d'accès (saisi, masqué à l'enregistrement) et son analyse : des candidats, jamais des causes. */
+function accessMarkdown(access: NonNullable<InvestigationReport['access']>, out: string[]): void {
+  out.push("### Scénario d'accès", '');
+  if (access.target) out.push(`- **Écran cible** : ${escapeMarkdown(access.target)}`);
+  if (access.mode) out.push(`- **Mode** : ${ACCESS_MODE_LABELS[access.mode]}`);
+  if (access.hints) out.push(`- **Indications de navigation** : ${escapeMarkdown(access.hints)}`);
+  if (access.start) out.push(`- **Point de départ** : ${escapeMarkdown(access.start)}`);
+  if (access.url) out.push(`- **URL ou route initiale** : ${escapeMarkdown(access.url)}`);
+  if (access.narrative) out.push(`- **Parcours** : ${escapeMarkdown(access.narrative)}`);
+  access.steps.forEach((step, index) => out.push(`  ${String(index + 1)}. ${escapeMarkdown(step.text)}`));
+  if (access.expected) out.push(`- **Attendu** : ${escapeMarkdown(access.expected)}`);
+  if (access.observed) out.push(`- **Observé** : ${escapeMarkdown(access.observed)}`);
+  if (access.conditions) out.push(`- **Conditions** : ${escapeMarkdown(access.conditions)}`);
+  if (access.recording) out.push(`- **Enregistrement associé** : ${escapeMarkdown(access.recording.name)}`);
+  out.push('');
+  targetMarkdown(access, out);
+  const analysis = access.analysis;
+  if (!analysis) return;
+  out.push(`_Parcours analysé le ${analysis.analyzedAt} (${analysis.sources.join(' + ')})._`, '');
+  const critical = analysis.path.find((step) => step.critical);
+  if (critical) out.push(`- **Étape critique (déduite du texte)** : ${escapeMarkdown(critical.text)}`);
+  const matched = analysis.candidates.filter((item) => item.match === 'MATCHED');
+  const uncertain = analysis.candidates.filter((item) => item.match === 'UNCERTAIN');
+  out.push(
+    `- **Correspondances** : ${String(matched.length)} ; **incertaines** : ${String(uncertain.length)}`,
+    '',
+  );
+  if (analysis.candidates.length > 0)
+    out.push(
+      ...table(
+        ['Portion', 'Type', 'Emplacement', 'Confiance', 'Rapprochement', 'Périmètre'],
+        analysis.candidates
+          .slice(0, 20)
+          .map((item) => [
+            item.label,
+            item.kind,
+            item.ref,
+            `${String(Math.round(item.confidence * 100))} %`,
+            item.match === 'MATCHED' ? 'correspondance' : 'incertaine',
+            item.status,
+          ]),
+      ),
+      '',
+    );
+  if (analysis.leads.length > 0) {
+    out.push('Pistes à vérifier (jamais des causes) :', '');
+    for (const lead of analysis.leads)
+      out.push(
+        `- **${escapeMarkdown(lead.label)}** : ${escapeMarkdown(lead.why)}${lead.refs.length > 0 ? ` (${lead.refs.map(escapeMarkdown).join(', ')})` : ''}`,
+      );
+    out.push('');
+  }
+  for (const limit of analysis.limits) out.push(`- _${escapeMarkdown(limit)}_`);
+  if (analysis.limits.length > 0) out.push('');
+}
+
+const ACCESS_MODE_LABELS: Record<NonNullable<IncidentAccess['mode']>, string> = {
+  AUTO: 'exploration automatique',
+  GUIDED: 'parcours guidé',
+  DEMO: 'démonstration (enregistrement)',
+};
+
+/** L'écran cible : localisation (candidats et indices), parcours, écran atteint, exploration lancée. */
+function targetMarkdown(access: NonNullable<InvestigationReport['access']>, out: string[]): void {
+  const location = access.location;
+  if (location) {
+    out.push(
+      `- **Écran localisé** : ${location.chosen ? escapeMarkdown(location.chosen) : 'aucun'} (localisé le ${location.locatedAt})`,
+    );
+    for (const candidate of location.candidates.slice(0, 5))
+      out.push(
+        `  - ${escapeMarkdown(candidate.route)}${candidate.component ? ` (${escapeMarkdown(candidate.component)})` : ''} : ${String(Math.round(candidate.confidence * 100))} %${candidate.nameOnly ? ', nom seul' : ''} ; ${candidate.evidence.map(escapeMarkdown).join(' ; ')}`,
+      );
+    if (location.path.length > 0)
+      out.push(
+        `- **Parcours trouvé** : ${location.path.map((step) => `${step.kind === 'NAVIGATE' ? 'aller à' : 'cliquer'} ${escapeMarkdown(step.label)}`).join(' → ')}`,
+      );
+    for (const limit of location.limits) out.push(`- _${escapeMarkdown(limit)}_`);
+  }
+  const preparation = access.preparation;
+  if (preparation) {
+    out.push(
+      `- **Écran ${preparation.reached ? 'atteint' : 'non atteint'}** : ${escapeMarkdown(preparation.finalUrl || preparation.route)} (${String(preparation.inventory.buttons.length)} bouton(s), ${String(preparation.inventory.fields.length)} champ(s))`,
+    );
+    for (const blocker of preparation.blockers) out.push(`  - _${escapeMarkdown(blocker)}_`);
+  }
+  if (access.exploration)
+    out.push(
+      `- **Investigation lancée depuis l'écran cible** : run ${escapeMarkdown(access.exploration.runId)} le ${access.exploration.startedAt} (résultats dans la section des déclencheurs)`,
+    );
+  if (location || preparation || access.exploration) out.push('');
 }
 
 function environmentMarkdown(report: InvestigationReport, out: string[]): void {

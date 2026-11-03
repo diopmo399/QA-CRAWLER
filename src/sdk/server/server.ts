@@ -486,6 +486,9 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
     const dashboard = segments.length === 1 && segments[0] === 'dashboard';
     if (segments.length > 0 && segments[0] !== 'index.html' && !studio && !runs && !monitor && !dashboard)
       throw new HttpError(404, 'NOT_FOUND', 'not found');
+    // L'outil Java se sonde une fois (`mvn -v` démarre une JVM) : dès que la page s'ouvre, en arrière-plan,
+    // pour que l'onglet Tests ne l'attende pas.
+    if (dashboard && method === 'GET') void externalRunners(ctx.env).catch(() => undefined);
     const nonce = randomBytes(16).toString('base64');
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
@@ -2872,34 +2875,48 @@ async function counted<T>(read: () => Promise<T[]>): Promise<T[]> {
   }
 }
 
-async function projectSummary(project: StoredProject): Promise<ProjectSummary> {
+/** Le résumé d'un projet ; ses parties se lisent ensemble, et le détail réutilise celles qu'il a déjà. */
+async function projectParts(project: StoredProject): Promise<{
+  summary: ProjectSummary;
+  environments: Environment[];
+  scenarios: ScenarioView[];
+}> {
   const reportsDir = path.join(project.dir, REPORTS_DIR);
-  const executions = await counted(() => listExecutions(project.id, reportsDir));
+  const [executions, environments, scenarios, recordings] = await Promise.all([
+    counted(() => listExecutions(project.id, reportsDir)),
+    readEnvironments(project.dir),
+    counted(() => listScenarios(project.dir)),
+    counted(() => storedRecordingNames(reportsDir)),
+  ]);
   const last = executions.find((execution) => execution.verdict !== 'INCOMPLETE');
   return {
-    ...publicProject(project),
-    state: project.state ?? 'ACTIVE',
-    ...(project.updatedAt ? { updatedAt: project.updatedAt } : {}),
-    ...(project.archivedAt ? { archivedAt: project.archivedAt } : {}),
-    counts: {
-      environments: (await readEnvironments(project.dir)).length,
-      scenarios: (await counted(() => listScenarios(project.dir))).length,
-      recordings: (await counted(() => storedRecordingNames(reportsDir))).length,
-      executions: executions.length,
+    summary: {
+      ...publicProject(project),
+      state: project.state ?? 'ACTIVE',
+      ...(project.updatedAt ? { updatedAt: project.updatedAt } : {}),
+      ...(project.archivedAt ? { archivedAt: project.archivedAt } : {}),
+      counts: {
+        environments: environments.length,
+        scenarios: scenarios.length,
+        recordings: recordings.length,
+        executions: executions.length,
+      },
+      ...(last ? { lastExecution: last } : {}),
     },
-    ...(last ? { lastExecution: last } : {}),
+    environments,
+    scenarios,
   };
+}
+
+async function projectSummary(project: StoredProject): Promise<ProjectSummary> {
+  return (await projectParts(project)).summary;
 }
 
 async function projectDetail(project: StoredProject): Promise<ProjectDetail> {
   const stored = await readProject(project.dir);
   if (!stored) throw new HttpError(404, 'NOT_FOUND', 'project not found');
-  return {
-    ...(await projectSummary(stored)),
-    draft: stored.draft,
-    environments: await readEnvironments(project.dir),
-    scenarios: await counted(() => listScenarios(project.dir)),
-  };
+  const { summary, environments, scenarios } = await projectParts(stored);
+  return { ...summary, draft: stored.draft, environments, scenarios };
 }
 
 function stringList(raw: unknown, field: string, max: number): string[] | undefined {
@@ -3428,6 +3445,11 @@ function incidentService(ctx: Context, project: StoredProject): IncidentService 
     projectId: project.id,
     projectDir: project.dir,
     runDir: (run) => path.join(project.dir, REPORTS_DIR, run),
+    sourceRoots: async () => {
+      const stored = await readProject(project.dir);
+      const root = stored?.draft.project.sourceRoot;
+      return root ? [{ root, label: `${project.name} (sources du projet)` }] : [];
+    },
     environment: async (environmentId) => {
       const environments = await readEnvironments(project.dir);
       const environment = environmentId
@@ -3438,6 +3460,21 @@ function incidentService(ctx: Context, project: StoredProject): IncidentService 
       return environment
         ? { id: environment.id, baseUrl: environment.baseUrl, kind: environment.kind }
         : { baseUrl: project.targetUrl };
+    },
+    recordingSteps: async (name) => {
+      // Un enregistrement écrit sur disque ; une session encore en cours n'a pas de flow à relire.
+      try {
+        const stored = await storedRecordingOf(ctx, project, name);
+        const view = await studioView(stored, [], ctx.rules.reportLanguage);
+        return {
+          name,
+          startAt: view.startAt,
+          startedAt: stored.startedAt,
+          steps: view.steps.map((step) => ({ id: step.id, kind: step.kind, description: step.description })),
+        };
+      } catch {
+        return undefined;
+      }
     },
     listScenarios: async () => {
       const root = await flowsDirOf(project.dir);

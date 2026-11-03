@@ -32,6 +32,7 @@ src/incident/
   model.ts            le contrat commun (types, statuts)
   scope.ts            Investigation Scope Manager : défauts (GUIDED), validation, extensions approuvées
   scope-policy.ts     Scope Policy Engine : refus par défaut, fichiers, réseau, tests, commandes, OpenShift
+  scope-discovery.ts  la découverte automatique d'un dépôt pour le périmètre (applications, cadres, modules, relations)
   guarded-fs.ts       la seule lecture de fichiers de l'investigation (passe par la politique)
   incident-store.ts   Incident Manager : persistance, révisions, historique, états, annulation / reprise
   evidence.ts         Playwright Evidence Collector : du run du moteur aux preuves (masquées)
@@ -76,6 +77,71 @@ Modes : `MANUAL` (rien d'automatique), `GUIDED` (par défaut : l'investigation p
 `AUTO_WITHIN_SCOPE` (les vérifications sans effet de bord permises s'enchaînent ; le périmètre ne s'étend
 jamais seul). Toute extension (application, chemin, classe, endpoint, hôte, profondeur, effets de bord,
 commande) est une demande qui attend une approbation (droit `DECIDE`).
+
+**Découverte automatique** (`scope-discovery.ts`, route `POST …/scope/discover { root }`, droit `RUN`) : à partir
+d'un chemin de dépôt sur la machine qui investigue, les applications qu'il contient (manifestes `package.json`,
+`angular.json`, `pom.xml`, `build.gradle`, `pyproject.toml`, `requirements.txt`, `go.mod`, `*.csproj`), leurs cadres
+(Angular, React, Vue, Next.js, NestJS, Express, Spring Boot, Quarkus, FastAPI, Django, Gin, ASP.NET Core…), leurs
+langages, leur couche probable (frontend, BFF, backend), leurs modules (dossiers : `src/app` en Angular, le paquet
+Java, `src`…), points d'entrée, fichiers de configuration (noms seulement), services notables (JPA, Kafka, RxJS…),
+les relations entre applications (dépendance d'espace de travail déclarée ; proxy de développement ou URL de
+configuration vers le port `server.port` d'une autre application : déduit) et la structure du dépôt (application
+seule, monorepo — workspaces npm/pnpm, Nx, Lerna, Turborepo, Maven multi-module, Gradle multi-projets —,
+plusieurs applications). Tout est lu par les fichiers gardés, donc par le Scope Policy Engine sur une racine
+provisoire avec les permissions et limites de l'incident : fichiers sensibles refusés, liens symboliques jamais suivis,
+quatre niveaux de manifestes, 80 manifestes et 1500 dossiers au plus ; rien n'est écrit dans l'incident. La pertinence
+pour l'incident vient de ses mots (titre, description, symptôme, application nommée) retrouvés dans les noms et les
+modules ; les dépendances transversales d'une application proposée (ce qu'elle utilise ou appelle, ce qui appelle un
+service proposé) sont proposées avec elles. Chaque détection cite ses preuves (`fichier : indice`) ; ce qui n'est pas
+déterminable devient une question (couche déduite du nom, serveur Node, dossier de code sans manifeste) ; un
+chemin relatif, introuvable, qui n'est pas un dossier ou protégé est un problème expliqué avec sa correction, jamais
+une erreur HTTP. `GET …/scope/repositories` liste les dépôts déjà connus de l'environnement (sources du projet,
+périmètre de l'incident, autres incidents du projet) pour les réutiliser d'un clic. Une application ajoutée garde sa
+provenance (`origin` : découverte ou saisie, racine analysée, preuves). Le périmètre initial n'est pas une limite :
+pendant l'investigation, le même bloc demande des extensions `ADD_APPLICATION` à décider.
+
+**Scénario d'accès et exploration** (`src/incident/access.ts`, `src/incident/target-screen.ts`, routes
+`POST …/access`, `…/access/analyze`, `…/access/locate`, `…/access/prepare`, `…/access/explore`, droit `RUN`) :
+la personne indique l'écran ou la fonctionnalité cible et décrit le problème ; l'URL, des indications de navigation,
+des étapes connues (mode guidé), un point de départ, l'attendu, l'observé, des conditions et des données de test
+sont facultatifs. Tout est masqué à l'enregistrement (masqueur, puis paires « mot de passe : … », jeton, cookie,
+clé d'API). La démonstration passe par un enregistrement du module Enregistrements (lancé depuis la carte ou
+associé par son nom vérifié) : ses étapes, sans valeur saisie, sont relues et son départ compte comme route
+observée. Aucune vidéo n'est acceptée.
+
+1. **Localiser l'écran** (lecture seule) : l'analyse Angular (`code/angular.ts`) relève les routes (composant,
+   redirection, gardes `canActivate`, `canMatch`, `canActivateChild`), les liens des templates (`routerLink`,
+   `href`) et les titres `h1`–`h3`. Chaque route est notée sur des indices cités : URL indiquée, départ de
+   l'enregistrement, mots de la route, libellé d'un lien entrant (ou des indications), titre de l'écran, nom du
+   composant. Un écran qui ne correspond que par des noms est marqué « nom seul » et plafonné à 0,45. Le
+   parcours part de l'entrée de l'application (redirection de la racine) et suit les liens en largeur ; les liens
+   d'un composant sans route (coquille, menu) valent depuis tout écran ; les étapes guidées sont rapprochées des
+   liens, et une étape sans lien est gardée comme indication. Sans lien, l'accès direct par l'URL est proposé et
+   dit. Les gardes de la route et de ses parents, ainsi que les routes paramétrées, sont des limites : QA-CRAWLER
+   ne crée pas de session et ne contourne aucune garde. La personne peut choisir un autre candidat.
+2. **Préparer l'exploration** : le parcours est vérifié par le Scope Policy Engine (navigation autorisée, hôtes du
+   périmètre) puis joué dans un navigateur sans interface sur l'environnement de test. L'écran atteint est
+   inventorié (boutons, champs, liens, listes, éléments désactivés, dialogues, requêtes et erreurs vues) et une
+   capture est gardée sous le dossier de l'incident. Un autre écran atteint, une étape impossible, une page de
+   connexion (aucun identifiant n'est saisi) ou une navigation refusée bloquent l'exploration et sont dits.
+3. **Lancer l'investigation** : seulement quand l'écran retenu a été atteint. Le moteur des déclencheurs démarre
+   avec le parcours comme point d'entrée imposé (`TriggerInvestigationInput.entry`, gardé dans `TriggerRun.entry`
+   pour la reprise), rejoué avant chaque essai ; le texte du scénario sert de description. Stratégies,
+   déduplication, répétitions, réduction, budgets, pause, reprise et annulation sont ceux du moteur. La carte
+   suit le run réel : neuf phases (recherche de l'écran, parcours identifié, écran atteint, analyse des
+   interactions, exploration des combinaisons, anomalie suspectée, reproduction en cours, anomalie confirmée —
+   au moins deux reproductions —, diagnostic), séquences exécutées, états explorés, dernière action, anomalies,
+   durée et limites restantes, sans pourcentage. Les résultats donnent la séquence déclenchante et sa fréquence,
+   les conditions découvertes, les preuves (première erreur, première action sans effet), les hypothèses du run
+   (proposées, jamais confirmées par le moteur seul) et les actions recommandées.
+
+« Analyser le parcours » reste disponible : il réutilise l'interprète (`interpretBrief`), un lexique FR/EN des
+actions, l'analyse Angular et l'index du code, puis la découverte du périmètre (`trigger/discovery.ts`) : étapes
+comprises avec l'étape critique, interprétations avec leur confiance, portions de code candidates `MATCHED` ou
+`UNCERTAIN` (jamais confirmées), ressources transversales au-delà de l'écran visible, pistes d'un blocage global
+et limites. Une ressource refusée reste `DENIED` : la carte propose l'extension (`ADD_PATH`, `ADD_HOST`), décidée
+par une personne. Le Résumé, l'Exécution et le rapport (JSON et Markdown) reprennent l'écran cible, sa
+localisation, sa préparation et l'exploration lancée.
 
 Le Scope Policy Engine refuse par défaut et agit dans les adaptateurs (lecture de fichiers, journaux,
 tests, commandes, OpenShift) — pas seulement dans l'interface :
@@ -130,6 +196,13 @@ jouer un environnement qui permet les écritures ou approuver une vérification 
 | POST       | `/incidents/:i/attachments`                                                                     | ajouter une pièce jointe (droit `RUN`)                                           |
 | GET/DELETE | `/incidents/:i/attachments/:a`                                                                  | lire (masquée) / retirer une pièce jointe                                        |
 | GET        | `/incidents/:i/scope/tree?application=&depth=`                                                  | dossiers d'un dépôt pour le périmètre (`RUN`)                                    |
+| POST       | `/incidents/:i/scope/discover` `{ root }`                                                       | découverte automatique d'un dépôt (lecture seule, `RUN`)                         |
+| GET        | `/incidents/:i/scope/repositories`                                                              | dépôts déjà connus de l'environnement (`RUN`)                                    |
+| POST       | `/incidents/:i/access`                                                                          | enregistre le scénario d'accès (masqué ; `recording` associe ou dissocie)        |
+| POST       | `/incidents/:i/access/analyze`                                                                  | analyse le parcours (candidats, pistes, limites ; lecture seule)                 |
+| POST       | `/incidents/:i/access/locate` `{route?}`                                                        | localise l'écran cible et son parcours (lecture seule)                           |
+| POST       | `/incidents/:i/access/prepare`                                                                  | atteint l'écran dans un navigateur, inventaire (`RUN`)                           |
+| POST       | `/incidents/:i/access/explore` `{depth?}`                                                       | lance le moteur depuis l'écran atteint (`RUN`)                                   |
 | GET        | `/incidents/:i/report?format=json\|markdown\|html\|pdf&sections=`                               | rapport, sections choisies                                                       |
 | GET        | `/incidents/:i/regression/spec`                                                                 | test Playwright généré depuis le flow proposé                                    |
 | GET        | `/incidents/:i/ai/capabilities`                                                                 | modes IA disponibles, fournisseur, budget, politique de données                  |
@@ -171,6 +244,14 @@ joue toute l'investigation avec le vrai moteur et Chromium. Résultat obtenu sur
 - annulation et reprise ; capacités lues pour LOCAL, REMOTE et ARO avec le même contrat.
 
 ## 8. Limites connues
+
+- Scénario d'accès : la localisation de l'écran lit les routes et les liens Angular déclarés dans le code ; une
+  navigation construite dynamiquement (`router.navigate` calculé, menus chargés depuis une API) n'est pas suivie et
+  l'accès direct par l'URL est alors proposé. Un écran derrière une garde ou une page de connexion exige une
+  session autorisée que QA-CRAWLER ne crée pas : la préparation s'arrête et le dit. « Enregistrer le parcours »
+  lance une vraie session du module Enregistrements, qui ouvre un navigateur visible sur la machine du serveur :
+  sans écran (CI, conteneur), la session échoue et l'erreur est affichée. Le rapprochement du texte et du code est
+  lexical : un écran nommé autrement dans le code reste un candidat incertain.
 
 - ARO : aucun cluster n'est disponible pour les tests. L'adaptateur (détection dans le cluster, montage des
   dépôts, `oc logs` par le ServiceAccount) est testé avec un exécuteur simulé ; le manifeste de Job est généré,
@@ -231,9 +312,11 @@ Composants : `incident-workspace.ts` (coquille et vues), `incident-split.ts` (pa
 
 La liste (onglets Tous / Ouverts / En investigation / Résolus / Fermés, recherche, application, date de création, export
 CSV), la déclaration (application, type, sévérité, scénario, pièces jointes : captures et textes, contenu vérifié côté
-serveur, 5 Mio et 10 fichiers au plus, noms nettoyés, textes masqués à la lecture), le périmètre (arborescence des dossiers
-lue en lecture seule, profondeur 1 à 5, limites ; la mémoire maximale ne s'impose qu'au Job ARO, jamais en LOCAL ni en
-REMOTE), l'environnement (cartes LOCAL / REMOTE / ARO d'après les capacités mesurées, « Tester la connectivité » depuis le
+serveur, 5 Mio et 10 fichiers au plus, noms nettoyés, textes masqués à la lecture), le périmètre (« Applications et
+dépôts » : un chemin de projet ou un dépôt connu, « Analyser automatiquement », les applications détectées cochées quand
+elles sont proposées pour l'incident, couche corrigeable d'un choix, preuves et questions, « Ajouter au périmètre » ;
+la saisie manuelle reste dans « Paramètres avancés », repliée ; puis l'arborescence des dossiers lue en lecture seule,
+profondeur 1 à 5, limites ; la mémoire maximale ne s'impose qu'au Job ARO, jamais en LOCAL ni en REMOTE), l'environnement (cartes LOCAL / REMOTE / ARO d'après les capacités mesurées, « Tester la connectivité » depuis le
 serveur), la reproduction en direct (étapes annoncées par le moteur pendant le rejeu, durée seulement quand l'étape est
 finie, capture seulement si le moteur en a écrit une), les preuves (requêtes, console, captures, traces, actions ; commande
 cURL reconstruite, valeurs masquées), la traçabilité (colonnes ou couloirs horizontaux par couche), le code, le diagnostic

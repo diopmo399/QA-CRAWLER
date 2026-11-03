@@ -111,6 +111,15 @@ const applicationSchema = z.object({
   baseUrl: httpUrl.optional(),
   logFiles: z.array(z.string().max(4096)).max(50).optional(),
   openshift: z.object({ namespace, selector: text(300) }).optional(),
+  // La provenance (découverte automatique ou saisie) : tracée avec l'application, jamais interprétée.
+  origin: z
+    .object({
+      kind: z.enum(['DISCOVERED', 'MANUAL']),
+      at: z.string().max(40),
+      analyzedRoot: z.string().max(4096).optional(),
+      evidence: z.array(z.string().max(500)).max(20).optional(),
+    })
+    .optional(),
 });
 
 const scopeSchema = z.object({

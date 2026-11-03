@@ -2,7 +2,7 @@
 const fr = {
   locale: 'fr' as 'fr' | 'en',
   product: 'QA-CRAWLER',
-  tag: 'Pilotage',
+  tag: 'Pilotage & Investigation',
   /** Les sections du menu et leurs entrées. */
   sections: {
     pilot: 'Piloter',
@@ -2025,6 +2025,9 @@ const fr = {
       created: (title: string) => `Incident « ${title} » déclaré.`,
       scopeSaved: 'Périmètre enregistré.',
       extensionRequested: 'Extension demandée : elle attend une décision.',
+      applicationsAdded: (n: number) => `${String(n)} application(s) ajoutée(s) au périmètre.`,
+      extensionsRequested: (n: number) =>
+        `${String(n)} extension(s) du périmètre demandée(s) : chacune attend une décision.`,
       extensionApproved: 'Extension approuvée : le périmètre est étendu.',
       extensionRejected: 'Extension refusée.',
       reproductionStarted: 'Reproduction lancée.',
@@ -2141,6 +2144,7 @@ const fr = {
       include: 'Dossiers ou modules',
       includeHint: 'Relatifs à la racine ; vide : toute la racine.',
       wholeRoot: 'Toute la racine',
+      discovered: (at: string) => `détectée automatiquement le ${at}`,
       classes: 'Classes',
       classesHint: 'Nom simple ou qualifié ; vide : toutes.',
       allClasses: 'Toutes',
@@ -2241,7 +2245,7 @@ export type DashboardStrings = typeof fr;
 const en: DashboardStrings = {
   locale: 'en',
   product: 'QA-CRAWLER',
-  tag: 'Dashboard',
+  tag: 'Steering & Investigation',
   sections: {
     pilot: 'Operate',
     incidents: 'Investigate',
@@ -4126,6 +4130,9 @@ const en: DashboardStrings = {
       created: (title) => `Incident "${title}" declared.`,
       scopeSaved: 'Scope saved.',
       extensionRequested: 'Extension requested: it waits for a decision.',
+      applicationsAdded: (n: number) => `${String(n)} application(s) added to the scope.`,
+      extensionsRequested: (n: number) =>
+        `${String(n)} scope extension(s) requested: each waits for a decision.`,
       extensionApproved: 'Extension approved: the scope is extended.',
       extensionRejected: 'Extension rejected.',
       reproductionStarted: 'Reproduction started.',
@@ -4241,6 +4248,7 @@ const en: DashboardStrings = {
       include: 'Folders or modules',
       includeHint: 'Relative to the root; empty: the whole root.',
       wholeRoot: 'The whole root',
+      discovered: (at: string) => `detected automatically on ${at}`,
       classes: 'Classes',
       classesHint: 'Simple or qualified name; empty: all.',
       allClasses: 'All',

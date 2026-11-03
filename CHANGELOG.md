@@ -32,6 +32,84 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Thème vert et blanc du Dashboard** : la palette (vert principal `#006B3F`, vert foncé `#004D2B`, vert très
+  foncé `#003B25`, vert secondaire `#008A4B`, verts clairs `#E6F4EA` et `#F2FAF5`, fond `#F7F9F8`, texte
+  `#172B24` et `#64746C`, bordures `#DCE5DF`, rouge `#DC3545`) remplace l'indigo dans les jetons `--qa-*`, avec
+  des jetons de panneau (`--qa-color-panel-*`) pour le menu latéral et la console, et un thème sombre assorti.
+  Menu latéral vert foncé de 240 px, logo araignée (icône SVG locale), « Pilotage & Investigation », entrée
+  active sur fond vert très clair en texte vert foncé, menu défilable. Étapes de l'investigation : terminée en
+  cercle vert à coche, active sur fond vert clair, non commencée en cercle blanc à bordure grise. Onglets actifs
+  en vert foncé sur fond vert clair. Étape Périmètre : bandeau de présentation avec trois indicateurs qui
+  reflètent l'état réel de la découverte (attente, en cours, comptes, échec), champ de chemin avec icône de
+  dossier, résumé « Analyse terminée » (applications, modules, fichiers lus, durée mesurée par le serveur :
+  `durationMs`), glyphe du cadre et badge « Application principale » sur les cartes, résumé de la sélection
+  des applications avec « Gérer » qui replie ou déplie les dossiers. Aucune règle métier ni route ne change.
+  Alignement sur la maquette : logo araignée blanc sans cartouche, bouton « Incidents » en pastille vert clair,
+  « Annuler l'investigation » en bouton principal, vues principales (Vue d'ensemble, Reproduction, …) avec icône
+  et onglet actif en pastille vert clair dans une barre blanche, cercles d'étapes de 24 px ; bandeau du Périmètre
+  compact avec illustration portable-loupe, vagues vertes et indicateurs en pastilles blanches ; carte
+  « Applications et dépôts » avec icône de dossier, champ « Chemin du projet * » (`required`), icône
+  d'information devant l'aide ; résumé d'analyse en une bande (coche verte, sous-titre, puis Application(s),
+  Modules, Éléments, Durée d'analyse séparés par des filets, « Éléments » = fichiers lus + modules + points
+  d'entrée + configurations + services) ; « Détails de la détection (modules, structure, dépendances) »,
+  « Fichiers lus (n) » à droite, « Effacer le résultat » avec corbeille ; « Définition du périmètre » avec icône,
+  modes à icônes, « Gérer » avec crayon, « Profondeur d'analyse » avec infobulle. Détails d'alignement : badge
+  du cadre en bouclier à la couleur du cadre (Angular, React, Vue, Svelte, Ionic, NestJS, Node, Spring, Java,
+  Python, Go, .NET, TypeScript) avec sa lettre, carte d'application sur deux colonnes (nom, badge et raisons à
+  gauche ; couche et pastilles à droite), bouton « Analyser automatiquement » aligné sur le champ, dix étapes sur
+  une ligne sans traits de liaison, outils de l'espace (« Mode compact », panneaux masqués, réinitialisation) sur
+  la ligne des sous-onglets, menu latéral plus compact (lignes de 36 px) qui reste dans la fenêtre sur écran
+  large (collant, borné à la hauteur de la fenêtre, défilement interne) : sa fin et son pied se voient sans faire
+  défiler la page. Couleurs du menu mesurées sur la maquette : fond `#004D2B` inchangé, sélecteur de projet en
+  vert relevé (`--qa-color-panel-raised`, `#005D38`), entrée active sur `#E6F4EA`, et le motif du bas du menu relevé
+  sur la maquette : trois facettes à bords droits en vert secondaire (bande translucide en diagonale montante,
+  facette médiane, coin vif à droite), puis un filet et le pied ; masqué sur téléphone.
+  Ergonomie : « Définition du périmètre » en deux colonnes équilibrées (Applications | Profondeur, puis Éléments
+  inclus | Limites ; une colonne sous 760 px) ; le pied de la découverte dit l'état de la sélection (« N cochée(s)
+  sur M détectée(s) : une application n'entre dans le périmètre qu'après Ajouter ») ; l'accordéon « Paramètres
+  avancés » ne rend son contenu qu'ouvert (l'état reste dans le modèle) ; dans les formulaires, le libellé et
+  l'astérisque tiennent sur une ligne et l'aide reste sous son champ (plus de colonne orpheline pour « Cible ») ;
+  titres de section du menu plus lisibles, marges du contenu resserrées (24 px).
+
+- **Scénario d'accès et exploration à partir d'un écran cible** (étape « Périmètre », `src/incident/access.ts`,
+  `src/incident/target-screen.ts`, `src/sdk/ui/incident-access.ts`) : une carte entre « Applications et dépôts » et
+  « Définition du périmètre ». L'utilisateur indique l'écran ou la fonctionnalité cible et décrit le problème (URL et
+  indications de navigation facultatives) ; trois modes : « Explorer automatiquement » (recommandé), « Parcours
+  guidé » (étapes connues) et « Démonstration » (un enregistrement du module Enregistrements, lancé ou associé ;
+  aucune vidéo). « Localiser l'écran » lit le code : l'analyse Angular relève désormais les routes (redirections,
+  gardes `canActivate`/`canMatch`), les liens des templates et les titres ; les écrans candidats sont notés sur des
+  indices cités (URL, lien entrant, titre, route ; un nom seul reste incertain, plafonné à 45 %), et le parcours est
+  trouvé par les liens depuis l'entrée de l'application. Gardes et routes paramétrées sont dites comme limites,
+  jamais contournées. « Préparer l'exploration » joue ce parcours dans un vrai navigateur (hôtes du périmètre,
+  environnement de test) et inventorie l'écran atteint (boutons, champs, liens, listes, désactivés, requêtes,
+  erreurs, capture) ; une page de connexion bloque sans qu'aucun identifiant soit saisi. « Lancer l'investigation »
+  démarre le moteur des déclencheurs avec ce parcours comme point d'entrée imposé, rejoué avant chaque essai
+  (stratégies, déduplication, répétitions, réduction, budgets, pause, reprise et annulation inchangés). La
+  progression vient du run réel (neuf phases, séquences exécutées, états explorés, dernière action, anomalies,
+  durée, limites restantes ; aucun pourcentage) ; les résultats donnent la séquence déclenchante et sa fréquence,
+  les conditions, les preuves, les hypothèses proposées (jamais confirmées par le moteur seul) et les actions
+  recommandées. « Analyser le parcours » (étapes comprises, portions de code candidates, pistes, limites) reste
+  disponible. Routes `POST …/access`, `…/access/analyze`, `…/access/locate`, `…/access/prepare`,
+  `…/access/explore` (droit `RUN`) ; client `saveAccess`, `analyzeAccess`, `locateAccessTarget`,
+  `prepareAccessTarget`, `exploreAccessTarget`. Le scénario est repris dans le Résumé, l'Exécution et le rapport.
+
+- **Découverte automatique du périmètre** (étape « Périmètre » de l'investigation, `src/incident/scope-discovery.ts`) :
+  le bloc « Applications et dépôts » remplace la saisie manuelle des applications (identifiant, nom, couche, dossiers,
+  classes, racine) par un chemin de projet — ou un dépôt déjà connu de l'environnement, réutilisé d'un clic — et
+  « Analyser automatiquement ». Le serveur détecte les applications (package.json, angular.json, pom.xml, build.gradle,
+  pyproject.toml, requirements.txt, go.mod, *.csproj), leurs cadres et langages, leur couche probable, leurs modules,
+  points d'entrée, configurations et services, les relations entre applications (dépendances déclarées, proxy ou URL vers
+  le port d'une autre application) et la structure du dépôt (application seule, monorepo npm/pnpm/Nx/Lerna/Turborepo,
+  Maven multi-module, Gradle multi-projets, plusieurs applications). Les applications proposées pour l'incident (mots de
+  la description retrouvés, application nommée, dépendances transversales) sont cochées ; la couche se corrige d'un
+  choix ; chaque détection cite ses preuves, ce qui n'est pas déterminable devient une question ; un chemin relatif,
+  introuvable, qui n'est pas un dossier ou protégé est expliqué avec sa correction. Lecture seule par le Scope Policy
+  Engine (fichiers sensibles refusés, liens jamais suivis, bornes), rien n'est écrit ; « Ajouter au périmètre »
+  complète le périmètre (brouillon, périmètre défini) ou demande des extensions `ADD_APPLICATION` à décider une fois
+  l'investigation commencée ; chaque application ajoutée garde sa provenance (`origin`). La saisie manuelle reste dans
+  « Paramètres avancés », repliée. Routes `POST …/scope/discover`, `GET …/scope/repositories` (droit `RUN`), client
+  `incidents.discoverScope`, `incidents.knownRepositories`.
+
 - **Découverte autonome des déclencheurs** (`src/incident/trigger`, `docs/incident-reconstruction/trigger-discovery.md`) :
   interprète de description (FR/EN, provenance), découverte du périmètre (statuts du Scope Policy Engine), analyse
   statique Angular (`src/incident/code/angular.ts`), collecteur d'observations navigateur, oracle de défaillance
@@ -701,8 +779,29 @@ defaults`). Test d'intégration : flows passés, panne détectée, écritures bl
   régler), tests concurrents à l'intérieur des fichiers longs (chacun dans son propre dossier de
   rapports), et job CI `integration` découpé en trois shards parallèles (le job `build` ne lance
   plus l'intégration). Sur une machine à 4 cœurs : de 1 250 s à environ 600 s.
+- Dashboard : passer d'un menu à l'autre est plus rapide.
+  - Le menu suit le clic tout de suite. L'écran quitté reste affiché, grisé et inactif, avec une fine
+    barre de progression si le chargement dure, jusqu'à ce que le nouvel écran soit prêt. Dans un même
+    menu (fichier de l'éditeur, détail d'une exécution), l'écran reste utilisable comme avant ; l'éditeur
+    s'affiche dès les lectures communes faites et dit lui-même ce qu'il charge encore.
+  - Les lectures d'un écran (catalogue, droits, projet, données de la vue) partent ensemble au lieu de
+    se suivre ; les capacités du serveur ne se relisent qu'au premier chargement.
+  - Le serveur garde ce qu'il tire de chaque run (fiche, verdict, statuts des flows, anomalies par
+    gravité), les flows des scénarios et la configuration du projet tant que leur fichier garde sa date
+    de modification et sa taille ; un fichier modifié depuis moins de deux secondes est toujours relu.
+    Avec 315 runs, la liste des projets passe de 206 à 38 ms, le détail d'un projet de 194 à 36 ms,
+    la liste des exécutions de 171 à 36 ms, l'historique des scénarios de 356 à 54 ms et la vue
+    d'ensemble de 411 à 69 ms.
+  - Maven est sondé (`mvn -v`) en arrière-plan dès l'ouverture du Dashboard : le premier passage sur
+    l'écran Tests n'attend plus le démarrage de la JVM.
 
 ### Corrigé
+
+- Dashboard : une saisie validée par Entrée pouvait ne pas apparaître (par exemple le nom d'une étape
+  dans l'éditeur, sans la mention « Modifications non enregistrées »). Chromium déclenche le « change »
+  d'un champ qui a le focus quand un redessin le retire ; la validation redessinait alors pendant le
+  redessin en cours, dont le HTML, calculé avant, l'emportait. Un redessin demandé pendant un autre est
+  désormais rejoué juste après, sur l'état à jour.
 
 - Un flow invalide n'entre plus dans la bibliothèque (le bloc est `INVALID`) ; un scénario invalide au
   lancement répond 422 au lieu de 500, et l'écran Scénarios dit le refus de « Rejouer » au lieu de

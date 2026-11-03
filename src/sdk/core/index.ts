@@ -43,6 +43,15 @@ export type {
   ReproductionRun,
   ScopeExtension,
   ScopeExtensionKind,
+  ScopeDiscovery,
+  DiscoveredApplication,
+  DiscoveredModule,
+  DiscoveryRelation,
+  DiscoveryProblem,
+  DiscoveryProblemCode,
+  DiscoveryConfidence,
+  KnownRepository,
+  ScopeApplicationOrigin,
 } from './incident-contracts.js';
 /** La découverte des déclencheurs : le contrat commun, en types seulement. */
 export type {

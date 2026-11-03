@@ -10,6 +10,7 @@ import type {
   ReproductionRun,
 } from '../../src/incident/model.js';
 import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
+import { emptyDiscoveryUi } from '../../src/sdk/ui/incident-scope-discovery.js';
 import { emptyEditorUi } from '../../src/sdk/ui/dashboard-editor.js';
 import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
 import {
@@ -957,19 +958,25 @@ describe('dashboard — incidents: screens', () => {
 
   it('scope tab: applications, permissions, limits, pending extensions decided with DECIDE, validation issues', () => {
     const incident = incidentOf();
+    // L'accordéon « Paramètres avancés » ouvert : son contenu (saisie manuelle, extensions) est rendu.
     const html = renderDashboard(
       base(page('scope'), {
         incident,
         ws: wsOf(),
+        discovery: { ...emptyDiscoveryUi(incident.id), advanced: true },
         validation: {
           ok: false,
           issues: [{ field: 'applications[0].repository.root', message: 'does not exist' }],
         },
       }),
     );
-    // L'écran « Définition du périmètre » en tête, puis les autres paramètres.
+    // L'écran « Définition du périmètre » en tête, puis les autres paramètres ; fermé (défaut), l'accordéon ne
+    // rend pas son contenu.
     expect(html).toContain('<h2 id="inc-sc-t" class="fl">Définition du périmètre</h2>');
     expect(html.indexOf('inc-sc-t')).toBeLessThan(html.indexOf('Autres paramètres du périmètre'));
+    const closed = renderDashboard(base(page('scope'), { incident, ws: wsOf() }));
+    expect(closed.indexOf('inc-sc-t')).toBeLessThan(closed.indexOf('class="inc-sd-adv"'));
+    expect(closed).not.toContain('Autres paramètres du périmètre');
     expect(html).toMatch(/data-action="inc-scope-mode" data-mode="GUIDED"[^>]*aria-checked="true"/);
     expect(html).toContain('data-action="inc-scope-toggle" data-block="bff" data-index=""');
     // Pas encore d'arborescence lue : la lecture est en cours (le contrôleur la lance).
@@ -1373,7 +1380,9 @@ describe('dashboard — incidents: controller', () => {
   const element = (dataset: Record<string, string>) => ({ dataset }) as unknown as HTMLElement;
 
   function setup(state: DashboardState, incidents: Partial<QaCrawlerClient['incidents']>) {
-    const api = { incidents } as unknown as QaCrawlerClient;
+    // Les dépôts connus (bloc « Applications et dépôts ») : lus à l'ouverture du périmètre, jamais résolus ici.
+    const defaults = { knownRepositories: () => new Promise<never>(() => undefined) };
+    const api = { incidents: { ...defaults, ...incidents } } as unknown as QaCrawlerClient;
     let paints = 0;
     const host = {
       root: fakeRoot,
@@ -1799,6 +1808,140 @@ describe('dashboard — incidents: controller', () => {
     expect(state.inc?.scope.selection).toEqual({});
     expect(state.route).toMatchObject({ view: 'incident', tab: 'environment' });
     expect(state.inc?.notice).toBe('Périmètre enregistré.');
+  });
+
+  it('applications and repositories: known repositories read once, a repository analyzed, applications checked and added; extensions once started', async () => {
+    const incident = incidentOf({ state: 'SCOPED' });
+    const saved = incidentOf({ state: 'SCOPED', revision: 4 });
+    const discovered = (id: string, layer: 'FRONTEND' | 'BFF', suggested: boolean) => ({
+      application: { id, name: id, layer, repository: { root: `/repos/mono/apps/${id}`, include: [] } },
+      path: `apps/${id}`,
+      frameworks: [layer === 'FRONTEND' ? 'Angular' : 'NestJS'],
+      languages: ['TypeScript'],
+      modules: [],
+      entryPoints: [],
+      configs: [],
+      services: [],
+      confidence: 'HIGH' as const,
+      evidence: [`apps/${id}/package.json : paquet Node`],
+      questions: [],
+      relevance: suggested ? 1 : 0,
+      reasons: [],
+      suggested,
+    });
+    const result = {
+      root: '/repos/mono',
+      status: 'OK' as const,
+      structure: 'MONOREPO' as const,
+      tools: ['Nx'],
+      applications: [discovered('web', 'FRONTEND', true), discovered('api', 'BFF', false)],
+      relations: [],
+      problems: [],
+      denied: [],
+      truncated: [],
+      keywords: ['livre'],
+      read: ['package.json'],
+      discoveredAt: at,
+      durationMs: 320,
+    };
+    const knownRepositories = vi.fn(() =>
+      Promise.resolve({
+        repositories: [{ root: '/repos/mono', label: 'Mono (Autre)', source: 'INCIDENT' as const }],
+      }),
+    );
+    const discoverScope = vi.fn(() => Promise.resolve(result));
+    const update = vi.fn(() => Promise.resolve(saved));
+    const requestExtension = vi.fn(() => Promise.resolve(saved));
+    const scopeTree = vi.fn(() => new Promise<never>(() => undefined));
+    const state = base(page('scope'), { incident, ws: wsOf() });
+    const { controller } = setup(state, {
+      knownRepositories,
+      discoverScope,
+      update,
+      requestExtension,
+      scopeTree,
+    });
+    controller.beforePaint();
+    expect(knownRepositories).toHaveBeenCalledWith('prj_books', incident.id);
+    await vi.waitFor(() => {
+      expect(state.inc?.discovery.known).toHaveLength(1);
+    });
+    controller.beforePaint();
+    expect(knownRepositories).toHaveBeenCalledTimes(1);
+    expect(renderDashboard(state)).toContain('data-action="inc-disc-known" data-root="/repos/mono"');
+    // Un chemin vide ne part jamais au serveur.
+    controller.submit({ dataset: { action: 'inc-disc-run' } } as unknown as HTMLFormElement);
+    expect(discoverScope).not.toHaveBeenCalled();
+    // Un dépôt connu : analysé d'un clic ; les applications proposées sont cochées.
+    controller.click('inc-disc-known', element({ root: '/repos/mono' }));
+    await vi.waitFor(() => {
+      expect(state.inc?.busy).toBeUndefined();
+    });
+    expect(discoverScope).toHaveBeenCalledWith('prj_books', incident.id, '/repos/mono');
+    expect(state.inc?.discovery.result).toEqual(result);
+    expect(state.inc?.discovery.selected).toEqual({ web: true, api: false });
+    const html = renderDashboard(state);
+    expect(html).toContain('2 application(s) détectée(s), 1 proposée(s) pour cet incident');
+    expect(html).toContain('Ajouter 1 application(s) au périmètre');
+    // Cocher l'autre, corriger sa couche, ajouter : le périmètre complété d'un seul envoi, permissions gardées.
+    controller.change({ dataset: { inc: 'disc.app.api' }, value: 'on' } as unknown as HTMLInputElement);
+    controller.change({
+      dataset: { inc: 'disc.layer.api' },
+      value: 'BACKEND',
+    } as unknown as HTMLSelectElement);
+    expect(state.inc?.discovery.selected).toEqual({ web: true, api: true });
+    controller.click('inc-disc-apply', element({}));
+    await vi.waitFor(() => {
+      expect(state.inc?.busy).toBeUndefined();
+    });
+    expect(update).toHaveBeenCalledWith('prj_books', incident.id, incident.revision, {
+      scope: expect.objectContaining({
+        applications: [
+          expect.objectContaining({ id: 'bff' }),
+          expect.objectContaining({ id: 'web', layer: 'FRONTEND' }),
+          expect.objectContaining({ id: 'api', layer: 'BACKEND' }),
+        ],
+        permissions: scope.permissions,
+      }) as unknown,
+    });
+    expect(state.inc?.notice).toBe('2 application(s) ajoutée(s) au périmètre.');
+    expect(state.inc?.discovery.result).toBeUndefined();
+    expect(state.inc?.incident?.revision).toBe(4);
+
+    // L'investigation commencée : le chemin saisi, analysé ; l'ajout devient une demande d'extension à décider.
+    const started = incidentOf({ state: 'INVESTIGATING', revision: 7 });
+    const startedState = base(page('scope'), { incident: started, ws: wsOf() });
+    const second = setup(startedState, {
+      knownRepositories,
+      discoverScope,
+      update,
+      requestExtension,
+      scopeTree,
+    });
+    second.controller.input({
+      dataset: { inc: 'disc.root' },
+      value: ' /repos/mono ',
+    } as unknown as HTMLInputElement);
+    second.controller.submit({ dataset: { action: 'inc-disc-run' } } as unknown as HTMLFormElement);
+    await vi.waitFor(() => {
+      expect(startedState.inc?.discovery.result).toBeDefined();
+    });
+    expect(discoverScope).toHaveBeenLastCalledWith('prj_books', started.id, '/repos/mono');
+    expect(renderDashboard(startedState)).toContain('Demander l’extension du périmètre (1)');
+    second.controller.click('inc-disc-apply', element({}));
+    await vi.waitFor(() => {
+      expect(startedState.inc?.busy).toBeUndefined();
+    });
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(requestExtension).toHaveBeenCalledWith('prj_books', started.id, {
+      kind: 'ADD_APPLICATION',
+      target: 'FRONTEND:/repos/mono/apps/web',
+      applicationId: 'web',
+      reason: 'Découverte automatique de « /repos/mono » : web',
+    });
+    expect(startedState.inc?.notice).toBe(
+      '1 extension(s) du périmètre demandée(s) : chacune attend une décision.',
+    );
   });
 
   it('scope screen: refused drafts never reach the server; issues of the check keep the page on the scope', async () => {

@@ -1,5 +1,10 @@
 import type { AiInvestigationState, HypothesisOrigin, InvestigationMemory } from './incident-ai-contracts.js';
-import type { TriggerInvestigationState } from './incident-trigger-contracts.js';
+import type {
+  ScopeResourceKind,
+  ScopeResourceStatus,
+  SilentFailureKind,
+  TriggerInvestigationState,
+} from './incident-trigger-contracts.js';
 
 /**
  * INCIDENT RECONSTRUCTION — le contrat commun. Un incident fonctionnel déclaré (« après Enregistrer,
@@ -106,6 +111,261 @@ export interface IncidentAttachment {
   addedBy: string;
 }
 
+// ── Scénario d'accès et démonstration ─────────────────────────────────────────────────────────
+
+/**
+ * LE SCÉNARIO D'ACCÈS : comment la personne atteint la fonctionnalité où l'incident se produit (texte
+ * libre, étapes, enregistrement du module Enregistrements). C'est un POINT
+ * D'ENTRÉE de l'investigation, jamais une limite : l'analyse suit les dépendances au-delà, dans les
+ * règles du périmètre (extensions approuvées). Aucun secret n'y est gardé : les textes sont masqués.
+ */
+export const MAX_ACCESS_TEXT = 4000;
+export const MAX_ACCESS_FIELD = 600;
+export const MAX_ACCESS_STEPS = 40;
+export const MAX_ACCESS_STEP = 300;
+
+/** Une étape du parcours, écrite par la personne (texte libre, sans syntaxe imposée). */
+export interface AccessStep {
+  id: string;
+  text: string;
+}
+
+/** L'enregistrement du module Enregistrements associé au parcours (par son nom ; ses étapes sont relues à l'analyse). */
+export interface AccessRecordingLink {
+  name: string;
+  linkedAt: string;
+  linkedBy: string;
+}
+
+export const ACCESS_ACTION_KINDS = [
+  'LOGIN',
+  'NAVIGATE',
+  'OPEN',
+  'CREATE',
+  'EDIT',
+  'DELETE',
+  'FILL',
+  'SELECT',
+  'CLICK',
+  'SAVE',
+  'SUBMIT',
+  'SEARCH',
+  'CLOSE',
+  'WAIT',
+  'OTHER',
+] as const;
+export type AccessActionKind = (typeof ACCESS_ACTION_KINDS)[number];
+export const ACCESS_ELEMENT_KINDS = [
+  'MENU',
+  'BUTTON',
+  'FIELD',
+  'TAB',
+  'PAGE',
+  'LINK',
+  'MODAL',
+  'LIST',
+] as const;
+export type AccessElementKind = (typeof ACCESS_ELEMENT_KINDS)[number];
+
+/** Une étape du parcours telle que l'analyse la comprend : action, cible, élément, provenance. */
+export interface AccessPathStep {
+  index: number;
+  text: string;
+  /** D'où vient l'étape : le texte libre, les étapes numérotées, ou un enregistrement réel. */
+  source: 'TEXT' | 'STEPS' | 'RECORDING';
+  action: AccessActionKind;
+  target?: string;
+  element?: AccessElementKind;
+  /** L'étape après laquelle le symptôme apparaît (déduite du texte ; jamais une preuve). */
+  critical: boolean;
+}
+
+/** Une interprétation incertaine gardée avec sa confiance (zone métier, entité, action critique). */
+export interface AccessInterpretation {
+  kind: 'AREA' | 'ENTITY' | 'ACTION' | 'TRIGGER';
+  value: string;
+  confidence: number;
+  from: string;
+}
+
+/** Une portion de code candidate : trouvée par l'analyse statique et les mots du parcours, jamais confirmée ici. */
+export interface AccessCandidate {
+  id: string;
+  kind: ScopeResourceKind;
+  label: string;
+  ref: string;
+  applicationId?: string;
+  /** 0 à 1 : la force du rapprochement avec le parcours. */
+  confidence: number;
+  /** MATCHED : un mot du parcours touche la ressource ; UNCERTAIN : reliée, ou rapprochement faible. */
+  match: 'MATCHED' | 'UNCERTAIN';
+  /** Le statut dans le périmètre : DENIED ou INACCESSIBLE demande une extension approuvée. */
+  status: ScopeResourceStatus;
+  reasons: string[];
+  /** Ressource transversale (intercepteur, gestionnaire d'erreurs…) : au-delà de l'écran visible. */
+  transversal?: boolean;
+}
+
+/** Une piste d'investigation (blocage global, erreur silencieuse…) : à vérifier, jamais une cause présumée. */
+export interface AccessLead {
+  kind:
+    | 'ERROR_HANDLER'
+    | 'INTERCEPTOR'
+    | 'STREAM'
+    | 'LIFECYCLE'
+    | 'CHANGE_DETECTION'
+    | 'HANDLER'
+    | 'HTTP'
+    | 'STATE';
+  label: string;
+  why: string;
+  /** Les emplacements du code lu qui portent la piste (fichier:ligne) ; vide : rien trouvé dans le code lu. */
+  refs: string[];
+}
+
+/** Le résultat de « Analyser le parcours ». */
+export interface AccessAnalysis {
+  analyzedAt: string;
+  analyzedBy: string;
+  sources: ('TEXT' | 'STEPS' | 'RECORDING')[];
+  path: AccessPathStep[];
+  interpretations: AccessInterpretation[];
+  elements: { kind: AccessElementKind; label: string }[];
+  /** Les comportements anormaux décrits (catégories de défaillance, jamais des preuves). */
+  anomalies: SilentFailureKind[];
+  conditions: string[];
+  keywords: string[];
+  candidates: AccessCandidate[];
+  leads: AccessLead[];
+  /** Ce que l'analyse n'a pas pu faire, dit simplement (enregistrement introuvable, lecture des sources refusée…). */
+  limits: string[];
+}
+
+/**
+ * LE MODE D'ACCÈS : AUTO (l'écran cible et le symptôme suffisent : le moteur cherche le parcours et les
+ * conditions), GUIDED (les étapes connues mènent à l'écran, le moteur explore ensuite), DEMO (un
+ * enregistrement du module Enregistrements montre le parcours). Aucun n'exige de vidéo.
+ */
+export const ACCESS_MODES = ['AUTO', 'GUIDED', 'DEMO'] as const;
+export type AccessMode = (typeof ACCESS_MODES)[number];
+
+/** Un écran candidat pour la cible : route, composant, indices vérifiables, confiance. */
+export interface TargetCandidate {
+  route: string;
+  applicationId: string;
+  component?: string;
+  componentId?: string;
+  file?: string;
+  line?: number;
+  /** 0 à 1 : fondée sur les indices ; un nom seul ne dépasse jamais 0,45. */
+  confidence: number;
+  evidence: string[];
+  /** Seuls des noms (route, composant) correspondent : jamais une identification certaine. */
+  nameOnly: boolean;
+  guards: string[];
+}
+
+/** Une étape du parcours d'accès : navigation vers une route, ou clic sur un lien relevé dans un template. */
+export interface NavigationStep {
+  kind: 'NAVIGATE' | 'CLICK';
+  /** Le chemin (NAVIGATE) ou la cible « link:Libellé » (CLICK). */
+  target: string;
+  label: string;
+  /** La route atteinte après l'étape. */
+  route: string;
+  /** D'où vient l'étape : graphe des liens, étape connue, enregistrement, URL directe. */
+  source: 'LINKS' | 'GUIDED' | 'RECORDING' | 'DIRECT';
+  evidence?: string;
+}
+
+/** « Localiser l'écran » : les candidats, l'écran retenu et le parcours d'accès trouvé dans le code. */
+export interface TargetLocation {
+  locatedAt: string;
+  locatedBy: string;
+  query: string;
+  candidates: TargetCandidate[];
+  /** La route retenue (le meilleur candidat, ou celle choisie par la personne). */
+  chosen?: string;
+  entry: string;
+  path: NavigationStep[];
+  guards: string[];
+  limits: string[];
+}
+
+/** « Préparer l'exploration » : le parcours joué dans un vrai navigateur, l'écran atteint et son inventaire. */
+export interface TargetPreparation {
+  preparedAt: string;
+  preparedBy: string;
+  route: string;
+  reached: boolean;
+  finalUrl: string;
+  title: string;
+  steps: { summary: string; ok: boolean; error?: string }[];
+  inventory: {
+    buttons: string[];
+    fields: string[];
+    links: string[];
+    selects: string[];
+    disabled: string[];
+    dialogs: number;
+    overlays: number;
+    messages: string[];
+    loading: boolean;
+  };
+  /** Les requêtes vues pendant le parcours (méthode et chemin), les erreurs de page et de console. */
+  requests: string[];
+  errors: string[];
+  /** Ce qui empêche d'explorer (page de connexion, garde, route paramétrée, navigation refusée). */
+  blockers: string[];
+  screenshot?: string;
+  durationMs: number;
+}
+
+export interface IncidentAccess {
+  /** Le point de départ (« page d'accueil après connexion »). */
+  start?: string;
+  /** L'URL ou la route initiale, si connue. */
+  url?: string;
+  narrative: string;
+  steps: AccessStep[];
+  expected?: string;
+  observed?: string;
+  conditions?: string;
+  /** Les données de test nécessaires, décrites sans secret (masquées à l'enregistrement). */
+  testData?: string;
+  /** Le mode choisi (AUTO par défaut). */
+  mode?: AccessMode;
+  /** L'écran ou la fonctionnalité cible (« création d'un dossier »). */
+  target?: string;
+  /** Des indications de navigation, facultatives (« menu Dossiers, puis Nouveau »). */
+  hints?: string;
+  recording?: AccessRecordingLink;
+  analysis?: AccessAnalysis;
+  location?: TargetLocation;
+  preparation?: TargetPreparation;
+  /** Le dernier run du moteur lancé depuis l'écran cible (son suivi est celui des déclencheurs). */
+  exploration?: { runId: string; startedAt: string; startedBy: string; route: string };
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/** Ce que la personne envoie pour enregistrer le scénario. */
+export interface IncidentAccessInput {
+  start?: string;
+  url?: string;
+  narrative?: string;
+  steps?: { id?: string; text: string }[];
+  expected?: string;
+  observed?: string;
+  conditions?: string;
+  testData?: string;
+  mode?: AccessMode;
+  target?: string;
+  hints?: string;
+  /** Le nom d'un enregistrement du projet ; null le dissocie ; absent : inchangé. */
+  recording?: string | null;
+}
+
 /** Les sections du rapport, dans l'ordre ; un export peut n'en retenir qu'une partie. */
 export const REPORT_SECTIONS = [
   'summary',
@@ -132,6 +392,121 @@ export const SCOPE_TREE_MAX_NODES = 400;
 /** Les bornes de `limits.maxMemoryMb` (Mio). */
 export const MIN_MEMORY_MB = 64;
 export const MAX_MEMORY_MB = 16_384;
+
+// ── Découverte automatique du périmètre ───────────────────────────────────────────────────────
+
+/**
+ * La découverte : les manifestes sont cherchés jusqu'à SCOPE_DISCOVERY_DEPTH niveaux (quatre), l'arborescence
+ * des dossiers est lue plus profond (paquets Java) et bornée en nombre ; au plus SCOPE_DISCOVERY_MAX_MANIFESTS lus.
+ */
+export const SCOPE_DISCOVERY_DEPTH = 4;
+export const SCOPE_DISCOVERY_TREE_DEPTH = 9;
+export const SCOPE_DISCOVERY_MAX_NODES = 1500;
+export const SCOPE_DISCOVERY_MAX_MANIFESTS = 80;
+
+export const DISCOVERY_CONFIDENCES = ['HIGH', 'MEDIUM', 'LOW'] as const;
+export type DiscoveryConfidence = (typeof DISCOVERY_CONFIDENCES)[number];
+
+/** D'où vient une application du périmètre : détectée par la découverte automatique, ou saisie. */
+export interface ScopeApplicationOrigin {
+  kind: 'DISCOVERED' | 'MANUAL';
+  at: string;
+  /** La racine analysée (découverte) et ce qui a permis la détection. */
+  analyzedRoot?: string;
+  evidence?: string[];
+}
+
+/** Un module ou composant repéré dans une application (un dossier), et les mots de l'incident qu'il touche. */
+export interface DiscoveredModule {
+  /** Relatif à la racine de l'application. */
+  path: string;
+  name: string;
+  matched?: string[];
+}
+
+export interface DiscoveredApplication {
+  /** L'application prête pour le périmètre : identifiant unique, nom, couche déduite, racine absolue. */
+  application: ScopeApplication;
+  /** Relatif à la racine analysée (vide : la racine elle-même). */
+  path: string;
+  frameworks: string[];
+  languages: string[];
+  modules: DiscoveredModule[];
+  entryPoints: string[];
+  /** Les fichiers de configuration repérés (noms seulement, jamais leur contenu). */
+  configs: string[];
+  /** Les services et dépendances notables (HTTP, JPA, Kafka, clients REST…). */
+  services: string[];
+  confidence: DiscoveryConfidence;
+  /** Ce qui a permis la détection : « fichier : indice ». */
+  evidence: string[];
+  /** Ce que la découverte n'a pas pu déterminer (à demander). */
+  questions: string[];
+  /** La pertinence pour l'incident (0 à 1), et pourquoi. */
+  relevance: number;
+  reasons: string[];
+  /** Proposée dans le périmètre initial (cochée d'office). */
+  suggested: boolean;
+  /** L'identifiant de l'application du périmètre qui a déjà cette racine. */
+  alreadyInScope?: string;
+}
+
+export interface DiscoveryRelation {
+  /** Identifiants d'applications détectées. */
+  from: string;
+  to: string;
+  kind: 'CALLS' | 'USES';
+  status: 'STATICALLY_RESOLVED' | 'INFERRED';
+  evidence: string;
+}
+
+export const DISCOVERY_PROBLEM_CODES = [
+  'ROOT_RELATIVE',
+  'ROOT_MISSING',
+  'ROOT_NOT_DIRECTORY',
+  'ROOT_DENIED',
+  'READ_SOURCES_DENIED',
+  'ENVIRONMENT_CANNOT_LIST',
+  'NOTHING_RECOGNIZED',
+  'PARTIAL',
+] as const;
+export type DiscoveryProblemCode = (typeof DISCOVERY_PROBLEM_CODES)[number];
+
+/** Un problème de découverte : ce qui s'est passé, et comment le corriger. */
+export interface DiscoveryProblem {
+  code: DiscoveryProblemCode;
+  message: string;
+  hint: string;
+}
+
+/** Le résultat de l'analyse automatique d'un dépôt (lecture seule : rien n'est écrit dans l'incident). */
+export interface ScopeDiscovery {
+  root: string;
+  status: 'OK' | 'PARTIAL' | 'FAILED';
+  structure: 'SINGLE' | 'MONOREPO' | 'MULTI_APP' | 'UNKNOWN';
+  /** Les outils de dépôt reconnus (Nx, pnpm workspaces, Maven multi-module…). */
+  tools: string[];
+  applications: DiscoveredApplication[];
+  relations: DiscoveryRelation[];
+  problems: DiscoveryProblem[];
+  denied: { path: string; reason: string }[];
+  truncated: string[];
+  /** Les mots de l'incident retenus pour la pertinence. */
+  keywords: string[];
+  /** Les manifestes lus (relatifs à la racine), pour la traçabilité. */
+  read: string[];
+  discoveredAt: string;
+  /** La durée réelle de l'analyse, mesurée par le serveur. */
+  durationMs: number;
+}
+
+/** Un dépôt déjà connu de l'environnement d'investigation, proposé à la réutilisation. */
+export interface KnownRepository {
+  root: string;
+  label: string;
+  source: 'PROJECT' | 'SCOPE' | 'INCIDENT';
+  incidentId?: string;
+}
 
 /** Un dossier du dépôt d'une application, pour choisir le périmètre (lecture seule, profondeur bornée). */
 export interface ScopeTreeNode {
@@ -203,6 +578,8 @@ export interface ScopeApplication {
   logFiles?: string[];
   /** Consultation OpenShift (REMOTE facultatif, ARO) : lecture seule, dans ce namespace. */
   openshift?: { namespace: string; selector: string };
+  /** Absente : saisie à la main (fiches écrites avant la découverte automatique). */
+  origin?: ScopeApplicationOrigin;
 }
 
 export interface ScopePermissions {
@@ -790,6 +1167,8 @@ export interface Incident {
   execution: ExecutionEnvironmentConfig;
   scope: InvestigationScope;
   attachments?: IncidentAttachment[];
+  /** Le scénario d'accès et sa démonstration (point d'entrée de l'investigation). */
+  access?: IncidentAccess;
   state: IncidentState;
   /** L'état avant une annulation : la reprise y revient quand c'est possible. */
   cancelledFrom?: IncidentState;
@@ -828,6 +1207,8 @@ export interface InvestigationReport {
   environment: { execution: ExecutionEnvironmentConfig; environmentId?: string; baseUrl?: string };
   scope: InvestigationScope;
   scenario?: string;
+  /** Le scénario d'accès (texte, étapes, démonstration, enregistrement) et son analyse, quand il existe. */
+  access?: IncidentAccess;
   /** La chronologie : actions, requêtes et erreurs de la dernière reproduction, dans l'ordre. */
   timeline: { at?: string; step?: number; kind: string; summary: string; ref: string }[];
   requests: HttpExchange[];

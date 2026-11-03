@@ -61,8 +61,13 @@ Traçabilité → Full Stack ; Diagnostic → Diagnostic ; Rapport → Rapport ;
 
 1. **Déclarer** : liste → « Nouvel incident » → titre, gravité, observé, attendu, scénario, environnement
    du projet, cible d'exécution (LOCAL par défaut). Envoi → ouverture du Workspace, étape « Périmètre ».
-2. **Délimiter** : ajouter au moins une application (dépôt, dossiers, classes) et le scénario ;
-   valider le périmètre ; les extensions demandées attendent une décision (droit DECIDE).
+2. **Délimiter** : indiquer le chemin du projet (ou réutiliser un dépôt connu de l'environnement) et « Analyser
+   automatiquement » : les applications détectées (cadres, couche, modules, relations, preuves) sont cochées
+   quand elles sont proposées pour l'incident ; corriger une couche si la découverte n'a pu que la déduire ;
+   « Ajouter au périmètre » ; la saisie manuelle (identifiant, couche, racine, dossiers, classes) reste dans
+   « Paramètres avancés », repliée ; choisir les dossiers et le scénario ; valider le périmètre ; les extensions
+   demandées attendent une décision (droit DECIDE). Une fois l'investigation commencée, le même bloc demande des
+   extensions du périmètre au lieu de le modifier.
 3. **Choisir l'environnement** : trois cartes LOCAL / REMOTE / ARO ; ARO exige namespace, ServiceAccount,
    image et montage des dépôts ; « Enregistrer l'environnement » (modification par révision, 409 relu).
 4. **Reproduire** : lancement Playwright ; la progression montre « Reproduction : en cours » ; la page
@@ -94,20 +99,20 @@ mène à l'étape (bouton `ws-ux-stage`).
 Chaque panneau utilise `panelState()` : chargement (`aria-busy`), vide (texte qui dit quoi faire),
 erreur (`role="alert"` et « Réessayer »), accès refusé (texte, sans bouton d'action).
 
-| Écran                | Chargement                  | Vide                                     | Erreur                                  | Accès refusé                        | Démonstration           | En cours / suivi                                                          | Annulé                                            |
-| -------------------- | --------------------------- | ---------------------------------------- | --------------------------------------- | ----------------------------------- | ----------------------- | ------------------------------------------------------------------------- | ------------------------------------------------- |
-| Liste des incidents  | squelette « Chargement… »   | « Aucun incident » + « Nouvel incident » | message + Réessayer                     | liste en lecture, sans création     | ligne marquée Démo      | état « Reproduction en cours » en pastille                                | pastille « Annulé »                               |
-| Déclaration          | bouton occupé (`aria-busy`) | formulaire vierge, LOCAL coché           | champs `aria-invalid` + `role="alert"`  | formulaire absent                   | —                       | envoi en cours, bouton désactivé                                          | « Annuler » ferme le formulaire                   |
-| Périmètre            | carte occupée               | « Aucune application »                   | validation : liste des problèmes        | lecture seule, pas d'édition        | bandeau                 | —                                                                         | édition indisponible                              |
-| Environnement        | capacités « Chargement… »   | capacités inconnues : texte général      | message sous les cartes, `role="alert"` | « Lecture seule » ; cartes visibles | bandeau                 | enregistrement : bouton occupé ; reproduction : indisponible selon l’état | indisponible, motif affiché                       |
-| Reproduction         | —                           | « Aucune reproduction terminée »         | erreur du run                           | pas de lancement                    | bandeau                 | spinner, relecture 1,5 s, étape « en cours »                              | run arrêté, « Reprendre »                         |
-| Preuves / Requêtes   | panneau occupé              | « Aucune requête capturée »              | panneau erreur                          | panneau refusé                      | bandeau                 | liste qui grandit                                                         | figée                                             |
-| Traçabilité (graphe) | panneau occupé              | « Analyse non lancée » + action          | panneau erreur                          | panneau refusé                      | bandeau + légende       | redessin sans perdre zoom ni sélection                                    | figé                                              |
-| Code                 | extrait « Chargement… »     | « Fichier hors périmètre » ou vide       | refus du Scope Policy Engine (motif)    | droit de lecture absent             | bandeau                 | —                                                                         | lecture seule                                     |
-| Diagnostic           | —                           | « Pas encore de diagnostic »             | erreur de l'opération                   | pas d'action                        | bandeau                 | expérience en cours : pastille, relecture                                 | actions indisponibles                             |
-| Rapport              | « Chargement… »             | « Établir le diagnostic d'abord »        | message + Réessayer                     | lecture seule                       | bandeau dans le rapport | —                                                                         | rapport lisible                                   |
-| Non-régression       | bouton occupé               | « Pas encore proposé »                   | erreur d'exécution                      | validation masquée sans PUBLISH     | bandeau                 | exécution en cours                                                        | indisponible                                      |
-| Workspace (en-tête)  | squelette + identifiant     | —                                        | `messages()` (zone d'erreur)            | mention « Lecture seule »           | `demoBanner`            | pastille « Reproduction : en cours » + étape animée                       | « Annulé (annulé à l'état « … ») », étape Bloquée |
+| Écran                | Chargement                            | Vide                                           | Erreur                                                                         | Accès refusé                              | Démonstration           | En cours / suivi                                                          | Annulé                                            |
+| -------------------- | ------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------- | ----------------------- | ------------------------------------------------------------------------- | ------------------------------------------------- |
+| Liste des incidents  | squelette « Chargement… »             | « Aucun incident » + « Nouvel incident »       | message + Réessayer                                                            | liste en lecture, sans création           | ligne marquée Démo      | état « Reproduction en cours » en pastille                                | pastille « Annulé »                               |
+| Déclaration          | bouton occupé (`aria-busy`)           | formulaire vierge, LOCAL coché                 | champs `aria-invalid` + `role="alert"`                                         | formulaire absent                         | —                       | envoi en cours, bouton désactivé                                          | « Annuler » ferme le formulaire                   |
+| Périmètre            | carte occupée ; « Analyse en cours… » | « Aucune application » ; « Aucun dépôt connu » | validation : liste des problèmes ; découverte : problème expliqué + correction | lecture seule, pas d'édition ni d'analyse | bandeau                 | —                                                                         | édition indisponible                              |
+| Environnement        | capacités « Chargement… »             | capacités inconnues : texte général            | message sous les cartes, `role="alert"`                                        | « Lecture seule » ; cartes visibles       | bandeau                 | enregistrement : bouton occupé ; reproduction : indisponible selon l’état | indisponible, motif affiché                       |
+| Reproduction         | —                                     | « Aucune reproduction terminée »               | erreur du run                                                                  | pas de lancement                          | bandeau                 | spinner, relecture 1,5 s, étape « en cours »                              | run arrêté, « Reprendre »                         |
+| Preuves / Requêtes   | panneau occupé                        | « Aucune requête capturée »                    | panneau erreur                                                                 | panneau refusé                            | bandeau                 | liste qui grandit                                                         | figée                                             |
+| Traçabilité (graphe) | panneau occupé                        | « Analyse non lancée » + action                | panneau erreur                                                                 | panneau refusé                            | bandeau + légende       | redessin sans perdre zoom ni sélection                                    | figé                                              |
+| Code                 | extrait « Chargement… »               | « Fichier hors périmètre » ou vide             | refus du Scope Policy Engine (motif)                                           | droit de lecture absent                   | bandeau                 | —                                                                         | lecture seule                                     |
+| Diagnostic           | —                                     | « Pas encore de diagnostic »                   | erreur de l'opération                                                          | pas d'action                              | bandeau                 | expérience en cours : pastille, relecture                                 | actions indisponibles                             |
+| Rapport              | « Chargement… »                       | « Établir le diagnostic d'abord »              | message + Réessayer                                                            | lecture seule                             | bandeau dans le rapport | —                                                                         | rapport lisible                                   |
+| Non-régression       | bouton occupé                         | « Pas encore proposé »                         | erreur d'exécution                                                             | validation masquée sans PUBLISH           | bandeau                 | exécution en cours                                                        | indisponible                                      |
+| Workspace (en-tête)  | squelette + identifiant               | —                                              | `messages()` (zone d'erreur)                                                   | mention « Lecture seule »                 | `demoBanner`            | pastille « Reproduction : en cours » + étape animée                       | « Annulé (annulé à l'état « … ») », étape Bloquée |
 
 Une seule zone `aria-live="polite"` par page annonce ce qui change : `p.inc-live` (`role="status"`,
 `aria-atomic`), un nœud **permanent** du Shadow DOM, créé une fois à côté de la partie redessinée
@@ -197,10 +202,14 @@ Règles : tout en flex/grid ; chaque panneau `min-height:0; min-width:0; overflo
 
 ## 6. Langage visuel
 
-- **Coquille** : panneau de navigation sombre (`--qa-color-panel`, indigo nuit) déjà en place ; contenu
-  sur fond clair (`--qa-color-background`) en cartes blanches (`.card`, rayon `--qa-radius`).
-- **Accent** : `--qa-color-primary` (bleu indigo) pour la sélection, l'étape actuelle, l'onglet actif ;
+- **Coquille** : panneau de navigation vert foncé (`--qa-color-panel`, `#004D2B`) avec le motif de facettes
+  au bas du menu ; contenu sur fond clair (`--qa-color-background`) en cartes blanches (`.card`, rayon
+  `--qa-radius`).
+- **Accent** : `--qa-color-primary` (vert `#006B3F`) pour la sélection, l'étape actuelle, l'onglet actif ;
   en-tête du Workspace avec liseré gauche de l'accent.
+- **Capture de référence** : `captures/scope-1440-full.png`, l'étape Périmètre complète à 1440 px (menu,
+  en-tête, étapes, vues, bandeau, « Applications et dépôts » avec un résultat d'analyse réel, « Définition
+  du périmètre », extensions), prise par Chromium sur le serveur SDK réel.
 - **Typographie** : IBM Plex Sans, IBM Plex Mono pour code, chemins, requêtes.
 - **Pastilles** : `.pill` ok / ko / warn / live / mu (états, gravité, diagnostic, verdicts).
 - **Relations** (`incident-parts.ts`) : Observée = accent, trait plein épais ; Lue dans le code = succès,

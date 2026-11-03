@@ -25,6 +25,8 @@ import {
   type WorkspaceContext,
 } from './incident-parts.js';
 import { INCIDENT_SCOPE_CSS } from './incident-scope.js';
+import { INCIDENT_SCOPE_DISCOVERY_CSS } from './incident-scope-discovery.js';
+import { INCIDENT_ACCESS_CSS } from './incident-access.js';
 import { esc } from './view.js';
 
 /**
@@ -1275,6 +1277,17 @@ export function workspaceTabs(ctx: WorkspaceContext): UxTab[] {
  * (`ws-ux-tab`, `data-tab`, id `ws-ux-tab-<clé>`) ou les sous-onglets (`ws-ux-sub`, `data-sub`, id
  * `ws-ux-sub-<clé>`) ; tous commandent le panneau `ws-ux-panel`. `tools` : des outils à droite de la barre.
  */
+/** L'icône de chaque vue principale (la maquette : une icône devant chaque onglet). */
+const MAIN_TAB_ICONS: Record<string, string> = {
+  overview: 'overview',
+  timeline: 'play',
+  traceability: 'trends',
+  code: 'code',
+  diagnosis: 'explorations',
+  trigger: 'library',
+  report: 'requirements',
+};
+
 export function renderTabs(
   ctx: WorkspaceContext,
   tabs: UxTab[],
@@ -1289,7 +1302,8 @@ export function renderTabs(
       const ident = sub
         ? `id="ws-ux-sub-${esc(tab.key)}" data-action="ws-ux-sub" data-sub="${esc(tab.key)}"`
         : `id="ws-ux-tab-${esc(tab.key)}" data-action="ws-ux-tab" data-tab="${esc(tab.key)}"`;
-      return `<button type="button" role="tab" ${ident} aria-selected="${String(selected)}" aria-controls="ws-ux-panel" tabindex="${selected ? '0' : '-1'}">${esc(tab.label)}${tab.count !== undefined ? ` <span class="ws-ux-count"><span aria-hidden="true">${String(tab.count)}</span><span class="sr">${esc(t.count(tab.count))}</span></span>` : ''}</button>`;
+      const glyph = sub ? '' : (MAIN_TAB_ICONS[tab.key] ?? '');
+      return `<button type="button" role="tab" ${ident} aria-selected="${String(selected)}" aria-controls="ws-ux-panel" tabindex="${selected ? '0' : '-1'}">${glyph ? icon(glyph) : ''}${esc(tab.label)}${tab.count !== undefined ? ` <span class="ws-ux-count"><span aria-hidden="true">${String(tab.count)}</span><span class="sr">${esc(t.count(tab.count))}</span></span>` : ''}</button>`;
     })
     .join('')}</div>`;
   return opts.tools !== undefined
@@ -1675,7 +1689,8 @@ export const INCIDENT_FLOW_CSS = `
 export const INCIDENT_UX_CSS = `
 .ws-ux-head{display:flex;flex-direction:column;gap:4px;padding:4px 10px;border-radius:12px;background:var(--qa-color-surface);border:1px solid var(--qa-color-border);border-left:4px solid var(--qa-color-primary);min-width:0}
 .ws-ux-head-top{display:flex;align-items:center;gap:4px 10px;flex-wrap:wrap;min-width:0}
-.ws-ux-head-top>.back{flex:none;min-height:32px}
+.ws-ux-head-top>.back{flex:none;min-height:32px;padding:0 12px 0 8px;border-radius:9px;background:var(--qa-color-primary-soft);color:var(--qa-color-primary-2);font-weight:600}
+.ws-ux-head-top>.back:hover{text-decoration:none;background:var(--qa-color-primary-soft-2)}
 .ws-ux-head-t{display:flex;align-items:center;gap:6px 8px;min-width:0;flex:1 1 280px;flex-wrap:nowrap}
 .ws-ux-eyebrow{margin:0;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--qa-color-muted);font-weight:600}
 .ws-ux-head h1{margin:0;font-size:17px;line-height:1.3;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:8ch;max-width:100%;flex:0 1 auto}
@@ -1715,18 +1730,17 @@ export const INCIDENT_UX_CSS = `
 .ws-ux-stepper-row .ws-ux-step-row{flex-wrap:nowrap;gap:6px}
 .ws-ux-steps-row{list-style:none;margin:0;padding:2px 0;display:flex;align-items:center;gap:0;flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scroll-padding-inline:24px;background:linear-gradient(to right,var(--qa-color-background) 40%,transparent) left / 24px 100% no-repeat local,linear-gradient(to left,var(--qa-color-background) 40%,transparent) right / 24px 100% no-repeat local,radial-gradient(farthest-side at 0 50%,color-mix(in srgb,var(--qa-color-text) 22%,transparent),transparent) left / 10px 100% no-repeat scroll,radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--qa-color-text) 22%,transparent),transparent) right / 10px 100% no-repeat scroll}
 .ws-ux-sr{flex:none;display:flex;align-items:center}
-.ws-ux-sr+.ws-ux-sr::before{content:"";flex:none;width:8px;height:1px;background:var(--qa-color-border-strong)}
-.ws-ux-sr.ws-ux-s-done+.ws-ux-sr::before{background:var(--qa-color-success)}
+.ws-ux-sr+.ws-ux-sr{margin-left:2px}
 .ws-ux-sr button{display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:0 7px 0 3px;border:1px solid transparent;border-radius:999px;background:transparent;color:var(--qa-color-muted);font:inherit;font-size:12.5px;white-space:nowrap;cursor:pointer}
 .ws-ux-sr button:hover{background:var(--qa-color-surface-2);color:var(--qa-color-text)}
-.ws-ux-sn{width:21px;height:21px;border-radius:50%;display:grid;place-items:center;font-size:11.5px;font-weight:700;border:1.5px solid var(--qa-color-border-strong);background:var(--qa-color-surface);color:var(--qa-color-muted);flex:none}
+.ws-ux-sn{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;border:1.5px solid var(--qa-color-border-strong);background:var(--qa-color-surface-2);color:var(--qa-color-muted);flex:none}
 .ws-ux-sn .ico{width:12px;height:12px;stroke-width:3}
 .ws-ux-sn .spin{width:12px;height:12px}
-.ws-ux-sr.ws-ux-s-todo .ws-ux-sn{border-style:dashed}
+.ws-ux-sr.ws-ux-s-todo .ws-ux-sn{border-style:solid;border-color:var(--qa-color-border-strong);background:var(--qa-color-surface)}
 .ws-ux-sr.ws-ux-s-done button{color:var(--qa-color-text)}
-.ws-ux-sr.ws-ux-s-done .ws-ux-sn{border-color:var(--qa-color-success);background:var(--qa-color-success-soft);color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text))}
-.ws-ux-sr button[aria-current="step"]{background:color-mix(in srgb,var(--qa-color-primary) 10%,var(--qa-color-surface));border-color:color-mix(in srgb,var(--qa-color-primary) 40%,transparent);color:var(--qa-color-primary);font-weight:600}
-.ws-ux-sr button[aria-current="step"] .ws-ux-sn{background:var(--qa-color-primary);border-color:var(--qa-color-primary);border-style:solid;color:var(--qa-color-surface)}
+.ws-ux-sr.ws-ux-s-done .ws-ux-sn{border-color:var(--qa-color-success);background:var(--qa-color-success);color:var(--qa-color-surface)}
+.ws-ux-sr button[aria-current="step"]{background:var(--qa-color-primary-soft);border-color:color-mix(in srgb,var(--qa-color-primary) 40%,transparent);color:var(--qa-color-primary-2);font-weight:600}
+.ws-ux-sr button[aria-current="step"] .ws-ux-sn{background:var(--qa-color-surface);border-color:var(--qa-color-primary);border-style:solid;color:var(--qa-color-primary-2)}
 .ws-ux-sr.ws-ux-s-blocked button{color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
 .ws-ux-sr.ws-ux-s-blocked .ws-ux-sn{border-color:var(--qa-color-danger);border-style:dashed;background:var(--qa-color-danger-soft);color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
 .ws-ux-sr.ws-ux-s-running .ws-ux-sn{box-shadow:0 0 0 3px color-mix(in srgb,var(--qa-color-primary) 20%,transparent)}
@@ -1742,18 +1756,25 @@ export const INCIDENT_UX_CSS = `
 .ws-ux-stage-t{display:flex;flex-direction:column;gap:1px;min-width:0}
 .ws-ux-stage-t b{font-size:13px;font-weight:600;overflow-wrap:normal;hyphens:manual}
 .ws-ux-stage-t small{font-size:12px;color:var(--qa-color-muted);display:inline-flex;align-items:center;justify-content:center;gap:4px}
-.ws-ux-s-done .ws-ux-dot{border-color:var(--qa-color-success);background:var(--qa-color-success-soft);color:color-mix(in srgb,var(--qa-color-success) 62%,var(--qa-color-text))}
-.ws-ux-s-current .ws-ux-dot{border-color:var(--qa-color-primary);background:var(--qa-color-primary);color:var(--qa-color-surface)}
+.ws-ux-s-done .ws-ux-dot{border-color:var(--qa-color-success);background:var(--qa-color-success);color:var(--qa-color-surface)}
+.ws-ux-s-current .ws-ux-dot{border-color:var(--qa-color-primary);background:var(--qa-color-primary-soft);color:var(--qa-color-primary-2)}
 .ws-ux-s-current .ws-ux-stage-t small{color:var(--qa-color-primary);font-weight:600}
 .ws-ux-s-blocked .ws-ux-dot{border-color:var(--qa-color-danger);border-style:dashed;background:var(--qa-color-danger-soft);color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text))}
 .ws-ux-s-blocked .ws-ux-stage-t small{color:color-mix(in srgb,var(--qa-color-danger) 75%,var(--qa-color-text));font-weight:600}
-.ws-ux-s-todo .ws-ux-dot{border-style:dashed}
+.ws-ux-s-todo .ws-ux-dot{border-style:solid;border-color:var(--qa-color-border-strong);background:var(--qa-color-surface)}
 .ws-ux-s-running .ws-ux-dot{box-shadow:0 0 0 4px color-mix(in srgb,var(--qa-color-primary) 20%,transparent)}
 .ws-ux-tabbar{display:flex;align-items:flex-end;justify-content:space-between;gap:4px 12px;min-width:0;border-bottom:1px solid var(--qa-color-border)}
 .ws-ux-tabbar>.ws-ux-tabs{flex:1 1 auto;min-width:0;border-bottom:0}
 .ws-ux-tabtools{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:nowrap;padding:2px 0 4px;min-width:0;flex:none}
 .ws-ux-tabs{position:relative;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;row-gap:0}
-.ws-ux-tabs button{position:relative;white-space:nowrap;min-height:38px;flex:none}
+.ws-ux-tabs button{position:relative;white-space:nowrap;min-height:38px;flex:none;display:inline-flex;align-items:center;gap:8px}
+.ws-ux-tabs:not(.ws-ux-subtabs){border-bottom:0;padding:4px;gap:4px;border-radius:12px;background:var(--qa-color-surface);border:1px solid var(--qa-color-border)}
+.ws-ux-tabs:not(.ws-ux-subtabs) button{border-bottom:0;margin-bottom:0;border-radius:9px;padding:0 14px;color:var(--qa-color-text);font-weight:500}
+.ws-ux-tabs:not(.ws-ux-subtabs) button .ico{width:16px;height:16px;color:var(--qa-color-muted)}
+.ws-ux-tabs:not(.ws-ux-subtabs) button[aria-selected="true"]{background:var(--qa-color-primary-soft);color:var(--qa-color-primary-2);font-weight:600}
+.ws-ux-tabs:not(.ws-ux-subtabs) button[aria-selected="true"] .ico{color:var(--qa-color-primary-2)}
+.ws-ux-tabs:not(.ws-ux-subtabs) button:hover:not([aria-selected="true"]){background:var(--qa-color-surface-2);border-radius:9px}
+.ws-ux-tabbar:has(>.ws-ux-tabs:not(.ws-ux-subtabs)){border-bottom:0}
 .ws-ux-subtabs button{min-height:32px;padding:0 12px;font-size:13px}
 .ws-ux-subbar{border-bottom-style:dashed}
 .ws-ux-count{display:inline-flex;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border);font-size:12px;align-items:center;justify-content:center;font-weight:600}
@@ -1853,4 +1874,6 @@ export const INCIDENT_UX_CSS = `
 }
 @media (prefers-reduced-motion:reduce){.ws-ux-s-running .ws-ux-dot,.ws-ux-s-running .ws-ux-sn{box-shadow:none}}
 ${INCIDENT_SCOPE_CSS}
+${INCIDENT_SCOPE_DISCOVERY_CSS}
+${INCIDENT_ACCESS_CSS}
 ${INCIDENT_FLOW_CSS}`;

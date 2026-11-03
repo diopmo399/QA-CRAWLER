@@ -156,6 +156,24 @@ export interface AngularLink {
   text?: string;
 }
 
+/**
+ * LA NAVIGATION LUE DANS LE CODE : les routes (redirections, gardes), les liens des templates (`routerLink`,
+ * `href` interne) avec leur libellé visible, et les titres des écrans. Elle sert à localiser un écran cible et à
+ * trouver un parcours d'accès ; ce sont des indices statiques, vérifiés ensuite dans le navigateur.
+ */
+export interface AngularNavigation {
+  routes: {
+    path: string;
+    component?: string;
+    redirectTo?: string;
+    guards: string[];
+    file: string;
+    line: number;
+  }[];
+  links: { componentId?: string; file: string; line: number; target: string; label: string }[];
+  headings: { componentId: string; file: string; line: number; text: string }[];
+}
+
 export interface AngularModel {
   applicationId: string;
   /** Ce que l'application utilise réellement (lu dans le code ; absent : inconnu, jamais supposé). */
@@ -174,6 +192,8 @@ export interface AngularModel {
   };
   nodes: AngularNode[];
   links: AngularLink[];
+  /** La navigation lue dans le code (routes, liens, titres) ; absente d'un modèle plus ancien. */
+  navigation?: AngularNavigation;
   /** Fichiers lus, refusés, limites. */
   files: number;
   denied: string[];
@@ -513,6 +533,8 @@ export interface TriggerRun {
   limitations: string[];
   stopReason?: string;
   error?: string;
+  /** Le point d'entrée imposé (écran cible), gardé pour la reprise. */
+  entry?: TriggerEntry;
   /** Le point de reprise : la stratégie et l'essai où tout s'est arrêté. */
   resumePoint?: { strategy: ExplorationStrategy; trialIndex: number };
 }
@@ -526,6 +548,18 @@ export interface TriggerInvestigationInput {
   repeats?: number;
   /** Seuil de fréquence (0 à 1) au-delà duquel une condition est dite nécessaire. */
   confidenceThreshold?: number;
+  /**
+   * Le point d'entrée imposé (écran cible) : les actions qui y mènent, rejouées avant chaque essai. Absent :
+   * la route la plus pertinente de la découverte du périmètre.
+   */
+  entry?: TriggerEntry;
+}
+
+/** Le point d'entrée d'un run : la route visée et le parcours (navigation, clics sur des liens) qui y mène. */
+export interface TriggerEntry {
+  route: string;
+  actions: TriggerAction[];
+  source: 'TARGET';
 }
 
 export const DEFAULT_TRIGGER_BUDGET: Readonly<Record<TriggerDepth, TriggerBudget>> = Object.freeze({

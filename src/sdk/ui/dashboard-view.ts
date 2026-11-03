@@ -63,6 +63,10 @@ export { formatDate, pill, readiness } from './dashboard-parts.js';
  * du SDK tel quel ; un taux dit son numérateur, son dénominateur et son périmètre ; une valeur saisie
  * ou un secret n'apparaît jamais (le SDK ne les renvoie pas, et rien n'est reconstitué ici).
  */
+/** L'araignée du logo (icône locale, traits blancs sur le fond du menu) : QA-CRAWLER parcourt l'application. */
+const SPIDER_SVG =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="14" rx="3.6" ry="4.4"/><circle cx="12" cy="8.2" r="2.2"/><path d="M8.6 12.2 4.2 9.4 2.6 5.6M8.4 14.6H3.4l-1.4 3.2M8.8 16.8 5 19.4l-.6 3M15.4 12.2l4.4-2.8 1.6-3.8M15.6 14.6h5l1.4 3.2M15.2 16.8l3.8 2.6.6 3"/></svg>';
+
 export const PROJECT_TABS = ['launch', 'environments', 'scenarios', 'executions', 'security'] as const;
 export type ProjectTab = (typeof PROJECT_TABS)[number];
 
@@ -143,6 +147,11 @@ export interface DashboardState {
   phase: 'idle' | 'loading' | 'ready' | 'error';
   error?: string;
   route: DashboardRoute;
+  /**
+   * Pendant le chargement d'un autre écran : celui dont le contenu reste affiché (grisé, inactif). Le menu
+   * suit déjà la nouvelle route, le contenu change quand ses données sont là.
+   */
+  shown?: DashboardRoute;
   days: number;
   overview?: OverviewView;
   projects?: ProjectSummary[];
@@ -295,12 +304,16 @@ export function renderDashboard(state: DashboardState): string {
       : '';
   return `<div class="dash" data-menu="${state.menuOpen ? 'open' : 'closed'}">
 <nav class="side" aria-label="${esc(t.tag)}">
-<div class="top"><div class="brand"><span class="logo" aria-hidden="true">Q</span><span><b>${esc(t.product)}</b><small>${esc(t.tag)}</small></span></div><button class="menu-btn" data-action="menu" aria-expanded="${state.menuOpen ? 'true' : 'false'}" aria-controls="qa-drawer">${icon(state.menuOpen ? 'close' : 'menu')}<span>${esc(state.menuOpen ? t.menuClose : t.menu)}</span></button></div>
-<div class="drawer" id="qa-drawer">${context}${sections}${foot}</div>
+<div class="top"><div class="brand"><span class="logo" aria-hidden="true">${SPIDER_SVG}</span><span><b>${esc(t.product)}</b><small>${esc(t.tag)}</small></span></div><button class="menu-btn" data-action="menu" aria-expanded="${state.menuOpen ? 'true' : 'false'}" aria-controls="qa-drawer">${icon(state.menuOpen ? 'close' : 'menu')}<span>${esc(state.menuOpen ? t.menuClose : t.menu)}</span></button></div>
+<div class="drawer" id="qa-drawer">${context}${sections}${SIDE_WAVE}${foot}</div>
 </nav>
-<main class="main">${state.notice ? `<p class="notice" role="status">${esc(state.notice)}</p>` : ''}${body(state)}</main>
+<main class="main"${state.shown ? ' aria-busy="true" inert' : ''}>${state.notice ? `<p class="notice" role="status">${esc(state.notice)}</p>` : ''}${body(state.shown ? { ...state, route: state.shown } : state)}</main>
 </div>`;
 }
+
+/** Le motif au bas du menu (décor de la maquette) : trois facettes à bords droits en vert secondaire, en diagonale montante. */
+const SIDE_WAVE =
+  '<svg class="side-wave" viewBox="0 0 240 126" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d="M0 124L240 10V126H0z" fill="var(--qa-color-secondary)" opacity=".3"/><path d="M63 126L157 54L240 102V126z" fill="var(--qa-color-secondary)" opacity=".55"/><path d="M157 54L240 10V102z" fill="var(--qa-color-secondary)" opacity=".92"/></svg>';
 
 function body(state: DashboardState): string {
   const t = state.t;

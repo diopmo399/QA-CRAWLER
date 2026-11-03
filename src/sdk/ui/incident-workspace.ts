@@ -1,3 +1,4 @@
+import { renderAccessSummary } from './incident-access.js';
 import {
   incidentReproduction,
   type CodeLayer,
@@ -903,7 +904,8 @@ function documentBody(ctx: WorkspaceContext, ws: WorkspaceUi, tab: WorkspaceTab,
       return `${renderEnvironmentSelector(ctx, ws.ux, ws.capabilities, ws.environment ? { environment: ws.environment } : {})}${failed}`;
     }
     case 'run':
-      return renderReproductionRun(ctx, ws.repro, reproductionMedia(ws));
+      // Le scénario d'accès guide la reproduction : rappelé au-dessus de l'exécution.
+      return `${renderAccessSummary(ctx.lang, ctx.incident.access, ctx.incident)}${renderReproductionRun(ctx, ws.repro, reproductionMedia(ws))}`;
     case 'evidence':
       return renderEvidence(ctx, ws.repro, reproductionMedia(ws));
     case 'timeline':
@@ -943,7 +945,7 @@ function documentBody(ctx: WorkspaceContext, ws: WorkspaceUi, tab: WorkspaceTab,
     case 'regression':
       return renderRegressionTest(ctx, ws.dx, ws.regressionSpec);
     default:
-      return `${renderOverview(ctx)}${renderAttachmentsCard(ctx, ws.att, ws.busy)}`;
+      return `${renderOverview(ctx)}${renderAccessSummary(ctx.lang, ctx.incident.access, ctx.incident)}${renderAttachmentsCard(ctx, ws.att, ws.busy)}`;
   }
 }
 
@@ -1197,12 +1199,20 @@ export function renderWorkspace(view: WorkspaceView): string {
   };
   const subs = subTabsOf(ctx, route.tab);
   const tools = `${renderHiddenBar(ws.split, specs, splitOpts)}<button type="button" class="ws-tool" data-action="ws-ux-compact" aria-pressed="${String(ws.compact)}" title="${esc(t.compactHint)}">${icon('sliders')}<span>${esc(t.compact)}</span></button><button type="button" class="ws-tool" data-action="ws-split-reset" title="${esc(splitText(view.lang).reset)}">${icon('undo')}<span class="sr">${esc(splitText(view.lang).reset)}</span></button>`;
-  const mainBar = renderTabs(ctx, mainTabsOf(ctx), route.tab, { kind: 'main', tools });
+  // Les outils (panneaux masqués, mode compact, réinitialisation) : sur la ligne des sous-onglets quand il y en a une.
+  const hasSub = subs.length > 0 && route.sub !== undefined;
+  const mainBar = renderTabs(
+    ctx,
+    mainTabsOf(ctx),
+    route.tab,
+    hasSub ? { kind: 'main' } : { kind: 'main', tools },
+  );
   const subBar =
     subs.length > 0 && route.sub
       ? renderTabs(ctx, subs, route.sub, {
           kind: 'sub',
           label: ux.subTabsLabel(ux.mainTabs[route.tab] ?? route.tab),
+          tools,
         })
       : '';
   const labelledBy = route.sub && subs.length > 0 ? `ws-ux-sub-${route.sub}` : `ws-ux-tab-${route.tab}`;
@@ -1234,6 +1244,10 @@ export const DEMO_DISABLED_ACTIONS = [
   'inc-ext-reject',
   'inc-app-add',
   'inc-app-remove',
+  'inc-disc-run',
+  'inc-disc-known',
+  'inc-disc-apply',
+  'inc-disc-clear',
   'ws-ux-target-save',
   'ws-ux-check',
   'ws-repro-start',

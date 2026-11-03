@@ -42,6 +42,7 @@ import {
 } from './dashboard-requirements.js';
 import { DASHBOARD_CSS } from './dashboard-styles.js';
 import {
+  activeNav,
   liveSteps,
   PERIODS,
   PROJECT_TABS,
@@ -119,6 +120,7 @@ export class QaCrawlerDashboard extends Base {
   private testsTimer?: ReturnType<typeof setTimeout>;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
   private generation = 0;
+  private projectLoad?: { generation: number; projectId: string; promise: Promise<void> };
   /** Le fichier choisi pour un import (jamais dans l'état rendu). */
   private file?: File;
 
@@ -1598,11 +1600,16 @@ export class QaCrawlerDashboard extends Base {
       this.state.graph = undefined;
       this.state.severity = 'ALL';
     }
+    // D'un menu à l'autre : le menu suit tout de suite, l'écran quitté reste affiché, inactif, jusqu'à ce
+    // que le nouveau soit prêt. Dans le même menu (éditeur, détail d'une exécution), l'écran reste utilisable.
+    const switching = activeNav(route) !== activeNav(this.state.route);
+    if (switching && this.state.phase === 'ready') this.state.shown ??= this.state.route;
     this.state.route = route;
     this.state.confirm = undefined;
     this.state.notice = undefined;
     this.state.menuOpen = false;
     this.emit(DASHBOARD_EVENTS.navigate, { route });
+    if (switching) this.paint();
     void this.load();
   }
 
@@ -1616,6 +1623,7 @@ export class QaCrawlerDashboard extends Base {
     const api = this.api;
     if (!api) {
       this.state.phase = 'idle';
+      this.state.shown = undefined;
       this.paint();
       return;
     }
@@ -1626,13 +1634,23 @@ export class QaCrawlerDashboard extends Base {
       this.paint();
     }
     try {
-      const [capabilities, catalog] = await Promise.all([api.capabilities(), api.projects.list()]);
+      const scope = 'projectId' in route && route.projectId ? route.projectId : this.state.projectId;
+      // Une seule attente commune : le projet de l'écran se lit avec le catalogue et les droits, et les
+      // capacités du serveur (fixes) ne se relisent qu'au premier chargement ou après une erreur.
+      if ('projectId' in route && route.projectId && route.view !== 'execution')
+        void this.loadProject(api, route.projectId, generation).catch(() => undefined);
+      const [capabilities, catalog, me] = await Promise.all([
+        this.state.phase === 'ready' && this.state.capabilities
+          ? this.state.capabilities
+          : api.capabilities(),
+        api.projects.list(),
+        api.access.me(scope ? { projectId: scope } : {}).catch(() => undefined),
+      ]);
       if (generation !== this.generation) return;
       this.state.capabilities = capabilities;
       this.state.cancellation = capabilities.cancellation;
       this.state.catalog = catalog.filter((project) => project.state === 'ACTIVE');
-      const scope = 'projectId' in route && route.projectId ? route.projectId : this.state.projectId;
-      this.state.me = await api.access.me(scope ? { projectId: scope } : {}).catch(() => undefined);
+      this.state.me = me;
       if (route.view === 'overview') {
         this.state.overview = await api.overview.get({ days: this.state.days });
       } else if (route.view === 'projects') {
@@ -1642,8 +1660,8 @@ export class QaCrawlerDashboard extends Base {
       } else if (route.view === 'history') {
         await this.loadProject(api, route.projectId, generation);
       } else if (route.view === 'scenarios') {
-        await this.loadProject(api, route.projectId, generation);
-        const [history, recordings, blocks] = await Promise.all([
+        const [, history, recordings, blocks] = await Promise.all([
+          this.loadProject(api, route.projectId, generation),
           api.scenarios.history(route.projectId),
           api.recordings.list(route.projectId).catch(() => []),
           api.library.list(route.projectId).catch(() => []),
@@ -1653,8 +1671,10 @@ export class QaCrawlerDashboard extends Base {
         this.state.recordings = recordings;
         this.state.lib.blocks = blocks;
       } else if (route.view === 'library') {
-        await this.loadProject(api, route.projectId, generation);
-        const blocks = await api.library.list(route.projectId);
+        const [, blocks] = await Promise.all([
+          this.loadProject(api, route.projectId, generation),
+          api.library.list(route.projectId),
+        ]);
         if (generation !== this.generation) return;
         this.state.lib.blocks = blocks;
         this.library.restore(route.projectId);
@@ -1671,14 +1691,21 @@ export class QaCrawlerDashboard extends Base {
           this.openPanel(scenario);
         }
       } else if (route.view === 'tests') {
-        await this.loadProject(api, route.projectId, generation);
-        const recordings = await api.recordings.list(route.projectId);
+        const [, recordings] = await Promise.all([
+          this.loadProject(api, route.projectId, generation),
+          api.recordings.list(route.projectId),
+        ]);
         if (generation !== this.generation) return;
         this.state.recordings = recordings;
         await this.loadTests(api, route.projectId, route.recording, generation);
       } else if (route.view === 'editor') {
-        await this.loadProject(api, route.projectId, generation);
-        await this.editor.load(api, route, () => generation === this.generation);
+        // L'éditeur dit lui-même ce qu'il charge (arborescence, version générée, comparaison) et reste
+        // utilisable pendant ce temps : l'écran quitté n'attend pas la fin de toute sa chaîne.
+        this.state.shown = undefined;
+        await Promise.all([
+          this.loadProject(api, route.projectId, generation),
+          this.editor.load(api, route, () => generation === this.generation),
+        ]);
       } else if (route.view === 'environments') {
         await this.loadProject(api, route.projectId, generation);
         if (generation !== this.generation) return;
@@ -1688,24 +1715,26 @@ export class QaCrawlerDashboard extends Base {
           this.state.envCheck = undefined;
         }
       } else if (route.view === 'explorations') {
-        await this.loadProject(api, route.projectId, generation);
         if (route.run) {
           const run = route.run;
-          const [detail, graph] = await Promise.all([
+          const [, detail, graph] = await Promise.all([
+            this.loadProject(api, route.projectId, generation),
             api.executions.get(route.projectId, run),
             api.graph.of(route.projectId, 'exploration', run).catch(() => undefined),
           ]);
           if (generation !== this.generation) return;
           this.state.explored = detail;
           this.state.graph = graph;
-        }
+        } else await this.loadProject(api, route.projectId, generation);
       } else if (route.view === 'execution') {
         if (this.state.project?.id !== route.projectId)
           await this.loadProject(api, route.projectId, generation);
         await this.loadExecution(api, route, generation);
       } else if (route.view === 'recordings') {
-        await this.loadProject(api, route.projectId, generation);
-        const recordings = await api.recordings.list(route.projectId);
+        const [, recordings] = await Promise.all([
+          this.loadProject(api, route.projectId, generation),
+          api.recordings.list(route.projectId),
+        ]);
         if (generation !== this.generation) return;
         this.state.recordings = recordings;
         const running = recordings.find(
@@ -1714,9 +1743,11 @@ export class QaCrawlerDashboard extends Base {
         if (running && this.state.recs.live?.name !== running.name)
           this.followRecording(api, route.projectId, running.name, running.status);
       } else if (route.view === 'recording') {
-        await this.loadProject(api, route.projectId, generation);
         if (this.state.review?.name !== route.name) this.state.review = emptyReviewUi(route.name);
-        await this.loadReview(api, route.projectId, route.name, generation);
+        await Promise.all([
+          this.loadProject(api, route.projectId, generation),
+          this.loadReview(api, route.projectId, route.name, generation),
+        ]);
       } else if (route.view === 'incidents' || route.view === 'incident' || route.view === 'investigations') {
         // La démonstration n'interroge pas le serveur sur le projet ni sur l'incident : tout vient du module.
         if (route.view !== 'incident' || !isDemoIncident(route.incidentId))
@@ -1744,6 +1775,7 @@ export class QaCrawlerDashboard extends Base {
       if (generation !== this.generation) return;
       this.fail(error);
     }
+    this.state.shown = undefined;
     this.paint();
     if (
       generation === this.generation &&
@@ -1825,18 +1857,17 @@ export class QaCrawlerDashboard extends Base {
   ): Promise<void> {
     const req = this.state.req;
     if (route.view === 'trends') {
-      if (route.projectId) await this.loadProject(api, route.projectId, generation);
-      const trends = await api.trends.get({
-        weeks: req.weeks,
-        ...(route.projectId ? { projectId: route.projectId } : {}),
-      });
+      const [, trends] = await Promise.all([
+        route.projectId ? this.loadProject(api, route.projectId, generation) : undefined,
+        api.trends.get({ weeks: req.weeks, ...(route.projectId ? { projectId: route.projectId } : {}) }),
+      ]);
       if (generation !== this.generation) return;
       req.trends = trends;
       return;
     }
     const projectId = route.projectId;
-    await this.loadProject(api, projectId, generation);
-    const [repository, extra] = await Promise.all([
+    const [, repository, extra] = await Promise.all([
+      this.loadProject(api, projectId, generation),
       api.requirements.get(projectId),
       route.view === 'sources'
         ? Promise.all([
@@ -2032,7 +2063,16 @@ export class QaCrawlerDashboard extends Base {
     }
   }
 
-  private async loadProject(api: QaCrawlerClient, projectId: string, generation: number): Promise<void> {
+  /** Le projet de l'écran, lu une fois par chargement (lancé dès le début de `load`, attendu par la vue). */
+  private loadProject(api: QaCrawlerClient, projectId: string, generation: number): Promise<void> {
+    const current = this.projectLoad;
+    if (current?.generation === generation && current.projectId === projectId) return current.promise;
+    const promise = this.readProject(api, projectId, generation);
+    this.projectLoad = { generation, projectId, promise };
+    return promise;
+  }
+
+  private async readProject(api: QaCrawlerClient, projectId: string, generation: number): Promise<void> {
     const [project, executions] = await Promise.all([
       api.projects.detail(projectId),
       api.executions.list(projectId),
@@ -3018,10 +3058,9 @@ export class QaCrawlerDashboard extends Base {
       (focusKey.startsWith('ws-') ||
         focused?.dataset.wsField !== undefined ||
         focused?.dataset.wsGraph !== undefined);
-    const focusTwin =
-      workspaceKey && focused
-        ? workspaceTwin(focused)
-        : `${focused?.dataset.block ?? ''}|${focused?.dataset.index ?? ''}|${focused?.dataset.direction ?? ''}`;
+    const twinOf = (element: HTMLElement | null | undefined): string =>
+      `${element?.dataset.block ?? ''}|${element?.dataset.index ?? ''}|${element?.dataset.direction ?? ''}|${element?.dataset.view ?? ''}`;
+    const focusTwin = workspaceKey && focused ? workspaceTwin(focused) : twinOf(focused);
     const caret =
       focused instanceof HTMLInputElement && ['text', 'search'].includes(focused.type)
         ? focused.selectionStart
@@ -3042,13 +3081,10 @@ export class QaCrawlerDashboard extends Base {
         ),
       ];
       const twin = candidates.find((element) =>
-        workspaceKey
-          ? workspaceTwin(element) === focusTwin
-          : `${element.dataset.block ?? ''}|${element.dataset.index ?? ''}|${element.dataset.direction ?? ''}` ===
-            focusTwin,
+        workspaceKey ? workspaceTwin(element) === focusTwin : twinOf(element) === focusTwin,
       );
       const same = candidates.find((element) => (element as HTMLInputElement).value === focusValue);
-      const target = (focusTwin !== '||' ? twin : undefined) ?? same ?? candidates[0];
+      const target = (focusTwin !== '|||' ? twin : undefined) ?? same ?? candidates[0];
       target?.focus();
       // Après le focus : le navigateur compare à la valeur au moment du focus, « change » partira.
       if (

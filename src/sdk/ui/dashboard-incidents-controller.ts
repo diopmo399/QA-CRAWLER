@@ -38,6 +38,24 @@ import {
   scopeTreeRequests,
   type ScopeUi,
 } from './incident-scope.js';
+import {
+  applyPlan,
+  emptyDiscoveryUi,
+  reduceDiscovery,
+  withKnown,
+  withResult,
+  type DiscoveryUi,
+} from './incident-scope-discovery.js';
+import {
+  accessDirty,
+  accessInputOf,
+  accessNotices,
+  emptyAccessUi,
+  extensionFor,
+  reduceAccess,
+  sessionName,
+  type AccessUi,
+} from './incident-access.js';
 import type { PrefsStorage } from './incident-split.js';
 import { rovingTarget, workspaceProgress } from './incident-ux.js';
 import {
@@ -190,6 +208,7 @@ export class IncidentsController {
         extension: emptyExtensionForm(),
         scope: emptyScopeUi(),
         scopeTrees: {},
+        discovery: emptyDiscoveryUi(),
       });
     }
     if (route.view !== 'incidents' || !route.create) ui.form = undefined;
@@ -562,6 +581,345 @@ export class IncidentsController {
     }
   }
 
+  // ── Scénario d'accès et démonstration ──────────────────────────────────────────────────────
+
+  /** La carte du scénario de l'incident ouvert (un autre incident repart de zéro). */
+  private accessUi(): AccessUi {
+    const ui = this.ui;
+    const id = ui.incident?.id;
+    if (ui.access.incidentId !== id) ui.access = emptyAccessUi(id);
+    return ui.access;
+  }
+
+  private accessAction(action: string, dataset: Record<string, string | undefined>): boolean {
+    const next = reduceAccess(this.accessUi(), this.ui.incident?.access, action, dataset);
+    if (!next) return false;
+    this.ui.access = next;
+    return true;
+  }
+
+  /** « Enregistrer le scénario » et « Analyser le parcours » (la saisie en cours enregistrée d'abord). */
+  private saveAccess(analyze: boolean): void {
+    const draft = this.accessUi().draft;
+    const notices = accessNotices(this.host.state.t.locale);
+    void this.op(
+      analyze ? 'inc-acc-analyze' : 'inc-acc-save',
+      async (api, projectId, incident) => {
+        let next: Incident | undefined;
+        if (draft && (accessDirty(this.accessUi(), incident.access) || !analyze))
+          next = await api.incidents.saveAccess(projectId, incident.id, accessInputOf(draft));
+        if (analyze) next = await api.incidents.analyzeAccess(projectId, incident.id);
+        return next;
+      },
+      {
+        notice: () => (analyze ? notices.analyzed : notices.saved),
+        after: () => {
+          const { draft: _saved, ...rest } = this.accessUi();
+          this.ui.access = rest;
+        },
+        focus: analyze ? '#inc-acc-res-t' : '[data-action="inc-acc-analyze"]',
+      },
+    );
+  }
+
+  /**
+   * « Localiser l'écran » (la saisie en cours enregistrée d'abord), « Préparer l'exploration » (le parcours
+   * joué dans un navigateur) et « Lancer l'investigation » (le moteur depuis l'écran atteint). `route` :
+   * l'écran choisi par la personne parmi les candidats.
+   */
+  private targetOp(kind: 'locate' | 'prepare' | 'explore', route?: string): void {
+    const draft = this.accessUi().draft;
+    const depth = this.accessUi().depth;
+    const notices = accessNotices(this.host.state.t.locale);
+    void this.op(
+      `inc-acc-${kind}`,
+      async (api, projectId, incident) => {
+        if (draft && accessDirty(this.accessUi(), incident.access))
+          await api.incidents.saveAccess(projectId, incident.id, accessInputOf(draft));
+        if (kind === 'locate') return api.incidents.locateAccessTarget(projectId, incident.id, route);
+        if (kind === 'prepare') return api.incidents.prepareAccessTarget(projectId, incident.id);
+        return api.incidents.exploreAccessTarget(projectId, incident.id, depth);
+      },
+      {
+        notice: (next) => {
+          const access = next.access;
+          if (kind === 'locate')
+            return access?.location?.chosen ? notices.located(access.location.chosen) : notices.notLocated;
+          if (kind === 'prepare')
+            return access?.preparation?.reached ? notices.prepared : notices.notPrepared;
+          return notices.explored;
+        },
+        after: () => {
+          const { draft: _saved, ...rest } = this.accessUi();
+          this.ui.access = rest;
+          if (kind === 'explore') this.workspace.poll();
+        },
+        focus:
+          kind === 'locate' ? '#inc-acc-loc-t' : kind === 'prepare' ? '#inc-acc-prep-t' : '#inc-acc-prog-t',
+      },
+    );
+  }
+
+  /** Pause, reprise et annulation de l'exploration lancée depuis l'écran cible (le run du moteur). */
+  private explorationControl(kind: 'pause' | 'resume' | 'cancel'): void {
+    const notices = accessNotices(this.host.state.t.locale);
+    const incident = this.ui.incident;
+    const runId = incident?.access?.exploration?.runId;
+    const run = incident?.investigation.trigger?.runs.find((item) => item.id === runId);
+    void this.op(
+      `inc-acc-${kind}`,
+      (api, projectId, current) =>
+        kind === 'pause'
+          ? api.incidents.trigger.pause(projectId, current.id)
+          : kind === 'resume'
+            ? api.incidents.trigger.resume(projectId, current.id, run ? { depth: run.depth } : {})
+            : api.incidents.trigger.cancel(projectId, current.id),
+      {
+        notice: () =>
+          kind === 'pause' ? notices.paused : kind === 'resume' ? notices.resumed : notices.cancelled,
+        after: () => {
+          if (kind === 'resume') this.workspace.poll();
+        },
+        settle: () => {
+          const { confirmCancel: _done, ...rest } = this.accessUi();
+          this.ui.access = rest;
+        },
+        focus: '#inc-acc-prog-t',
+      },
+    );
+  }
+
+  /** Les enregistrements du projet (module Enregistrements), lus à l'ouverture de l'onglet ou sur « Actualiser ». */
+  private loadRecordings(): void {
+    const api = this.host.api();
+    const route = this.route();
+    const incident = this.ui.incident;
+    if (!api || !route || !incident) return;
+    this.ui.access = { ...this.accessUi(), recordings: 'loading' };
+    this.host.paint();
+    api.recordings.list(route.projectId).then(
+      (list) => {
+        if (this.ui.incident?.id !== incident.id) return;
+        this.ui.access = { ...this.accessUi(), recordings: list };
+        this.host.paint();
+      },
+      (error: unknown) => {
+        if (this.ui.incident?.id !== incident.id) return;
+        this.ui.access = { ...this.accessUi(), recordings: { error: message(error) } };
+        this.host.paint();
+      },
+    );
+  }
+
+  /** Associe (nom) ou dissocie (null) un enregistrement du projet. */
+  private linkRecording(name: string | null): void {
+    const notices = accessNotices(this.host.state.t.locale);
+    void this.op(
+      'inc-acc-link',
+      (api, projectId, incident) => api.incidents.saveAccess(projectId, incident.id, { recording: name }),
+      { notice: () => (name ? notices.linked(name) : notices.unlinked) },
+    );
+  }
+
+  /**
+   * « Démarrer l'enregistrement » : une vraie session du module Enregistrements (navigateur sur la machine
+   * du serveur, au départ du parcours) ; « Arrêter et associer » l'arrête, attend son écriture sur disque,
+   * puis l'associe au parcours.
+   */
+  private startRecording(): void {
+    const incident = this.ui.incident;
+    if (!incident) return;
+    const name = sessionName(incident.id, Date.now());
+    const url = incident.access?.url;
+    let startPath: string | undefined;
+    if (url?.startsWith('/')) startPath = url;
+    else if (url) {
+      try {
+        startPath = new URL(url).pathname;
+      } catch {
+        startPath = undefined;
+      }
+    }
+    const notices = accessNotices(this.host.state.t.locale);
+    void this.op(
+      'inc-acc-rec',
+      async (api, projectId) => {
+        // Le module normalise le nom (chiffres masqués) : celui qu'il renvoie fait foi.
+        const started = await api.recordings.start(projectId, { name, ...(startPath ? { startPath } : {}) });
+        this.ui.access = { ...this.accessUi(), session: started.name };
+        return undefined;
+      },
+      {
+        notice: () => notices.recording(this.accessUi().session ?? name),
+        focus: '[data-action="inc-acc-rec-stop"]',
+      },
+    );
+  }
+
+  private stopRecording(): void {
+    const name = this.accessUi().session;
+    if (!name) return;
+    const notices = accessNotices(this.host.state.t.locale);
+    void this.op(
+      'inc-acc-rec',
+      async (api, projectId, incident) => {
+        // Une session déjà terminée (échec du navigateur, fermeture) n'a plus rien à arrêter.
+        const live = await api.recordings.get(projectId, name);
+        if (live.status === 'RECORDING') await api.recordings.stop(projectId, name);
+        // L'arrêt rend la main avant l'écriture du flow : on attend un état terminal (≤ 15 s).
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          const snapshot = await api.recordings.get(projectId, name);
+          if (snapshot.status === 'COMPLETED' || snapshot.status === 'STORED') break;
+          if (snapshot.status === 'FAILED') {
+            const { session: _failed, ...rest } = this.accessUi();
+            this.ui.access = rest;
+            throw new Error(snapshot.error ?? 'recording failed');
+          }
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        const { session: _done, ...rest } = this.accessUi();
+        this.ui.access = { ...rest, recordings: undefined };
+        return api.incidents.saveAccess(projectId, incident.id, { recording: name });
+      },
+      { notice: () => notices.linked(name) },
+    );
+  }
+
+  /** Demande l'extension du périmètre pour une portion de code refusée (décision d'une personne ensuite). */
+  private requestAccessExtension(candidateId: string): void {
+    const incident = this.ui.incident;
+    const candidate = incident?.access?.analysis?.candidates.find((item) => item.id === candidateId);
+    const extension = candidate ? extensionFor(candidate) : undefined;
+    if (!candidate || !extension) return;
+    const lang = this.host.state.t.locale;
+    const reason =
+      lang === 'fr'
+        ? `Scénario d’accès : la piste mène à ${candidate.label} (${candidate.ref}).`
+        : `Access scenario: the lead goes to ${candidate.label} (${candidate.ref}).`;
+    const t = this.host.state.t.inc;
+    void this.op(
+      'inc-acc-ext',
+      (api, projectId, current) =>
+        api.incidents.requestExtension(projectId, current.id, { ...extension, reason }),
+      { notice: () => t.done.extensionsRequested(1), focus: '[data-action="inc-ext-approve"]' },
+    );
+  }
+
+  // ── Applications et dépôts (découverte automatique) ──────────────────────────────────────
+
+  /** Le bloc de découverte de l'incident ouvert (un autre incident repart de zéro). */
+  private discoveryUi(): DiscoveryUi {
+    const ui = this.ui;
+    const id = ui.incident?.id;
+    if (ui.discovery.incidentId !== id) ui.discovery = emptyDiscoveryUi(id);
+    return ui.discovery;
+  }
+
+  private discoveryAction(action: string, dataset: Record<string, string | undefined>): void {
+    this.ui.discovery = reduceDiscovery(this.discoveryUi(), action, dataset) ?? this.ui.discovery;
+  }
+
+  /** Les dépôts connus de l'environnement, lus une fois par incident quand l'onglet « Périmètre » s'ouvre. */
+  private ensureKnownRepositories(): void {
+    const route = this.route();
+    const ui = this.ui;
+    const incident = ui.incident;
+    const api = this.host.api();
+    if (!route || route.tab !== 'scope' || !api || !incident || incident.id !== route.incidentId) return;
+    const context = this.scopeContext();
+    if (!context || context.demo || !context.can('RUN')) return;
+    const discovery = this.discoveryUi();
+    if (discovery.known !== undefined || discovery.knownState !== undefined) return;
+    ui.discovery = { ...discovery, knownState: 'loading' };
+    api.incidents.knownRepositories(route.projectId, incident.id).then(
+      (result) => {
+        if (this.ui.incident?.id !== incident.id) return;
+        this.ui.discovery = withKnown(this.discoveryUi(), result.repositories);
+        this.host.paint();
+      },
+      (error: unknown) => {
+        if (this.ui.incident?.id !== incident.id) return;
+        const denied = error instanceof QaCrawlerError && error.status === 403;
+        this.ui.discovery = {
+          ...this.discoveryUi(),
+          knownState: denied ? 'denied' : { error: message(error) },
+        };
+        this.host.paint();
+      },
+    );
+  }
+
+  /** « Analyser automatiquement » : le chemin saisi (ou un dépôt connu) analysé par le serveur, en lecture seule. */
+  private runDiscovery(root?: string): void {
+    const context = this.scopeContext();
+    if (!context || !scopeEditable(context)) return;
+    if (root !== undefined) this.discoveryAction('inc-disc-known', { root });
+    const typed = this.discoveryUi().root.trim();
+    if (typed === '') {
+      this.focus('[data-inc="disc.root"]');
+      return;
+    }
+    void this.op(
+      'inc-disc-run',
+      async (api, projectId, incident) => {
+        const result = await api.incidents.discoverScope(projectId, incident.id, typed);
+        if (this.ui.incident?.id === incident.id) this.ui.discovery = withResult(this.discoveryUi(), result);
+        return undefined;
+      },
+      {
+        focus: '[data-action="inc-disc-apply"]:not([disabled]), [data-inc="disc.root"]',
+      },
+    );
+  }
+
+  /**
+   * « Ajouter au périmètre » : les applications cochées enregistrées dans le périmètre (brouillon, périmètre
+   * défini) ou, l'investigation commencée, demandées comme extensions (à décider) ; la découverte reste tracée
+   * dans chaque application ajoutée (origine, racine analysée, preuves).
+   */
+  private applyDiscovery(): void {
+    const ui = this.ui;
+    const incident = ui.incident;
+    const context = this.scopeContext();
+    if (!incident || !context || !scopeEditable(context)) return;
+    const plan = applyPlan(incident, this.discoveryUi());
+    if (plan.kind === 'NONE') return;
+    const t = this.host.state.t.inc;
+    if (plan.kind === 'UPDATE') {
+      void this.op(
+        'inc-disc-apply',
+        (api, projectId, current) =>
+          api.incidents.update(projectId, current.id, current.revision, { scope: plan.scope }),
+        {
+          notice: () => t.done.applicationsAdded(plan.added.length),
+          revision: true,
+          after: () => {
+            ui.discovery = reduceDiscovery(this.discoveryUi(), 'inc-disc-clear', {}) ?? ui.discovery;
+            ui.validation = undefined;
+          },
+          focus: '[data-action="inc-scope-next"]',
+        },
+      );
+      return;
+    }
+    void this.op(
+      'inc-disc-apply',
+      async (api, projectId, current) => {
+        let next: Incident | undefined;
+        for (const request of plan.requests)
+          next = await api.incidents.requestExtension(projectId, current.id, request);
+        return next;
+      },
+      {
+        notice: () => t.done.extensionsRequested(plan.requests.length),
+        after: () => {
+          ui.discovery = reduceDiscovery(this.discoveryUi(), 'inc-disc-clear', {}) ?? ui.discovery;
+        },
+        focus: '[data-action="inc-ext-approve"], [data-inc="disc.root"]',
+      },
+    );
+  }
+
   /**
    * « Étape suivante » : le brouillon vérifié dans la page, enregistré s'il a changé (révision lue ; 409 :
    * relu et dit), puis le périmètre enregistré vérifié par le serveur ; valide, « Environnement » s'ouvre.
@@ -683,6 +1041,11 @@ export class IncidentsController {
           this.focus('#inc-f-files');
         return true;
       }
+      case 'inc-scope-manage':
+        this.scopeAction('inc-scope-manage', {});
+        this.host.paint();
+        this.focus('[data-action="inc-scope-manage"]');
+        return true;
       case 'inc-scope-mode':
       case 'inc-scope-expand':
       case 'inc-scope-toggle':
@@ -698,6 +1061,106 @@ export class IncidentsController {
         this.focus(`[data-action="inc-scope-toggle"][data-block="${attr(app ?? '')}"][data-index=""]`);
         return true;
       }
+      case 'inc-disc-run':
+        this.runDiscovery();
+        return true;
+      case 'inc-disc-known':
+        this.runDiscovery(target.dataset.root ?? '');
+        return true;
+      case 'inc-disc-apply':
+        this.applyDiscovery();
+        return true;
+      case 'inc-disc-clear':
+        this.discoveryAction('inc-disc-clear', {});
+        this.host.paint();
+        this.focus('[data-inc="disc.root"]');
+        return true;
+      case 'inc-acc-mode': {
+        this.accessAction('inc-acc-mode', { mode: target.dataset.mode });
+        const mode = this.accessUi().draft?.mode;
+        if (mode === 'DEMO' && this.accessUi().recordings === undefined) this.loadRecordings();
+        else this.host.paint();
+        this.focus(`#inc-acc-mode-${mode ?? 'AUTO'}`);
+        return true;
+      }
+      case 'inc-acc-more':
+        this.accessAction('inc-acc-more', {});
+        this.host.paint();
+        this.focus('[data-action="inc-acc-more"]');
+        return true;
+      case 'inc-acc-cancel':
+      case 'inc-acc-cancel-no':
+        this.accessAction(action, {});
+        this.host.paint();
+        this.focus(
+          action === 'inc-acc-cancel'
+            ? '[data-action="inc-acc-cancel-no"]'
+            : '[data-action="inc-acc-cancel"]',
+        );
+        return true;
+      case 'inc-acc-locate':
+        this.targetOp('locate');
+        return true;
+      case 'inc-acc-choose':
+        if (target.dataset.block) this.targetOp('locate', target.dataset.block);
+        return true;
+      case 'inc-acc-prepare':
+        this.targetOp('prepare');
+        return true;
+      case 'inc-acc-explore':
+        this.targetOp('explore');
+        return true;
+      case 'inc-acc-pause':
+        this.explorationControl('pause');
+        return true;
+      case 'inc-acc-resume':
+        this.explorationControl('resume');
+        return true;
+      case 'inc-acc-cancel-yes':
+        this.explorationControl('cancel');
+        return true;
+      case 'inc-acc-reset':
+      case 'inc-acc-step-add':
+      case 'inc-acc-step-remove':
+      case 'inc-acc-step-up': {
+        const count = this.accessUi().draft?.steps.length ?? this.ui.incident?.access?.steps.length ?? 0;
+        this.accessAction(action, { index: target.dataset.index });
+        this.host.paint();
+        if (action === 'inc-acc-step-add') this.focus(`#inc-acc-step-${String(count)}`);
+        return true;
+      }
+      case 'inc-acc-save':
+        this.saveAccess(false);
+        return true;
+      case 'inc-acc-analyze':
+        this.saveAccess(true);
+        return true;
+      case 'inc-acc-rec-load':
+        this.loadRecordings();
+        return true;
+      case 'inc-acc-rec-link':
+        if (target.dataset.block) this.linkRecording(target.dataset.block);
+        return true;
+      case 'inc-acc-rec-unlink':
+        this.linkRecording(null);
+        return true;
+      case 'inc-acc-rec-start':
+        this.startRecording();
+        return true;
+      case 'inc-acc-rec-stop':
+        this.stopRecording();
+        return true;
+      case 'inc-acc-ext':
+        if (target.dataset.block) this.requestAccessExtension(target.dataset.block);
+        return true;
+      case 'inc-disc-advanced':
+        // Le contenu de l'accordéon n'est rendu qu'ouvert : l'état est mis à jour, puis l'écran redessiné après
+        // le basculement natif du résumé (qui suit les écouteurs), pour que l'attribut « open » suive l'état.
+        this.discoveryAction('inc-disc-advanced', { open: target.dataset.open });
+        setTimeout(() => {
+          this.host.paint();
+        }, 0);
+        return true;
       case 'inc-scope-next':
         this.scopeNext();
         return true;
@@ -864,6 +1327,9 @@ export class IncidentsController {
         );
         return true;
       }
+      case 'inc-disc-run':
+        this.runDiscovery();
+        return true;
       case 'inc-ext-request': {
         const extension = ui.extension;
         const missing = [
@@ -927,6 +1393,23 @@ export class IncidentsController {
       (ui.form as unknown as Record<string, string>)[key] = value;
       return true;
     }
+    if (key.startsWith('acc.')) {
+      // La saisie du scénario : gardée dans le brouillon, sans redessiner (le focus reste dans le champ).
+      this.accessAction('inc-acc-input', { key: key.slice('acc.'.length), value });
+      return true;
+    }
+    if (key === 'disc.root') {
+      this.discoveryAction('inc-disc-root', { value });
+      return true;
+    }
+    if (key.startsWith('disc.layer.')) {
+      this.discoveryAction('inc-disc-layer', { block: key.slice('disc.layer.'.length), value });
+      return true;
+    }
+    if (key.startsWith('disc.app.')) {
+      this.discoveryAction('inc-disc-toggle', { block: key.slice('disc.app.'.length) });
+      return true;
+    }
     if (key === 'scope.range') {
       this.scopeAction('inc-scope-depth', { value });
       // Pendant le glissement : la valeur dite et affichée, sans redessiner (le curseur reste saisi).
@@ -977,7 +1460,14 @@ export class IncidentsController {
       return true;
     }
     this.input(target);
-    if (key === 'ext.kind' || key === 'severity' || key === 'scope.range') this.host.paint();
+    if (
+      key === 'ext.kind' ||
+      key === 'severity' ||
+      key === 'scope.range' ||
+      key.startsWith('disc.layer.') ||
+      key.startsWith('disc.app.')
+    )
+      this.host.paint();
     return true;
   }
 
@@ -1027,6 +1517,7 @@ export class IncidentsController {
   beforePaint(): void {
     if (!this.route()) return;
     this.ensureScopeTrees();
+    this.ensureKnownRepositories();
     this.workspace.beforePaint();
   }
 

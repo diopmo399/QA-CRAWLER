@@ -248,7 +248,7 @@ export function rightFor(segments: readonly string[], method: string): Right {
     (segments[5] === 'source' ||
       segments[5] === 'sources' ||
       segments[5] === 'attachments' ||
-      (segments[5] === 'scope' && segments[6] === 'tree'))
+      (segments[5] === 'scope' && (segments[6] === 'tree' || segments[6] === 'repositories')))
   )
     return 'RUN';
   if (method === 'GET' || method === 'HEAD') return 'VIEW';
@@ -412,6 +412,8 @@ const KEYWORDS = new Set([
   'screenshot',
   'attachments',
   'tree',
+  'discover',
+  'repositories',
   'spec',
 ]);
 
