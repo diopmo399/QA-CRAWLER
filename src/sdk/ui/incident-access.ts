@@ -1333,7 +1333,7 @@ export function renderAccess(ctx: ScopeContext, ui: AccessUi, opts: { busy?: str
       : draft.mode === 'DEMO'
         ? demoBlock(ctx, ui, !editable, busy)
         : '';
-  const more = `<div class="inc-acc-more"><button type="button" class="inc-acc-toggle" data-action="inc-acc-more" aria-expanded="${String(ui.more === true)}" aria-controls="inc-acc-more-p">${icon(ui.more ? 'down' : 'right')}<span>${esc(t.more)}</span></button>${
+  const more = `<div class="inc-acc-more"><button type="button" class="inc-acc-toggle" data-action="inc-acc-more" aria-expanded="${String(ui.more === true)}"${ui.more ? ' aria-controls="inc-acc-more-p"' : ''}>${icon(ui.more ? 'down' : 'right')}<span>${esc(t.more)}</span></button>${
     ui.more
       ? `<div id="inc-acc-more-p" class="inc-acc-grid">${textField('start', t.start, draft.start, { hint: t.startHint, disabled })}${textField('expected', t.expected, draft.expected, { disabled })}${textField('observed', t.observed, draft.observed, { disabled })}${textField('conditions', t.conditions, draft.conditions, { disabled })}${textField('testData', t.testData, draft.testData, { area: true, rows: 2, hint: t.testDataHint, disabled })}${draft.mode === 'GUIDED' ? '' : stepsEditor(ctx, draft, disabled)}</div>`
       : ''

@@ -444,7 +444,11 @@ describe('carte du scénario d’accès : rendu', () => {
     expect(html).not.toMatch(/type="file"|<video|vidéo/);
     expect(INCIDENT_ACCESS_CSS).not.toMatch(/#[0-9a-f]{3,6}\b/i);
     // Les détails complémentaires se déplient à la demande.
+    // Le bouton ne désigne le panneau (aria-controls) que lorsqu'il est affiché.
+    expect(html).not.toContain('aria-controls="inc-acc-more-p"');
     const more = renderAccess(ctxOf(incidentOf()), { ...emptyAccessUi('inc_1'), more: true });
+    expect(more).toContain('aria-controls="inc-acc-more-p"');
+    expect(more).toContain('id="inc-acc-more-p"');
     for (const id of [
       'inc-acc-start',
       'inc-acc-expected',
