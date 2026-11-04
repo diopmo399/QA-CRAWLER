@@ -413,7 +413,17 @@ describe('Dashboard — scenario library in Chromium', () => {
     await composer.locator('input[data-jn="name"]').fill('Ajout au diagramme');
     await composer.locator('#jn-mode-DIAGRAM').click();
     const canvas = composer.locator('[data-jn-canvas]');
-    await canvas.scrollIntoViewIfNeeded();
+    // La relecture de la bibliothèque lancée par la création précédente peut redessiner le compositeur pendant
+    // le défilement : le canevas redessiné est repris (jamais l'ancien, détaché).
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await canvas.scrollIntoViewIfNeeded({ timeout: 5_000 });
+        break;
+      } catch (error) {
+        if (attempt >= 5 || !String(error).includes('not attached')) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
     // Choisir dans le catalogue : la carte est surlignée.
     await composer.locator('[data-action="jn-pick"][data-block="Bloc création"]').click();
     await composer.locator('.jn-pal-item.picked[data-jn-block="Bloc création"]').waitFor();
