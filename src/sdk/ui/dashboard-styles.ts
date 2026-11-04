@@ -1,6 +1,9 @@
 import { WIZARD_CSS } from './dashboard-library-wizard.js';
 import { INCIDENT_ATTACHMENTS_CSS } from './incident-attachments.js';
 import { JOURNEY_CSS } from './dashboard-journey.js';
+import { FIELDS_CSS } from './dashboard-library-fields.js';
+import { TRACE_CSS } from './dashboard-trace.js';
+import { OUTPUT_CSS } from './dashboard-library-output.js';
 import { INCIDENT_CODE_CSS } from './incident-code.js';
 import { INCIDENT_AI_CSS } from './incident-ai.js';
 import { INCIDENT_TRIGGER_CSS } from './incident-trigger.js';
@@ -1208,6 +1211,9 @@ li.info .ed-sev{color:var(--qa-color-primary)}
 @media (max-height:559px),(max-width:599px){.dash:has(.ws-root){height:auto}}
 /* L'espace d'investigation : primitives partagées, structure, graphe, chronologie, traçabilité frontend, code, diagnostic, coquille. */
 ${JOURNEY_CSS}
+${FIELDS_CSS}
+${TRACE_CSS}
+${OUTPUT_CSS}
 ${WIZARD_CSS}
 ${INCIDENT_PARTS_CSS}
 ${INCIDENT_UX_CSS}

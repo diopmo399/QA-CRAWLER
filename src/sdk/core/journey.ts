@@ -1,11 +1,13 @@
 import type { CompositionCheck } from './contracts.js';
+import { compileLoop, loopProblems, type JourneyLoopItem, type JourneyLoopSpec } from './journey-loop.js';
+import { waitProblems, waitStep, type WaitSpec } from './wait.js';
 
 /**
  * LE PARCOURS VISUEL DE LA BIBLIOTHÈQUE : un modèle logique unique, vu en mode linéaire (une suite de blocs)
  * ou en mode libre (un diagramme). Trois représentations restent séparées :
  *
  *   1. la disposition visuelle : la position de chaque nœud (x, y), le mode préféré ;
- *   2. la logique du parcours : des nœuds (début, blocs, conditions, jonctions, fins) et des connexions ;
+ *   2. la logique du parcours : des nœuds (début, blocs, attentes, conditions, jonctions, fins) et des connexions ;
  *   3. le format exécutable : des scénarios `steps: - run: <bloc>` (avec `with:` pour les données propres
  *      à une instance), produits par `compileJourneyPath`, chemin par chemin.
  *
@@ -16,7 +18,7 @@ import type { CompositionCheck } from './contracts.js';
  * Dashboard.
  */
 
-export const JOURNEY_NODE_KINDS = ['START', 'BLOCK', 'CONDITION', 'JOIN', 'END'] as const;
+export const JOURNEY_NODE_KINDS = ['START', 'BLOCK', 'WAIT', 'LOOP', 'CONDITION', 'JOIN', 'END'] as const;
 export type JourneyNodeKind = (typeof JOURNEY_NODE_KINDS)[number];
 export const JOURNEY_MODES = ['LINEAR', 'DIAGRAM'] as const;
 export type JourneyMode = (typeof JOURNEY_MODES)[number];
@@ -37,6 +39,10 @@ export interface JourneyNode {
   y: number;
   /** BLOCK : par clé d'entrée du contrat, ce que reçoit CETTE instance (absent : l'amont ou les données). */
   params?: Record<string, JourneyParam>;
+  /** WAIT : la condition attendue (compilée en étape `expect`, voir wait.ts). */
+  wait?: WaitSpec;
+  /** LOOP : la boucle et son corps (compilée en étape `loop:`, voir journey-loop.ts). */
+  loop?: JourneyLoopSpec;
 }
 
 export interface JourneyEdge {
@@ -93,6 +99,31 @@ export interface JourneyNodeDiagnostics {
   produces: string[];
   /** D'où vient chaque entrée (sur le premier chemin qui l'atteint). */
   satisfied: { key: string; from: string }[];
+  /**
+   * RACCORDEMENT : pour chaque entrée obligatoire sans donnée du même nom, les données disponibles en amont
+   * (sur tous les chemins) qui pourraient la fournir. UNIQUE : une seule compatible, avec une raison (sens,
+   * type ou nom) — proposée, jamais retenue sans une personne ; AMBIGUOUS : plusieurs ; NONE : aucune.
+   */
+  proposals?: MappingProposal[];
+}
+
+export interface MappingCandidate {
+  key: string;
+  /** Le nœud qui la produit, ou `data` (jeu d'un bloc du chemin). */
+  from: string;
+  type: string;
+  meaning?: string;
+  compatible: boolean;
+  /** Pourquoi elle est proposée, ou pourquoi elle ne convient pas. */
+  reason: string;
+}
+
+export interface MappingProposal {
+  input: string;
+  type: string;
+  meaning?: string;
+  status: 'UNIQUE' | 'AMBIGUOUS' | 'NONE';
+  candidates: MappingCandidate[];
 }
 
 /**
@@ -125,13 +156,17 @@ const PARAM_KEY = /^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$/;
 const nodeName = (node: JourneyNode): string =>
   node.kind === 'BLOCK'
     ? `« ${node.block ?? '?'} »`
-    : node.kind === 'CONDITION'
-      ? `la condition « ${node.label ?? '?'} »`
-      : node.kind === 'JOIN'
-        ? 'la jonction'
-        : node.kind === 'START'
-          ? 'le début'
-          : 'la fin';
+    : node.kind === 'WAIT'
+      ? 'l’attente'
+      : node.kind === 'LOOP'
+        ? 'la boucle'
+        : node.kind === 'CONDITION'
+          ? `la condition « ${node.label ?? '?'} »`
+          : node.kind === 'JOIN'
+            ? 'la jonction'
+            : node.kind === 'START'
+              ? 'le début'
+              : 'la fin';
 
 /** Le point de départ d'une connexion (le port de sortie, Oui à gauche et Non à droite d'une condition). */
 export function portOf(node: JourneyNode, branch?: JourneyBranch): { x: number; y: number } {
@@ -239,6 +274,8 @@ export const NODE_SIZE: Readonly<Record<JourneyNodeKind, { w: number; h: number 
   START: { w: 120, h: 40 },
   END: { w: 120, h: 40 },
   BLOCK: { w: 200, h: 58 },
+  WAIT: { w: 180, h: 58 },
+  LOOP: { w: 240, h: 104 },
   CONDITION: { w: 160, h: 92 },
   JOIN: { w: 116, h: 34 },
 };
@@ -427,6 +464,26 @@ export function journeyStructure(graph: JourneyGraph): {
               : 'un bloc a une seule sortie : utilisez une condition',
           );
         break;
+      case 'WAIT':
+        if (!node.wait) onNode(node.id, 'aucune condition d’attente');
+        else for (const problem of waitProblems(node.wait)) onNode(node.id, problem);
+        if (ins.length === 0) onNode(node.id, 'rien ne mène à cette attente');
+        if (outs.length !== 1)
+          onNode(
+            node.id,
+            outs.length === 0 ? 'cette attente ne mène nulle part' : 'une attente a une seule sortie',
+          );
+        break;
+      case 'LOOP':
+        if (!node.loop) onNode(node.id, 'aucune boucle définie');
+        else for (const problem of loopProblems(node.loop)) onNode(node.id, problem);
+        if (ins.length === 0) onNode(node.id, 'rien ne mène à cette boucle');
+        if (outs.length !== 1)
+          onNode(
+            node.id,
+            outs.length === 0 ? 'cette boucle ne mène nulle part' : 'une boucle a une seule sortie',
+          );
+        break;
       case 'CONDITION': {
         if (!node.label?.trim()) onNode(node.id, 'la condition n’a pas de question');
         if (ins.length === 0) onNode(node.id, 'rien ne mène à cette condition');
@@ -475,28 +532,41 @@ export function journeyStructure(graph: JourneyGraph): {
       if (reached.has(node.id) && !ending.has(node.id))
         onNode(node.id, 'aucune fin n’est atteinte depuis ce nœud');
   }
-  // Boucles : aucune n'est exécutable (pas de boucle contrôlée dans le moteur).
+  // Une connexion qui revient en arrière est une boucle NON contrôlée (sans limite ni condition d'arrêt) :
+  // refusée ; une répétition passe par un nœud Boucle, borné et interprété par le moteur.
   const state = new Map<string, 1 | 2>();
   const visit = (id: string): void => {
     state.set(id, 1);
     for (const edge of out(id)) {
       const mark = state.get(edge.to);
-      if (mark === 1) onEdge(edge.id, 'boucle : le moteur ne rejoue pas de boucle, retirez cette connexion');
+      if (mark === 1)
+        onEdge(
+          edge.id,
+          'boucle non contrôlée : une connexion ne revient pas en arrière, utilisez un nœud Boucle (borné)',
+        );
       else if (mark === undefined) visit(edge.to);
     }
     state.set(id, 2);
   };
   for (const node of graph.nodes) if (!state.has(node.id)) visit(node.id);
   const blocks = graph.nodes.filter((node) => node.kind === 'BLOCK');
-  if (blocks.length === 0) errors.push('ajoutez au moins un bloc');
-  // Paramètres d'instance : des clés valides.
-  for (const node of blocks)
-    for (const [key, param] of Object.entries(node.params ?? {})) {
+  const looped = graph.nodes.flatMap((node) =>
+    node.kind === 'LOOP'
+      ? (node.loop?.body ?? []).filter((item) => item.kind === 'BLOCK').map((item) => ({ node, item }))
+      : [],
+  );
+  if (blocks.length === 0 && looped.length === 0) errors.push('ajoutez au moins un bloc');
+  // Paramètres d'instance : des clés valides (blocs du parcours et blocs des boucles).
+  const checkParams = (id: string, params: JourneyNode['params'], where = ''): void => {
+    for (const [key, param] of Object.entries(params ?? {})) {
       if (param.mode === 'MAP' && !PARAM_KEY.test(param.key))
-        onNode(node.id, `l’entrée ${key} est reliée à « ${param.key} », qui n’est pas une clé de donnée`);
+        onNode(id, `${where}l’entrée ${key} est reliée à « ${param.key} », qui n’est pas une clé de donnée`);
       if (param.mode === 'VALUE' && param.value.trim() === '')
-        onNode(node.id, `l’entrée ${key} attend une valeur`);
+        onNode(id, `${where}l’entrée ${key} attend une valeur`);
     }
+  };
+  for (const node of blocks) checkParams(node.id, node.params);
+  for (const { node, item } of looped) checkParams(node.id, item.params, `« ${item.block ?? '?'} » : `);
   return { errors, warnings, nodes, edges };
 }
 
@@ -533,29 +603,56 @@ export function journeyPaths(
 /** La clé de donnée propre à une instance (une valeur saisie pour l'entrée d'un bloc). */
 export const instanceKey = (key: string, nodeId: string): string => `${key}__${nodeId}`;
 
+/** Une étape compilée : un bloc rejoué (`run:` + `with:`), ou une attente (`expect` avec délai). */
+export type CompiledJourneyStep =
+  | { run: string; with?: Record<string, string> }
+  | ({ expect: Record<string, unknown> } & Record<string, unknown>)
+  | ({ loop: Record<string, unknown> } & Record<string, unknown>);
+
 /**
  * LE FORMAT EXÉCUTABLE d'un chemin : `run: <bloc>` par bloc, avec `with:` quand l'instance reçoit une valeur
- * ou une autre clé ; les valeurs saisies deviennent des données du scénario (clé propre à l'instance).
+ * ou une autre clé ; les valeurs saisies deviennent des données du scénario (clé propre à l'instance). Une
+ * attente devient une étape `expect` à sa place dans la suite.
  */
 export function compileJourneyPath(
   graph: JourneyGraph,
   path: readonly string[],
-): { steps: { run: string; with?: Record<string, string> }[]; values: { key: string; value: string }[] } {
-  const steps: { run: string; with?: Record<string, string> }[] = [];
+): { steps: CompiledJourneyStep[]; values: { key: string; value: string }[] } {
+  const steps: CompiledJourneyStep[] = [];
   const values: { key: string; value: string }[] = [];
   for (const id of path) {
     const node = graph.nodes.find((candidate) => candidate.id === id);
-    if (node?.kind !== 'BLOCK' || !node.block) continue;
-    const mapping: Record<string, string> = {};
-    for (const [key, param] of Object.entries(node.params ?? {})) {
-      if (param.mode === 'MAP') mapping[key] = param.key;
-      else {
-        const own = instanceKey(key, node.id);
-        mapping[key] = own;
-        values.push({ key: own, value: param.value });
-      }
+    if (node?.kind === 'WAIT' && node.wait) {
+      steps.push(waitStep(node.wait, node.label) as CompiledJourneyStep);
+      continue;
     }
-    steps.push({ run: node.block, ...(Object.keys(mapping).length > 0 ? { with: mapping } : {}) });
+    const instance = (
+      id: string,
+      block: string,
+      params: JourneyNode['params'],
+    ): { run: string; with?: Record<string, string> } => {
+      const mapping: Record<string, string> = {};
+      for (const [key, param] of Object.entries(params ?? {})) {
+        if (param.mode === 'MAP') mapping[key] = param.key;
+        else {
+          const own = instanceKey(key, id);
+          mapping[key] = own;
+          values.push({ key: own, value: param.value });
+        }
+      }
+      return { run: block, ...(Object.keys(mapping).length > 0 ? { with: mapping } : {}) };
+    };
+    if (node?.kind === 'LOOP' && node.loop) {
+      // UNE BOUCLE reste une boucle : une seule étape `loop:` que le moteur interprète (jamais aplatie).
+      steps.push(
+        compileLoop(node.id, node.loop, node.label, (item: JourneyLoopItem) =>
+          item.block ? instance(item.id, item.block, item.params) : undefined,
+        ) as CompiledJourneyStep,
+      );
+      continue;
+    }
+    if (node?.kind !== 'BLOCK' || !node.block) continue;
+    steps.push(instance(node.id, node.block, node.params));
   }
   return { steps, values };
 }

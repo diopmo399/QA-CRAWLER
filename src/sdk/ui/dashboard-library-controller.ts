@@ -1,6 +1,12 @@
-import type { QaCrawlerClient } from '../core/client.js';
+import { QaCrawlerError, type QaCrawlerClient } from '../core/client.js';
+import { DATA_TYPES, type FieldDeclaration } from '../core/contracts.js';
+import { fieldsText } from './dashboard-library-fields.js';
+import { newOutputForm, outputRequest, outputText, type OutputForm } from './dashboard-library-output.js';
+import { OUTPUT_SOURCES } from '../core/contracts.js';
 import { RECENT_MAX, type LibraryUi } from './dashboard-library.js';
 import { SHEET_TABS, type SheetTab } from './dashboard-library-sheet.js';
+import { defaultWait, sanitizeWait } from '../core/wait.js';
+import { journeyText } from './dashboard-journey.js';
 import type { DashboardRoute, DashboardState } from './dashboard-view.js';
 
 /**
@@ -176,10 +182,287 @@ export class LibraryController {
     this.paintKeepingFocus('[data-action="lib-compare"]');
   }
 
+  /** Un réglage du formulaire « Insérer une attente » ; changer de type redessine ses champs. */
+  waitField(key: string, value: string): void {
+    const wait = this.ui.sheet?.wait;
+    if (!wait) return;
+    if (key === 'after') {
+      wait.after = Number(value) || 0;
+      return;
+    }
+    const spec: Record<string, unknown> = { ...wait.spec };
+    if (key === 'timeoutS') {
+      if (value.trim() === '' || Number.isNaN(Number(value))) return;
+      spec.timeoutS = Number(value);
+    } else if (key === 'status') spec.status = /^\d+$/.test(value) ? Number(value) : value;
+    else if (key === 'method' && value === '') delete spec.method;
+    else spec[key] = value;
+    wait.spec = sanitizeWait(spec);
+    wait.error = undefined;
+    if (key === 'type') {
+      this.host.paint();
+      this.focus('[data-lib="wait.type"]');
+    }
+  }
+
+  /** Un champ du formulaire « Ajouter une sortie ». Changer la source redessine les champs utiles. */
+  outputField(key: string, value: string): void {
+    const form = this.ui.sheet?.output;
+    if (!form) return;
+    if (key === 'source') {
+      const source = OUTPUT_SOURCES.find((candidate) => candidate === value);
+      if (source) form.source = source;
+      form.error = undefined;
+      this.host.paint();
+      this.focus('[data-lib="output.source"]');
+      return;
+    }
+    if (key === 'after') {
+      form.after = Number(value) || 0;
+      return;
+    }
+    if (key in form && key !== 'busy' && key !== 'error')
+      (form as unknown as Record<string, string>)[key] = value;
+    form.error = undefined;
+  }
+
+  /** Ajoute la sortie (serveur) : une étape est insérée, le bloc devient « modifié » (version à valider). */
+  private async addOutput(): Promise<void> {
+    const sheet = this.ui.sheet;
+    const form: OutputForm | undefined = sheet?.output;
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!sheet || !form || !api || !projectId || form.busy) return;
+    const block = sheet.block;
+    const request = outputRequest(form);
+    form.busy = true;
+    this.host.paint();
+    try {
+      const view = await api.library.addOutput(projectId, block, request);
+      await this.host.refresh();
+      if (this.ui.sheet?.block === block) {
+        this.ui.sheet.output = undefined;
+        this.ui.sheet.details = undefined;
+        this.ui.notice = outputText(this.host.state).done(request.key, view.version + 1);
+        this.ui.error = undefined;
+      }
+      void this.loadDetails();
+      this.paintKeepingFocus('[data-action="lib-output-open"]');
+      return;
+    } catch (error) {
+      if (this.ui.sheet?.output) {
+        this.ui.sheet.output.busy = false;
+        this.ui.sheet.output.error = message(error);
+      }
+    }
+    this.paintKeepingFocus('[data-action="lib-output-add"]');
+  }
+
+  /** Insère l'attente (serveur) : le bloc devient « modifié », sa version suivante est à valider. */
+  private async insertWait(): Promise<void> {
+    const sheet = this.ui.sheet;
+    const wait = sheet?.wait;
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!sheet || !wait || !api || !projectId || wait.busy) return;
+    const block = sheet.block;
+    wait.busy = true;
+    this.host.paint();
+    try {
+      const view = await api.library.insertWait(projectId, block, { after: wait.after, wait: wait.spec });
+      await this.host.refresh();
+      if (this.ui.sheet?.block === block) {
+        this.ui.sheet.wait = undefined;
+        this.ui.sheet.details = undefined;
+        this.ui.notice = journeyText(this.host.state).insertWaitDone(view.version + 1);
+      }
+      void this.loadDetails();
+      this.paintKeepingFocus('[data-action="lib-wait-open"]');
+      return;
+    } catch (error) {
+      if (this.ui.sheet?.wait) {
+        this.ui.sheet.wait.busy = false;
+        this.ui.sheet.wait.error = message(error);
+      }
+    }
+    this.paintKeepingFocus('[data-action="lib-wait-insert"]');
+  }
+
+  /** Un champ de la donnée en cours de correction (onglets Entrées / Sorties). */
+  fieldInput(key: string, value: string): void {
+    const edit = this.ui.sheet?.field;
+    if (!edit || !['label', 'description', 'meaning', 'type', 'defaultValue'].includes(key)) return;
+    (edit as unknown as Record<string, string>)[key] = value;
+    edit.error = undefined;
+  }
+
+  /**
+   * Envoie une déclaration de donnée au serveur. Un changement incompatible d'un bloc utilisé est refusé
+   * (409) : la fiche le dit, avec les dépendants, et propose de le valider explicitement.
+   */
+  private async declare(
+    declaration: FieldDeclaration,
+    options: { acceptIncompatible?: boolean; focus: string },
+  ): Promise<void> {
+    const sheet = this.ui.sheet;
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!sheet || !api || !projectId) return;
+    const block = sheet.block;
+    const t = fieldsText(this.host.state);
+    if (sheet.field) sheet.field.busy = true;
+    this.host.paint();
+    try {
+      const result = await api.library.declareFields(projectId, block, [declaration], {
+        ...(options.acceptIncompatible ? { acceptIncompatible: true } : {}),
+      });
+      await this.host.refresh();
+      if (this.ui.sheet?.block === block) {
+        this.ui.sheet.field = undefined;
+        const changed = result.incompatible.find((item) => item.key === declaration.key);
+        this.ui.notice = changed
+          ? t.savedIncompatible(declaration.key, changed.version)
+          : t.saved(declaration.key);
+        this.ui.error = undefined;
+      }
+    } catch (error) {
+      const refused = error instanceof QaCrawlerError ? error : undefined;
+      if (this.ui.sheet?.field) {
+        Object.assign(this.ui.sheet.field, {
+          busy: false,
+          error: message(error),
+          details: refused?.details ?? [],
+          needsAccept: refused?.status === 409,
+        });
+      } else this.ui.error = message(error);
+    }
+    this.paintKeepingFocus(options.focus);
+  }
+
+  private fieldOf(target: HTMLElement): { direction: 'input' | 'output'; key: string } | undefined {
+    const direction =
+      target.dataset.dir === 'output' ? 'output' : target.dataset.dir === 'input' ? 'input' : undefined;
+    const key = target.dataset.key;
+    return direction && key ? { direction, key } : undefined;
+  }
+
   click(action: string, target: HTMLElement): boolean {
     const ui = this.ui;
     const sheet = ui.sheet;
     switch (action) {
+      case 'lib-field-edit': {
+        const ref = this.fieldOf(target);
+        const block = ui.blocks?.find((entry) => entry.name === sheet?.block);
+        const fields = block?.contract.fields;
+        const field = ref
+          ? (ref.direction === 'input' ? fields?.inputs : fields?.outputs)?.find(
+              (entry) => entry.key === ref.key,
+            )
+          : undefined;
+        if (!sheet || !ref || !field) return true;
+        sheet.field = {
+          direction: ref.direction,
+          key: ref.key,
+          label: field.label ?? '',
+          description: field.description ?? '',
+          meaning: field.meaning ?? '',
+          type: field.typeSource === 'DECLARED' ? field.type : '',
+          defaultValue: field.defaultValue ?? '',
+        };
+        this.host.paint();
+        this.focus('[data-lib="field.label"]');
+        return true;
+      }
+      case 'lib-field-cancel':
+        if (sheet) sheet.field = undefined;
+        this.host.paint();
+        return true;
+      case 'lib-field-save':
+      case 'lib-field-accept': {
+        const edit = sheet?.field;
+        if (!edit) return true;
+        const type = DATA_TYPES.find((entry) => entry === edit.type);
+        void this.declare(
+          {
+            direction: edit.direction,
+            key: edit.key,
+            ...(edit.label.trim() ? { label: edit.label } : {}),
+            ...(edit.description.trim() ? { description: edit.description } : {}),
+            ...(edit.meaning.trim() ? { meaning: edit.meaning } : {}),
+            ...(type ? { type } : {}),
+            ...(edit.direction === 'input' && edit.defaultValue.trim()
+              ? { defaultValue: edit.defaultValue }
+              : {}),
+            ...(edit.confirmed !== undefined ? { confirmed: edit.confirmed } : {}),
+          },
+          {
+            acceptIncompatible: action === 'lib-field-accept',
+            focus: `[data-field="${CSS.escape(`${edit.direction}:${edit.key}`)}"] [data-action="lib-field-edit"]`,
+          },
+        );
+        return true;
+      }
+      case 'lib-field-confirm': {
+        const ref = this.fieldOf(target);
+        if (ref)
+          void this.declare(
+            { ...ref, confirmed: true },
+            {
+              focus: `[data-field="${CSS.escape(`${ref.direction}:${ref.key}`)}"] [data-action="lib-field-edit"]`,
+            },
+          );
+        return true;
+      }
+      case 'lib-field-expose': {
+        const ref = this.fieldOf(target);
+        if (!ref || !sheet) return true;
+        const expose = target.dataset.value === '1';
+        // Retirer une sortie d'un bloc utilisé est incompatible : la fiche l'explique avant de valider.
+        sheet.field = {
+          ...ref,
+          label: '',
+          description: '',
+          meaning: '',
+          type: '',
+          defaultValue: '',
+          confirmed: expose,
+        };
+        void this.declare(
+          { ...ref, confirmed: expose },
+          {
+            focus: `[data-field="${CSS.escape(`${ref.direction}:${ref.key}`)}"] [data-action="lib-field-expose"]`,
+          },
+        );
+        return true;
+      }
+      case 'lib-output-open':
+        if (!sheet) return true;
+        sheet.output = newOutputForm(sheet.details?.steps.length ?? 0);
+        this.host.paint();
+        this.focus('[data-lib="output.key"]');
+        return true;
+      case 'lib-output-cancel':
+        if (sheet) sheet.output = undefined;
+        this.host.paint();
+        this.focus('[data-action="lib-output-open"]');
+        return true;
+      case 'lib-output-add':
+        void this.addOutput();
+        return true;
+      case 'lib-wait-open':
+        if (!sheet) return true;
+        sheet.wait = { after: sheet.details?.steps.length ?? 0, spec: defaultWait() };
+        this.host.paint();
+        this.focus('[data-lib="wait.after"]');
+        return true;
+      case 'lib-wait-cancel':
+        if (sheet) sheet.wait = undefined;
+        this.host.paint();
+        this.focus('[data-action="lib-wait-open"]');
+        return true;
+      case 'lib-wait-insert':
+        void this.insertWait();
+        return true;
       case 'lib-open':
         this.open(target.dataset.block ?? '');
         return true;

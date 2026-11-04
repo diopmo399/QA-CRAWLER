@@ -1,4 +1,5 @@
-import type { FlowConfig, FlowStep, FlowTarget, FlowValue } from '../config/flow-schema.js';
+import type { FlowConfig, FlowExpectation, FlowStep, FlowTarget, FlowValue } from '../config/flow-schema.js';
+import { captureYaml, loopYaml } from '../config/flow-schema.js';
 
 /**
  * Les étapes d'un flow, dans les deux sens : du modèle exécutable (FlowStep) vers la forme YAML
@@ -55,17 +56,8 @@ export function stepYaml(step: FlowStep, literalEnv?: string): Record<string, un
       return { fill: { ...targetYaml(step.target), value: safeValue(step.value, literalEnv) }, ...common };
     case 'select':
       return { select: { ...targetYaml(step.target), option: step.option }, ...common };
-    case 'expect': {
-      const { visible, hidden, ...rest } = step.expect;
-      return {
-        expect: {
-          ...rest,
-          ...(visible ? { visible: targetYaml(visible) } : {}),
-          ...(hidden ? { hidden: targetYaml(hidden) } : {}),
-        },
-        ...common,
-      };
-    }
+    case 'expect':
+      return { expect: expectationYaml(step.expect), ...common };
     case 'screenshot':
       return { screenshot: step.label, ...common };
     case 'manual':
@@ -74,12 +66,25 @@ export function stepYaml(step: FlowStep, literalEnv?: string): Record<string, un
       return { auto: { sentence: step.sentence, type: step.type }, ...common };
     case 'intent':
       return { intent: step.intent, ...common };
+    case 'capture':
+      return { capture: captureYaml(step.capture, targetYaml), ...common };
+    case 'loop':
+      return { loop: loopYaml(step.loop, (inner) => stepYaml(inner), expectationYaml), ...common };
     case 'dragAndDrop':
       return {
         dragAndDrop: { item: step.item, ...(step.from ? { from: step.from } : {}), to: step.to },
         ...common,
       };
   }
+}
+
+function expectationYaml(expectation: FlowExpectation): Record<string, unknown> {
+  const { visible, hidden, ...rest } = expectation;
+  return {
+    ...rest,
+    ...(visible ? { visible: targetYaml(visible) } : {}),
+    ...(hidden ? { hidden: targetYaml(hidden) } : {}),
+  };
 }
 
 const quote = (text: string): string => JSON.stringify(text);

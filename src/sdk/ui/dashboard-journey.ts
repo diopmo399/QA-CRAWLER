@@ -20,7 +20,19 @@ import {
   type JourneyParam,
   type JourneySummary,
 } from '../core/journey.js';
+import {
+  defaultWait,
+  WAIT_STATUS_CLASSES,
+  WAIT_TIMEOUT,
+  WAIT_TYPES,
+  waitProblems,
+  waitReferences,
+  type WaitSpec,
+} from '../core/wait.js';
 import { icon } from './dashboard-parts.js';
+import { LOOP_CSS, loopCard, loopNodeInner, loopProps, loopText } from './dashboard-journey-loop.js';
+import { SIM_CSS, simText, simulationPanel, type SimulationUi } from './dashboard-journey-sim.js';
+import { defaultLoop } from '../core/journey-loop.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
 
@@ -81,9 +93,19 @@ export interface JourneyUi {
   toast?: string;
   /** Un bloc déposé sur une connexion : proposer de l'insérer entre ses deux nœuds. */
   pendingInsert?: { edge: string; node: string };
+  /** Le panneau des données sous la scène : son onglet, et s'il est déplié. */
+  dock: 'io' | 'map' | 'vars' | 'issues' | 'sim';
+  /** La simulation (aperçu statique, exécution réelle) et la logique au moment de l'aperçu. */
+  sim?: SimulationUi;
+  simKey?: string;
+  dockOpen: boolean;
+  /** La légende du diagramme dépliée (repliée par défaut : elle ne masque pas les nœuds). */
+  legendOpen?: boolean;
 }
 
 export const emptyJourneyUi = (): JourneyUi => ({
+  dock: 'io',
+  dockOpen: true,
   category: '',
   tool: 'select',
   propsTab: 'params',
@@ -162,19 +184,17 @@ function linear(
   return order.ok ? order : undefined;
 }
 
-/** Ajoute un bloc : à la position donnée de la suite (mode linéaire), ou à cet endroit du diagramme. */
-export function addBlock(
+/**
+ * Place un nœud de la suite (bloc ou attente) : à la position donnée (mode linéaire), ou à cet endroit du
+ * diagramme. Ajouté par un clic (sans position) après un nœud sans suite, il s'y rattache ; déposé à un
+ * endroit, il n'est jamais relié d'office (aucune connexion ambiguë).
+ */
+function insertNode(
   ui: JourneyUi,
-  block: Pick<LibraryBlockView, 'name' | 'version'>,
-  at: { index?: number; x?: number; y?: number } = {},
+  node: JourneyNode,
+  at: { index?: number; x?: number; y?: number },
 ): string {
-  remember(ui);
   const graph = ui.journey.graph;
-  const id = freeId(
-    'n',
-    graph.nodes.map((node) => node.id),
-  );
-  const node: JourneyNode = { id, kind: 'BLOCK', block: block.name, version: block.version, x: 0, y: 0 };
   const order = ui.journey.mode === 'LINEAR' ? linear(graph) : undefined;
   if (order) {
     const blocks = [...order.blocks];
@@ -182,16 +202,18 @@ export function addBlock(
     ui.journey.graph = chain(order.start, blocks, order.end, graph.edges, true);
   } else {
     const last = graph.nodes.reduce((max, entry) => Math.max(max, entry.y), 0);
-    node.x = Math.round(at.x ?? -NODE_SIZE.BLOCK.w / 2);
+    node.x = Math.round(at.x ?? -NODE_SIZE[node.kind].w / 2);
     node.y = Math.round(at.y ?? last + 124);
     graph.nodes.push(node);
-    // Ajouté par un clic (sans position) après un nœud sans suite : le nouveau bloc s'y rattache. Un bloc
-    // déposé à un endroit n'est jamais relié d'office (aucune connexion ambiguë).
     const selected =
       at.x === undefined && ui.selected?.kind === 'node' ? nodeOf(graph, ui.selected.id) : undefined;
     if (
       selected &&
-      (selected.kind === 'START' || selected.kind === 'BLOCK' || selected.kind === 'JOIN') &&
+      (selected.kind === 'START' ||
+        selected.kind === 'BLOCK' ||
+        selected.kind === 'WAIT' ||
+        selected.kind === 'LOOP' ||
+        selected.kind === 'JOIN') &&
       !graph.edges.some((edge) => edge.from === selected.id)
     )
       graph.edges.push({
@@ -200,11 +222,53 @@ export function addBlock(
           graph.edges.map((edge) => edge.id),
         ),
         from: selected.id,
-        to: id,
+        to: node.id,
       });
   }
-  ui.selected = { kind: 'node', id };
-  return id;
+  ui.selected = { kind: 'node', id: node.id };
+  return node.id;
+}
+
+/** Ajoute un bloc : à la position donnée de la suite (mode linéaire), ou à cet endroit du diagramme. */
+export function addBlock(
+  ui: JourneyUi,
+  block: Pick<LibraryBlockView, 'name' | 'version'>,
+  at: { index?: number; x?: number; y?: number } = {},
+): string {
+  remember(ui);
+  const id = freeId(
+    'n',
+    ui.journey.graph.nodes.map((node) => node.id),
+  );
+  return insertNode(ui, { id, kind: 'BLOCK', block: block.name, version: block.version, x: 0, y: 0 }, at);
+}
+
+/** Ajoute une attente (élément visible par défaut, à compléter) : dans la suite ou dans le diagramme. */
+export function addWait(ui: JourneyUi, at: { index?: number; x?: number; y?: number } = {}): string {
+  remember(ui);
+  const id = freeId(
+    'n',
+    ui.journey.graph.nodes.map((node) => node.id),
+  );
+  return insertNode(ui, { id, kind: 'WAIT', wait: defaultWait(), x: 0, y: 0 }, at);
+}
+
+/** Ajoute une boucle (« Répéter 2 fois », corps vide à remplir) : dans la suite ou dans le diagramme. */
+export function addLoop(ui: JourneyUi, at: { index?: number; x?: number; y?: number } = {}): string {
+  remember(ui);
+  const id = freeId(
+    'n',
+    ui.journey.graph.nodes.map((node) => node.id),
+  );
+  return insertNode(ui, { id, kind: 'LOOP', loop: defaultLoop('REPEAT'), x: 0, y: 0 }, at);
+}
+
+/** Change un réglage de l'attente (le nœud garde sa place et ses connexions). */
+export function setWait(ui: JourneyUi, id: string, wait: WaitSpec): void {
+  const node = nodeOf(ui.journey.graph, id);
+  if (node?.kind !== 'WAIT') return;
+  remember(ui);
+  node.wait = wait;
 }
 
 /** Ajoute une condition, une jonction ou une fin au diagramme. */
@@ -273,11 +337,11 @@ export function removeNode(ui: JourneyUi, id: string): boolean {
   return true;
 }
 
-/** Duplique une instance de bloc (avec ses paramètres) : juste après elle, ou décalée dans le diagramme. */
+/** Duplique une instance de bloc (avec ses paramètres) ou une attente : juste après elle, ou décalée dans le diagramme. */
 export function duplicateNode(ui: JourneyUi, id: string): string | undefined {
   const graph = ui.journey.graph;
   const node = nodeOf(graph, id);
-  if (node?.kind !== 'BLOCK') return undefined;
+  if (node?.kind !== 'BLOCK' && node?.kind !== 'WAIT') return undefined;
   remember(ui);
   const copyId = freeId(
     'n',
@@ -343,7 +407,8 @@ export function insertOnEdge(ui: JourneyUi, edgeId: string, nodeId: string): str
   const graph = ui.journey.graph;
   const edge = graph.edges.find((entry) => entry.id === edgeId);
   const node = nodeOf(graph, nodeId);
-  if (!edge || !node || node.kind !== 'BLOCK') return 'connexion ou bloc introuvable';
+  if (!edge || !node || (node.kind !== 'BLOCK' && node.kind !== 'WAIT' && node.kind !== 'LOOP'))
+    return 'connexion ou bloc introuvable';
   if (graph.edges.some((entry) => entry.from === nodeId || entry.to === nodeId))
     return 'ce bloc est déjà relié : retirez ses connexions d’abord';
   remember(ui);
@@ -473,7 +538,10 @@ const FR = {
   addToJourney: (name: string) => `Ajouter « ${name} » au parcours`,
   dragHint: 'Glissez un bloc dans le parcours, ou utilisez +.',
   shapesTitle: 'Éléments du diagramme',
-  shapes: { CONDITION: 'Condition', JOIN: 'Jonction', END: 'Fin' } as Record<string, string>,
+  shapes: { CONDITION: 'Condition', JOIN: 'Jonction', END: 'Fin', WAIT: 'Attente', LOOP: 'Boucle' } as Record<
+    string,
+    string
+  >,
   shapeHint: 'Une condition a une branche Oui et une branche Non ; une jonction réunit des branches.',
   start: 'Début',
   end: 'Fin',
@@ -595,6 +663,7 @@ const FR = {
   } as Record<string, [string, string]>,
   validIssues: (n: number) => `${String(n)} problème(s)`,
   toastAdded: (name: string) => `Bloc « ${name} » ajouté au parcours`,
+  toastWait: 'Attente ajoutée au parcours',
   close: 'Fermer',
   insertOnEdge: (block: string, from: string, to: string) => `Insérer « ${block} » entre ${from} et ${to} ?`,
   insertYes: 'Insérer',
@@ -625,6 +694,139 @@ const FR = {
     'Un parcours avec conditions ne devient pas un bloc : ses chemins produisent des données différentes.',
   toBlockDone: (name: string, outputs: number) =>
     `Le bloc « ${name} » est dans la bibliothèque, avec ${String(outputs)} sortie(s) déclarée(s).`,
+  wait: 'Attente',
+  waitSub: 'Synchronisation et délai',
+  joinSub: 'Réunit des branches',
+  proposalUnique: 'Correspondance proposée (fiable) : à retenir',
+  proposalAmbiguous: 'Correspondance ambiguë : choisissez la donnée',
+  proposalNone: 'Aucune donnée compatible en amont : saisissez une valeur ou choisissez une correspondance',
+  applyMap: (key: string) => `Utiliser ${key}`,
+  waitsTitle: 'Contrôle du flux',
+  waitAdd: 'Ajouter une attente',
+  waitHint:
+    'Attente : le scénario attend une condition (élément, texte, adresse, réponse HTTP) jusqu’au délai.',
+  waitTypeLabel: 'Type d’attente',
+  waitTypes: {
+    VISIBLE: 'Attendre un élément (visible)',
+    HIDDEN: 'Attendre la disparition d’un élément',
+    TEXT: 'Attendre un texte métier',
+    URL: 'Attendre un changement d’adresse',
+    RESPONSE: 'Attendre une réponse HTTP',
+  } as Record<string, string>,
+  waitUnsupported: [
+    ['Attendre qu’un élément soit cliquable', 'le moteur vérifie la visibilité, pas l’état cliquable'],
+    ['Durée fixe', 'le moteur n’a pas d’étape de pause : préférez une attente conditionnelle'],
+  ] as [string, string][],
+  notSupported: 'non pris en charge par le moteur',
+  waitSelector: 'Sélecteur CSS de l’élément',
+  waitOrText: 'ou texte visible de l’élément',
+  waitText: 'Texte attendu',
+  waitUrl: 'L’adresse contient',
+  waitRequestUrl: 'Adresse de la requête (sous-chaîne, ou chemin avec * et **)',
+  waitMethod: 'Méthode',
+  waitAnyMethod: 'Toutes',
+  waitStatus: 'Statut attendu',
+  waitTimeout: 'Délai maximum (secondes)',
+  waitOnTimeout: 'En cas de délai dépassé',
+  waitFail: 'Arrêter le scénario avec une erreur',
+  waitWarn: 'Continuer avec un avertissement',
+  waitWarnNote:
+    'L’étape reste notée en échec dans le rapport, avec ce qui manquait ; le scénario continue et son verdict n’en dépend pas.',
+  waitInterval: 'Intervalle de vérification : géré par le moteur, non réglable.',
+  waitResponseNote:
+    'Le moteur écoute le réseau dès le début du scénario : une réponse déjà reçue compte ; une requête partie sans réponse est attendue jusqu’au délai. Une requête qui n’est jamais partie échoue.',
+  waitCite: 'Citer une donnée disponible',
+  waitCiteNone: 'Aucune donnée produite avant cette attente.',
+  waitCiteInfo: 'Une donnée citée est lue dans le run (jamais régénérée) : ${testData:clé}.',
+  waitFailureNote:
+    'En cas d’échec, le rapport de l’étape dit ce qui manque (élément, texte, adresse ou réponse).',
+  waitValidTitle: 'Validation de l’attente',
+  waitValid: {
+    type: ['Type d’attente défini', 'Type d’attente défini'],
+    target: ['Cible renseignée', 'Cible à renseigner'],
+    timeout: ['Délai configuré', 'Délai hors limites (1 à 300 s)'],
+    data: ['Données citées disponibles', 'Donnée citée absente avant l’attente'],
+  } as Record<string, [string, string]>,
+  waitSummary: (spec: WaitSpec): string =>
+    spec.type === 'VISIBLE'
+      ? `${spec.selector ?? `« ${spec.text ?? '…'} »`} visible`
+      : spec.type === 'HIDDEN'
+        ? `${spec.selector ?? `« ${spec.text ?? '…'} »`} disparu`
+        : spec.type === 'TEXT'
+          ? `« ${spec.text ?? '…'} »`
+          : spec.type === 'URL'
+            ? `adresse ∋ « ${spec.url ?? '…'} »`
+            : `${spec.method ? `${spec.method} ` : ''}${spec.url ?? '…'} → ${String(spec.status ?? '2xx')}`,
+  waitTimeoutShort: (seconds: number, warn: boolean) =>
+    `${String(seconds)} s · ${warn ? 'avertissement' : 'échec'} au délai`,
+  unavailable: 'Indisponible',
+  unavailableItems: [
+    ['Document', 'aucune étape document dans le moteur'],
+    ['API', 'aucune étape d’appel de service dans le moteur'],
+  ] as [string, string][],
+  legend: 'Légende',
+  legendItems: {
+    block: 'Bloc',
+    wait: 'Attente',
+    loop: 'Boucle',
+    condition: 'Condition',
+    join: 'Jonction',
+    flow: 'Flux d’exécution',
+    data: 'Lien de données',
+  } as Record<string, string>,
+  dataLink: (keys: string) => `Données : ${keys}`,
+  dockLabel: 'Données du parcours',
+  dockTabs: {
+    io: 'Entrées / Sorties',
+    map: 'Mappings des données',
+    vars: 'Variables',
+    issues: 'Erreurs / Avertissements',
+  } as Record<string, string>,
+  dockHide: 'Replier le panneau des données',
+  dockShow: 'Déplier le panneau des données',
+  dockInputs: 'Entrées du scénario',
+  dockInputsSub: 'Données lues avant l’exécution (jeux des blocs ou valeurs saisies).',
+  dockOutputs: 'Sorties du scénario',
+  dockOutputsSub: 'Données produites par les blocs du parcours.',
+  colKey: 'Donnée',
+  colType: 'Type',
+  colSource: 'Source',
+  colRequired: 'Obligatoire',
+  colFrom: 'Bloc (source) – Sortie',
+  colTo: 'Bloc (cible) – Entrée',
+  colStatus: 'Statut',
+  colOrigin: 'Origine',
+  colUsedBy: 'Utilisée par',
+  typeText: 'texte',
+  yesShort: 'Oui',
+  noShort: 'Non',
+  srcData: (block: string) => `Jeu du bloc ${block}`,
+  srcValue: (block: string) => `Valeur saisie (${block})`,
+  srcGenerated: (block: string) => `Générée au rejeu par ${block}`,
+  srcLiteral: (block: string) => `Valeur du jeu de ${block}`,
+  srcProduced: (block: string) => `Produite par ${block}`,
+  mapStatus: {
+    auto: 'Connecté (même nom)',
+    renamed: 'Connecté (renommé)',
+    value: 'Valeur saisie',
+    data: 'Jeu de données',
+    missing: 'Manquante',
+  } as Record<string, string>,
+  mapFix: 'Associer',
+  mapCandidates: (keys: string) => `à associer manuellement : ${keys}`,
+  mapNone: 'Aucune donnée ne circule entre les blocs de ce parcours.',
+  varsNone: 'Aucune donnée dans ce parcours.',
+  issuesNone: 'Aucune erreur ni aucun avertissement.',
+  checkToSee: 'Vérifiez le parcours pour voir ses données.',
+  insertWaitTitle: 'Insérer une attente dans le bloc',
+  insertWaitInfo:
+    'L’attente devient une étape du bloc. Le bloc passe à « modifié » : sa version suivante n’existe qu’une fois validée, et les parcours qui l’utilisent gardent leur version tant qu’ils ne l’acceptent pas.',
+  insertWaitAfter: 'Après l’étape',
+  insertWaitStart: 'Avant la première étape',
+  insertWaitDo: 'Insérer l’attente',
+  insertWaitDone: (version: number) =>
+    `Attente insérée. Le bloc est modifié : validez-le pour créer la version ${String(version)}.`,
+  validateVersion: 'Valider la nouvelle version',
 };
 
 type Text = typeof FR;
@@ -676,7 +878,7 @@ const EN: Text = {
   addToJourney: (name) => `Add “${name}” to the journey`,
   dragHint: 'Drag a block into the journey, or use +.',
   shapesTitle: 'Diagram elements',
-  shapes: { CONDITION: 'Condition', JOIN: 'Join', END: 'End' },
+  shapes: { CONDITION: 'Condition', JOIN: 'Join', END: 'End', WAIT: 'Wait', LOOP: 'Loop' },
   shapeHint: 'A condition has a Yes branch and a No branch; a join merges branches.',
   start: 'Start',
   end: 'End',
@@ -788,6 +990,7 @@ const EN: Text = {
   },
   validIssues: (n: number) => `${String(n)} issue(s)`,
   toastAdded: (name: string) => `Block “${name}” added to the journey`,
+  toastWait: 'Wait added to the journey',
   close: 'Close',
   insertOnEdge: (block: string, from: string, to: string) => `Insert “${block}” between ${from} and ${to}?`,
   insertYes: 'Insert',
@@ -817,6 +1020,138 @@ const EN: Text = {
   toBlockPaths: 'A journey with conditions does not become a block: its paths produce different data.',
   toBlockDone: (name: string, outputs: number) =>
     `The block “${name}” is in the library, with ${String(outputs)} declared output(s).`,
+  wait: 'Wait',
+  waitSub: 'Synchronisation and timeout',
+  joinSub: 'Merges branches',
+  proposalUnique: 'Proposed mapping (reliable): to apply',
+  proposalAmbiguous: 'Ambiguous mapping: choose the data',
+  proposalNone: 'No compatible data upstream: enter a value or choose a mapping',
+  applyMap: (key: string) => `Use ${key}`,
+  waitsTitle: 'Flow control',
+  waitAdd: 'Add a wait',
+  waitHint:
+    'Wait: the scenario waits for a condition (element, text, address, HTTP response) up to the timeout.',
+  waitTypeLabel: 'Wait type',
+  waitTypes: {
+    VISIBLE: 'Wait for an element (visible)',
+    HIDDEN: 'Wait for an element to disappear',
+    TEXT: 'Wait for a business text',
+    URL: 'Wait for an address change',
+    RESPONSE: 'Wait for an HTTP response',
+  },
+  waitUnsupported: [
+    ['Wait until an element is clickable', 'the engine checks visibility, not clickability'],
+    ['Fixed duration', 'the engine has no pause step: prefer a conditional wait'],
+  ] as [string, string][],
+  notSupported: 'not supported by the engine',
+  waitSelector: 'CSS selector of the element',
+  waitOrText: 'or visible text of the element',
+  waitText: 'Expected text',
+  waitUrl: 'The address contains',
+  waitRequestUrl: 'Request address (substring, or path with * and **)',
+  waitMethod: 'Method',
+  waitAnyMethod: 'Any',
+  waitStatus: 'Expected status',
+  waitTimeout: 'Maximum timeout (seconds)',
+  waitOnTimeout: 'When the timeout is reached',
+  waitFail: 'Stop the scenario with an error',
+  waitWarn: 'Continue with a warning',
+  waitWarnNote:
+    'The step stays marked as failed in the report, with what was missing; the scenario continues and its verdict does not depend on it.',
+  waitInterval: 'Polling interval: handled by the engine, not configurable.',
+  waitResponseNote:
+    'The engine listens to the network from the start of the scenario: a response already received counts; a request sent without a response is awaited up to the timeout. A request never sent fails.',
+  waitCite: 'Cite an available data item',
+  waitCiteNone: 'No data is produced before this wait.',
+  waitCiteInfo: 'A cited data item is read from the run (never generated again): ${testData:key}.',
+  waitFailureNote: 'On failure, the step report says what is missing (element, text, address or response).',
+  waitValidTitle: 'Wait validation',
+  waitValid: {
+    type: ['Wait type set', 'Wait type set'],
+    target: ['Target set', 'Target to set'],
+    timeout: ['Timeout configured', 'Timeout out of range (1 to 300 s)'],
+    data: ['Cited data available', 'Cited data missing before the wait'],
+  },
+  waitSummary: (spec: WaitSpec): string =>
+    spec.type === 'VISIBLE'
+      ? `${spec.selector ?? `“${spec.text ?? '…'}”`} visible`
+      : spec.type === 'HIDDEN'
+        ? `${spec.selector ?? `“${spec.text ?? '…'}”`} gone`
+        : spec.type === 'TEXT'
+          ? `“${spec.text ?? '…'}”`
+          : spec.type === 'URL'
+            ? `address ∋ “${spec.url ?? '…'}”`
+            : `${spec.method ? `${spec.method} ` : ''}${spec.url ?? '…'} → ${String(spec.status ?? '2xx')}`,
+  waitTimeoutShort: (seconds: number, warn: boolean) =>
+    `${String(seconds)} s · ${warn ? 'warning' : 'failure'} on timeout`,
+  unavailable: 'Unavailable',
+  unavailableItems: [
+    ['Document', 'no document step in the engine'],
+    ['API', 'no service call step in the engine'],
+  ] as [string, string][],
+  legend: 'Legend',
+  legendItems: {
+    block: 'Block',
+    wait: 'Wait',
+    loop: 'Loop',
+    condition: 'Condition',
+    join: 'Join',
+    flow: 'Execution flow',
+    data: 'Data link',
+  },
+  dataLink: (keys: string) => `Data: ${keys}`,
+  dockLabel: 'Journey data',
+  dockTabs: {
+    io: 'Inputs / Outputs',
+    map: 'Data mappings',
+    vars: 'Variables',
+    issues: 'Errors / Warnings',
+  },
+  dockHide: 'Collapse the data panel',
+  dockShow: 'Expand the data panel',
+  dockInputs: 'Scenario inputs',
+  dockInputsSub: 'Data read before the run (block data sets or entered values).',
+  dockOutputs: 'Scenario outputs',
+  dockOutputsSub: 'Data produced by the journey blocks.',
+  colKey: 'Data',
+  colType: 'Type',
+  colSource: 'Source',
+  colRequired: 'Required',
+  colFrom: 'Block (source) – Output',
+  colTo: 'Block (target) – Input',
+  colStatus: 'Status',
+  colOrigin: 'Origin',
+  colUsedBy: 'Used by',
+  typeText: 'text',
+  yesShort: 'Yes',
+  noShort: 'No',
+  srcData: (block: string) => `Data set of ${block}`,
+  srcValue: (block: string) => `Entered value (${block})`,
+  srcGenerated: (block: string) => `Generated at replay by ${block}`,
+  srcLiteral: (block: string) => `Value from the data set of ${block}`,
+  srcProduced: (block: string) => `Produced by ${block}`,
+  mapStatus: {
+    auto: 'Connected (same name)',
+    renamed: 'Connected (renamed)',
+    value: 'Entered value',
+    data: 'Data set',
+    missing: 'Missing',
+  },
+  mapFix: 'Map',
+  mapCandidates: (keys: string) => `to map manually: ${keys}`,
+  mapNone: 'No data flows between the blocks of this journey.',
+  varsNone: 'No data in this journey.',
+  issuesNone: 'No error and no warning.',
+  checkToSee: 'Check the journey to see its data.',
+  insertWaitTitle: 'Insert a wait into the block',
+  insertWaitInfo:
+    'The wait becomes a step of the block. The block becomes “changed”: its next version only exists once validated, and journeys using it keep their version until they accept it.',
+  insertWaitAfter: 'After step',
+  insertWaitStart: 'Before the first step',
+  insertWaitDo: 'Insert the wait',
+  insertWaitDone: (version: number) =>
+    `Wait inserted. The block is changed: validate it to create version ${String(version)}.`,
+  validateVersion: 'Validate the new version',
 };
 
 export const journeyText = (state: DashboardState): Text => (state.t.locale === 'en' ? EN : FR);
@@ -962,7 +1297,39 @@ function palette(state: DashboardState, publish: boolean): string {
       ? `<label class="jn-pal-cat"><span class="sr">${esc(t.category)}</span><select data-jn="category" aria-label="${esc(t.category)}"><option value="">${esc(t.allBlocks)}</option>${categories.map((entry) => `<option value="${esc(entry)}"${entry === category ? ' selected' : ''}>${esc(entry)}</option>`).join('')}</select></label>`
       : '';
   const picked = ui.picked && blocks.some((block) => block.name === ui.picked) ? ui.picked : undefined;
-  return `<aside class="jn-palette" aria-labelledby="jn-pal-t"><h3 id="jn-pal-t">${esc(t.paletteTitle)}</h3><label class="lib-search jn-pal-search">${icon('search')}<span class="sr">${esc(t.paletteSearch)}</span><input type="search" data-jn="palette" value="${esc(ui.paletteQuery)}" placeholder="${esc(t.paletteSearchShort)}" autocomplete="off"></label>${filter}<div class="jn-pal-body">${body}</div><small class="mu jn-pal-hint">${esc(picked && publish ? t.picked(picked) : t.dragHint)}</small></aside>`;
+  return `<aside class="jn-palette" aria-labelledby="jn-pal-t"><h3 id="jn-pal-t">${esc(t.paletteTitle)}</h3><label class="lib-search jn-pal-search">${icon('search')}<span class="sr">${esc(t.paletteSearch)}</span><input type="search" data-jn="palette" value="${esc(ui.paletteQuery)}" placeholder="${esc(t.paletteSearchShort)}" autocomplete="off"></label>${filter}<div class="jn-pal-body">${body}${flowControls(state, publish)}</div><small class="mu jn-pal-hint">${esc(picked && publish ? t.picked(picked) : t.dragHint)}</small></aside>`;
+}
+
+/**
+ * LE CONTRÔLE DU FLUX dans le catalogue : l'attente (et, en diagramme, la condition et la jonction), qui
+ * s'exécutent réellement ; puis ce que le moteur ne sait pas faire (boucle, document, API), montré comme
+ * indisponible, sans bouton.
+ */
+function flowControls(state: DashboardState, publish: boolean): string {
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const item = (
+    kind: 'WAIT' | 'LOOP' | 'CONDITION' | 'JOIN',
+    title: string,
+    sub: string,
+    ico: string,
+    action: string,
+  ): string =>
+    `<li class="jn-pal-item flow ${kind.toLowerCase()}" draggable="${String(publish)}" data-jn-shape="${kind}"><span class="jn-pal-pick" title="${esc(sub)}"><span class="jn-pal-ic ${kind.toLowerCase()}" aria-hidden="true">${icon(ico)}</span><span class="jn-pal-t"><b>${esc(title)}</b><small class="mu">${esc(sub)}</small></span></span>${publish ? `<button type="button" class="btn small ghost icon-only" ${action} aria-label="${esc(t.addToJourney(title))}" title="${esc(t.addToJourney(title))}">${icon('plus')}</button>` : ''}</li>`;
+  const diagram = ui.journey.mode === 'DIAGRAM';
+  const lt = loopText(state);
+  const items = `${item('WAIT', t.wait, t.waitSub, 'history', 'data-action="jn-add-wait"')}${item('LOOP', lt.loop, lt.loopSub, 'refresh', 'data-action="jn-add-loop"')}${
+    diagram
+      ? `${item('CONDITION', t.shapes.CONDITION ?? '', `${t.yes} / ${t.no}`, 'diamond', 'data-action="jn-shape" data-kind="CONDITION"')}${item('JOIN', t.join, t.joinSub, 'merge', 'data-action="jn-shape" data-kind="JOIN"')}`
+      : ''
+  }`;
+  const off = t.unavailableItems
+    .map(
+      ([name, reason]) =>
+        `<li class="jn-pal-item off" aria-disabled="true"><span class="jn-pal-pick" title="${esc(`${name} : ${reason}`)}"><span class="jn-pal-ic" aria-hidden="true">${icon('cross')}</span><span class="jn-pal-t"><b>${esc(name)}</b><small class="mu">${esc(reason)}</small></span></span></li>`,
+    )
+    .join('');
+  return `<section class="jn-pal-flow" aria-labelledby="jn-flow-t"><h4 id="jn-flow-t">${esc(t.waitsTitle)}</h4><ul class="plain jn-pal-list">${items}</ul><details class="jn-pal-g jn-pal-off"><summary><span>${esc(t.unavailable)}</span> <small class="mu">(${String(t.unavailableItems.length)})</small></summary><ul class="plain jn-pal-list">${off}</ul></details></section>`;
 }
 
 function diagOf(ui: JourneyUi, id: string): { errors: string[]; warnings: string[] } {
@@ -982,6 +1349,10 @@ function linearView(state: DashboardState, publish: boolean): string {
       : '';
   const cards = order.blocks
     .map((node, index) => {
+      if (node.kind === 'WAIT')
+        return `${gap(index)}${waitCard(state, node, index, index === order.blocks.length - 1, publish)}`;
+      if (node.kind === 'LOOP')
+        return `${gap(index)}${loopCard(state, node, index, index === order.blocks.length - 1, publish, { moveUp: t.moveUp, moveDown: t.moveDown, remove: t.remove, grip: t.grip })}`;
       const block = blockOf(state, node.block);
       const diag = diagOf(ui, node.id);
       const selected = ui.selected?.kind === 'node' && ui.selected.id === node.id;
@@ -1016,6 +1387,9 @@ function floatingBar(state: DashboardState, node: JourneyNode): string {
 }
 
 function nodeLabel(t: Text, node: JourneyNode): string {
+  if (node.kind === 'LOOP') return node.label?.trim() || (t.shapes.LOOP ?? 'Boucle');
+  if (node.kind === 'WAIT')
+    return node.label?.trim() || `${t.wait} : ${t.waitSummary(node.wait ?? defaultWait())}`;
   return node.kind === 'BLOCK'
     ? (node.block ?? '?')
     : node.kind === 'CONDITION'
@@ -1048,9 +1422,13 @@ function nodeHtml(state: DashboardState, node: JourneyNode, publish: boolean): s
   const inner =
     node.kind === 'BLOCK'
       ? `<span class="jn-ic" aria-hidden="true">${icon('cube')}</span><span class="jn-n-t"><b>${esc(node.block ?? '?')}</b><small class="mu">${block ? esc(t.version(node.version ?? block.version)) : esc(t.unknownBlock)}</small></span>`
-      : node.kind === 'CONDITION'
-        ? `<svg class="jn-dia" viewBox="0 0 ${String(size.w)} ${String(size.h)}" preserveAspectRatio="none" aria-hidden="true"><polygon points="${String(size.w / 2)},2 ${String(size.w - 2)},${String(size.h / 2)} ${String(size.w / 2)},${String(size.h - 2)} 2,${String(size.h / 2)}"></polygon></svg><span class="jn-n-q" aria-hidden="true">?</span><b class="jn-n-l">${esc(nodeLabel(t, node))}</b>`
-        : `${icon(node.kind === 'START' ? 'play' : node.kind === 'END' ? 'stop' : 'merge')}<b>${esc(nodeLabel(t, node))}</b>`;
+      : node.kind === 'LOOP'
+        ? loopNodeInner(state, node)
+        : node.kind === 'WAIT'
+          ? `<span class="jn-ic wait" aria-hidden="true">${icon('history')}</span><span class="jn-n-t"><b>${esc(node.label?.trim() || t.wait)}</b><small class="mu">${esc(t.waitSummary(node.wait ?? defaultWait()))}</small></span>`
+          : node.kind === 'CONDITION'
+            ? `<svg class="jn-dia" viewBox="0 0 ${String(size.w)} ${String(size.h)}" preserveAspectRatio="none" aria-hidden="true"><polygon points="${String(size.w / 2)},2 ${String(size.w - 2)},${String(size.h / 2)} ${String(size.w / 2)},${String(size.h - 2)} 2,${String(size.h / 2)}"></polygon></svg><span class="jn-n-q" aria-hidden="true">?</span><b class="jn-n-l">${esc(nodeLabel(t, node))}</b>`
+            : `${icon(node.kind === 'START' ? 'play' : node.kind === 'END' ? 'stop' : 'merge')}<b>${esc(nodeLabel(t, node))}</b>`;
   const badge =
     diag.errors.length > 0
       ? `<span class="jn-badge ko" title="${esc(diag.errors.join(' · '))}">${String(diag.errors.length)}<span class="sr">${esc(diag.errors.join(' · '))}</span></span>`
@@ -1108,13 +1486,21 @@ function canvasTools(state: DashboardState, publish: boolean): string {
   const tool = (attrs: string, label: string, ico: string, pressed?: boolean, disabled = false): string =>
     `<button type="button" class="jn-tool" ${attrs} aria-label="${esc(label)}" title="${esc(label)}"${pressed === undefined ? '' : ` aria-pressed="${String(pressed)}"`}${disabled ? ' disabled' : ''}>${icon(ico)}</button>`;
   return `<div class="jn-tools-v" role="toolbar" aria-label="${esc(t.toolsLabel)}" aria-orientation="vertical">${tool('data-action="jn-tool" data-tool="select"', t.toolSelect, 'pointer', ui.tool === 'select')}${tool('data-action="jn-tool-block"', picked ? `${t.toolBlock} : ${picked}` : t.toolBlockNone, 'cube', undefined, !picked)}${(
-    ['CONDITION', 'JOIN', 'END'] as const
+    ['WAIT', 'LOOP', 'CONDITION', 'JOIN', 'END'] as const
   )
     .map((kind) =>
       tool(
-        `data-action="jn-shape" data-kind="${kind}" data-jn-shape="${kind}" draggable="true"`,
+        `data-action="${kind === 'WAIT' ? 'jn-add-wait' : kind === 'LOOP' ? 'jn-add-loop' : 'jn-shape'}" data-kind="${kind}" data-jn-shape="${kind}" draggable="true"`,
         t.shapes[kind] ?? kind,
-        kind === 'CONDITION' ? 'diamond' : kind === 'JOIN' ? 'merge' : 'stop',
+        kind === 'WAIT'
+          ? 'history'
+          : kind === 'LOOP'
+            ? 'refresh'
+            : kind === 'CONDITION'
+              ? 'diamond'
+              : kind === 'JOIN'
+                ? 'merge'
+                : 'stop',
       ),
     )
     .join(
@@ -1128,7 +1514,7 @@ function diagramView(state: DashboardState, publish: boolean): string {
   const graph = ui.journey.graph;
   const box = bounds(graph);
   const pad = 400;
-  const svg = `<svg class="jn-edges" style="left:${String(box.minX - pad)}px;top:${String(box.minY - pad)}px" width="${String(box.maxX - box.minX + pad * 2)}" height="${String(box.maxY - box.minY + pad * 2)}" viewBox="${String(box.minX - pad)} ${String(box.minY - pad)} ${String(box.maxX - box.minX + pad * 2)} ${String(box.maxY - box.minY + pad * 2)}" aria-hidden="false"><defs><marker id="jn-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"></path></marker></defs>${graph.edges.map((edge) => edgeHtml(state, edge)).join('')}<path class="jn-temp" d=""></path></svg>`;
+  const svg = `<svg class="jn-edges" style="left:${String(box.minX - pad)}px;top:${String(box.minY - pad)}px" width="${String(box.maxX - box.minX + pad * 2)}" height="${String(box.maxY - box.minY + pad * 2)}" viewBox="${String(box.minX - pad)} ${String(box.minY - pad)} ${String(box.maxX - box.minX + pad * 2)} ${String(box.maxY - box.minY + pad * 2)}" aria-hidden="false"><defs><marker id="jn-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"></path></marker><marker id="jn-dot" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle cx="5" cy="5" r="4"></circle></marker></defs>${graph.edges.map((edge) => edgeHtml(state, edge)).join('')}${dataLinks(state)}<path class="jn-temp" d=""></path></svg>`;
   const from = ui.connectFrom ? graph.nodes.find((node) => node.id === ui.connectFrom) : undefined;
   const hint =
     ui.tool === 'connect' ? (from ? t.connectPickTo(nodeLabel(t, from)) : t.connectPickFrom) : t.canvasHint;
@@ -1140,9 +1526,9 @@ function diagramView(state: DashboardState, publish: boolean): string {
   const placed = pending ? graph.nodes.find((node) => node.id === pending.node) : undefined;
   const insert =
     pending && edge && placed && ends[0] && ends[1]
-      ? `<div class="jn-insert" role="group"><p>${esc(t.insertOnEdge(placed.block ?? '', nodeLabel(t, ends[0]), nodeLabel(t, ends[1])))}</p><button type="button" class="btn small primary" data-action="jn-insert-yes">${esc(t.insertYes)}</button><button type="button" class="btn small ghost" data-action="jn-insert-no">${esc(t.insertNo)}</button></div>`
+      ? `<div class="jn-insert" role="group"><p>${esc(t.insertOnEdge(nodeLabel(t, placed), nodeLabel(t, ends[0]), nodeLabel(t, ends[1])))}</p><button type="button" class="btn small primary" data-action="jn-insert-yes">${esc(t.insertYes)}</button><button type="button" class="btn small ghost" data-action="jn-insert-no">${esc(t.insertNo)}</button></div>`
       : '';
-  return `<div class="jn-canvas${ui.tool === 'connect' ? ' connecting' : ''}" data-jn-canvas tabindex="0" role="application" aria-label="${esc(t.canvasLabel)}" aria-describedby="jn-canvas-h">${canvasTools(state, publish)}<div class="jn-world" style="transform:translate(${String(ui.panX)}px,${String(ui.panY)}px) scale(${String(ui.zoom)})">${svg}${graph.nodes.map((node) => nodeHtml(state, node, publish)).join('')}</div>${insert}<small id="jn-canvas-h" class="jn-hint mu" aria-live="polite">${esc(hint)}</small></div>`;
+  return `<div class="jn-canvas${ui.tool === 'connect' ? ' connecting' : ''}" data-jn-canvas tabindex="0" role="application" aria-label="${esc(t.canvasLabel)}" aria-describedby="jn-canvas-h">${canvasTools(state, publish)}<div class="jn-world" style="transform:translate(${String(ui.panX)}px,${String(ui.panY)}px) scale(${String(ui.zoom)})">${svg}${graph.nodes.map((node) => nodeHtml(state, node, publish)).join('')}</div>${insert}${legend(t, ui.legendOpen === true)}<small id="jn-canvas-h" class="jn-hint mu" aria-live="polite">${esc(hint)}</small></div>`;
 }
 
 function chips(items: readonly string[], none: string, tone = ''): string {
@@ -1168,13 +1554,15 @@ function connectForm(state: DashboardState, node: JourneyNode, publish: boolean)
   if (!publish || node.kind === 'END') return '';
   const targets = graph.nodes.filter((entry) => entry.id !== node.id && entry.kind !== 'START');
   const label = (entry: JourneyNode): string =>
-    entry.kind === 'BLOCK'
-      ? (entry.block ?? '?')
-      : entry.kind === 'CONDITION'
-        ? `${t.shapes.CONDITION ?? ''} : ${entry.label ?? ''}`
-        : entry.kind === 'END'
-          ? `${t.end} (${entry.id})`
-          : `${t.join} (${entry.id})`;
+    entry.kind === 'WAIT' || entry.kind === 'LOOP'
+      ? nodeLabel(t, entry)
+      : entry.kind === 'BLOCK'
+        ? (entry.block ?? '?')
+        : entry.kind === 'CONDITION'
+          ? `${t.shapes.CONDITION ?? ''} : ${entry.label ?? ''}`
+          : entry.kind === 'END'
+            ? `${t.end} (${entry.id})`
+            : `${t.join} (${entry.id})`;
   const outs = graph.edges.filter((edge) => edge.from === node.id);
   return `<section class="jn-sec" aria-labelledby="jn-con-t"><h4 id="jn-con-t">${esc(t.connections)}</h4>${
     outs.length > 0
@@ -1211,7 +1599,7 @@ function blockProps(state: DashboardState, node: JourneyNode, publish: boolean):
                 : param?.mode === 'MAP'
                   ? `<input data-jn="param.key" data-key="${esc(input.key)}" value="${esc(param.key)}" list="${esc(listId)}" aria-label="${esc(t.paramKey(input.key))}" autocomplete="off" spellcheck="false" class="mono"${publish ? '' : ' disabled'}>`
                   : '';
-            return `<li class="jn-param"><span class="jn-param-k"><code class="lib-key${input.required ? '' : ' opt'}">${esc(input.key)}</code><small class="mu">${esc(input.required ? t.required : t.optional)}</small></span><select data-jn="param.mode" data-key="${esc(input.key)}" aria-label="${esc(input.key)}"${publish ? '' : ' disabled'}>${(['INHERIT', 'VALUE', 'MAP'] as const).map((value) => `<option value="${value}"${value === mode ? ' selected' : ''}>${esc(t.paramModes[value] ?? value)}</option>`).join('')}</select>${field}</li>`;
+            return `<li class="jn-param"><span class="jn-param-k"><code class="lib-key${input.required ? '' : ' opt'}">${esc(input.key)}</code><small class="mu">${esc(input.required ? t.required : t.optional)}</small></span><select data-jn="param.mode" data-key="${esc(input.key)}" aria-label="${esc(input.key)}"${publish ? '' : ' disabled'}>${(['INHERIT', 'VALUE', 'MAP'] as const).map((value) => `<option value="${value}"${value === mode ? ' selected' : ''}>${esc(t.paramModes[value] ?? value)}</option>`).join('')}</select>${field}${proposalBox(state, node, input.key, publish)}</li>`;
           })
           .join('')}</ul>`;
   const mapped = Object.entries(params).map(([key, param]) =>
@@ -1245,6 +1633,48 @@ function blockProps(state: DashboardState, node: JourneyNode, publish: boolean):
   const panel = (tab: 'params' | 'io' | 'details', body: string): string =>
     `<div class="jn-ppanel" role="tabpanel" id="jn-pp-${tab}" aria-labelledby="jn-pt-${tab}"${ui.propsTab === tab ? '' : ' hidden'}>${body}</div>`;
   return `<div class="jn-props-h"><span class="jn-ic" aria-hidden="true">${icon('cube')}</span><div class="jn-props-n"><h3 id="jn-props-t">${esc(node.block ?? '?')}</h3>${block?.description ? `<p class="mu">${esc(block.description)}</p>` : ''}</div><span class="jn-ver">${esc(node.version !== undefined ? t.version(node.version) : '—')}</span>${node.block && blockOf(state, node.block) ? `<button type="button" class="btn small ghost icon-only" data-action="lib-open" data-block="${esc(node.block)}" aria-label="${esc(t.openSheet)}" title="${esc(t.openSheet)}">${icon('edit')}</button>` : ''}</div>${newer !== undefined && publish ? `<button type="button" class="btn small primary jn-accept" data-action="jn-accept-version" data-node="${esc(node.id)}" data-version="${String(newer)}">${esc(t.newVersion(newer))}</button>` : ''}<div class="jn-ptabs" role="tablist" aria-label="${esc(t.propsBlock)}">${tabs}</div>${panel('params', paramRows)}${panel('io', io)}${panel('details', `${versions}<section class="jn-sec" aria-labelledby="jn-dg-t"><h4 id="jn-dg-t">${esc(t.diagnostics)}</h4>${diagList(t, diag, check !== undefined)}</section>${ui.journey.mode === 'DIAGRAM' ? connectForm(state, node, publish) : ''}${actions}`)}`;
+}
+
+/**
+ * LA PROPOSITION DE RACCORDEMENT d'une entrée manquante (vérification du serveur, mêmes règles dans les deux
+ * modes) : une correspondance fiable à retenir, plusieurs à départager, ou aucune (une valeur ou une
+ * correspondance à choisir). Rien n'est retenu sans un clic ; retenir enregistre une correspondance (MAP).
+ */
+function proposalBox(state: DashboardState, node: JourneyNode, key: string, publish: boolean): string {
+  const t = journeyText(state);
+  const proposal = freshCheck(state.lib.journey)?.nodes[node.id]?.proposals?.find(
+    (entry) => entry.input === key,
+  );
+  if (!proposal) return '';
+  const nameOf = (id: string): string => {
+    const from = state.lib.journey.journey.graph.nodes.find((entry) => entry.id === id);
+    return from ? nodeLabel(t, from) : t.fromData;
+  };
+  const compatible = proposal.candidates.filter((candidate) => candidate.compatible);
+  const apply = (candidate: (typeof compatible)[number]): string =>
+    publish
+      ? `<button type="button" class="btn small${proposal.status === 'UNIQUE' ? ' primary' : ''}" data-action="jn-apply-map" data-node="${esc(node.id)}" data-key="${esc(key)}" data-to="${esc(candidate.key)}">${esc(t.applyMap(candidate.key))}</button>`
+      : '';
+  const rows = compatible
+    .map(
+      (candidate) =>
+        `<li><code class="lib-key">${esc(candidate.key)}</code> <small class="mu">${esc(nameOf(candidate.from))} · ${esc(candidate.reason)}</small> ${apply(candidate)}</li>`,
+    )
+    .join('');
+  const rejected = proposal.candidates
+    .filter((candidate) => !candidate.compatible && candidate.reason.startsWith('types incompatibles'))
+    .map(
+      (candidate) =>
+        `<li class="ko"><code class="lib-key">${esc(candidate.key)}</code> <small>${esc(candidate.reason)}</small></li>`,
+    )
+    .join('');
+  const title =
+    proposal.status === 'UNIQUE'
+      ? t.proposalUnique
+      : proposal.status === 'AMBIGUOUS'
+        ? t.proposalAmbiguous
+        : t.proposalNone;
+  return `<div class="jn-proposal ${proposal.status.toLowerCase()}" role="note"><p>${icon(proposal.status === 'NONE' ? 'alert' : 'link')}<span>${esc(title)}</span></p>${rows || rejected ? `<ul class="plain tight">${rows}${rejected}</ul>` : ''}</div>`;
 }
 
 /** Le parcours lui-même (rien n'est choisi) : description, sorties, conditions, versions, réutilisation. */
@@ -1378,15 +1808,17 @@ function edgeProps(state: DashboardState, edge: JourneyEdge, publish: boolean): 
   const name = (node: JourneyNode | undefined): string =>
     !node
       ? '?'
-      : node.kind === 'BLOCK'
-        ? (node.block ?? '?')
-        : node.kind === 'CONDITION'
-          ? (node.label ?? '?')
-          : node.kind === 'START'
-            ? t.start
-            : node.kind === 'END'
-              ? t.end
-              : t.join;
+      : node.kind === 'WAIT' || node.kind === 'LOOP'
+        ? nodeLabel(t, node)
+        : node.kind === 'BLOCK'
+          ? (node.block ?? '?')
+          : node.kind === 'CONDITION'
+            ? (node.label ?? '?')
+            : node.kind === 'START'
+              ? t.start
+              : node.kind === 'END'
+                ? t.end
+                : t.join;
   const errors = freshCheck(ui)?.edges[edge.id] ?? [];
   return `<div class="jn-props-h"><span class="jn-ic" aria-hidden="true">${icon('right')}</span><div><h3 id="jn-props-t">${esc(t.edgeTitle)}</h3><p class="mu">${esc(name(from))} → ${esc(name(to))}</p></div></div>${from?.kind === 'CONDITION' ? `<label class="field"><span>${esc(t.branch)}</span><select data-jn="edge.branch"${publish ? '' : ' disabled'}><option value="YES"${edge.branch === 'YES' ? ' selected' : ''}>${esc(t.yes)}</option><option value="NO"${edge.branch === 'NO' ? ' selected' : ''}>${esc(t.no)}</option></select></label>` : ''}<section class="jn-sec" aria-labelledby="jn-dg-t"><h4 id="jn-dg-t">${esc(t.diagnostics)}</h4>${diagList(t, { errors, warnings: [] }, freshCheck(ui) !== undefined)}</section>${publish ? `<div class="form-acts start"><button type="button" class="btn small ghost" data-action="jn-edge-remove" data-edge="${esc(edge.id)}">${icon('trash')}<span>${esc(t.edgeRemove)}</span></button></div>` : ''}`;
 }
@@ -1408,8 +1840,10 @@ function validationCard(state: DashboardState): string {
       Object.values(structure.edges).reduce((sum, list) => sum + list.length, 0),
     deps: Object.values(check.nodes).reduce((sum, diag) => sum + diag.missing.length, 0),
     conflicts: check.paths.reduce((sum, path) => sum + path.check.conflicts.length, 0),
-    versions: graph.nodes.filter((node) => {
-      if (node.kind !== 'BLOCK') return false;
+    versions: [
+      ...graph.nodes.filter((node) => node.kind === 'BLOCK'),
+      ...graph.nodes.flatMap((node) => (node.loop?.body ?? []).filter((item) => item.kind === 'BLOCK')),
+    ].filter((node) => {
       const block = blockOf(state, node.block);
       return !block || node.version !== block.version || block.state !== 'VALID';
     }).length,
@@ -1423,6 +1857,305 @@ function validationCard(state: DashboardState): string {
   return `<section class="jn-valid" aria-labelledby="jn-val-t">${title}<p class="jn-val-state ${check.ok ? 'ok' : 'ko'}" role="status">${icon(check.ok ? 'check' : 'alert')}<span>${esc(check.ok ? t.status.valid : t.status.invalid)}</span></p><ul class="plain jn-val-list">${items}</ul></section>`;
 }
 
+/** Une attente dans la suite (mode linéaire) : orange, son résumé, son délai et ce qui se passe au délai. */
+function waitCard(
+  state: DashboardState,
+  node: JourneyNode,
+  index: number,
+  last: boolean,
+  publish: boolean,
+): string {
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const spec = node.wait ?? defaultWait();
+  const diag = diagOf(ui, node.id);
+  const selected = ui.selected?.kind === 'node' && ui.selected.id === node.id;
+  const tone = diag.errors.length > 0 ? ' ko' : diag.warnings.length > 0 ? ' warn' : '';
+  const name = nodeLabel(t, node);
+  const actions = publish
+    ? `<span class="jn-card-a"><button type="button" class="btn small ghost icon-only" data-action="jn-move" data-node="${esc(node.id)}" data-to="${String(index - 1)}" aria-label="${esc(`${t.moveUp} : ${name}`)}" title="${esc(t.moveUp)}"${index === 0 ? ' disabled' : ''}>${icon('up')}</button><button type="button" class="btn small ghost icon-only" data-action="jn-move" data-node="${esc(node.id)}" data-to="${String(index + 1)}" aria-label="${esc(`${t.moveDown} : ${name}`)}" title="${esc(t.moveDown)}"${last ? ' disabled' : ''}>${icon('down')}</button><button type="button" class="btn small ghost icon-only" data-action="jn-duplicate" data-node="${esc(node.id)}" aria-label="${esc(`${t.duplicate} : ${name}`)}" title="${esc(t.duplicate)}">${icon('copy')}</button><button type="button" class="btn small ghost icon-only" data-action="jn-remove" data-node="${esc(node.id)}" aria-label="${esc(`${t.remove} : ${name}`)}" title="${esc(t.remove)}">${icon('trash')}</button></span>`
+    : '';
+  return `<li class="jn-card wait${selected ? ' sel' : ''}${tone}" data-jn-node="${esc(node.id)}" draggable="${String(publish)}"><span class="jn-num" aria-hidden="true">${String(index + 1)}</span><div class="jn-card-box"><span class="jn-grip" title="${esc(t.grip)}" aria-hidden="true">${icon('grip')}</span><button type="button" class="jn-card-b" data-action="jn-select" data-node="${esc(node.id)}" aria-pressed="${String(selected)}"><span class="jn-card-h"><span class="jn-ic wait" aria-hidden="true">${icon('history')}</span><span class="jn-card-t"><b>${esc(node.label?.trim() || t.wait)}</b><small class="mu">${esc(t.waitSummary(spec))}</small></span></span><span class="jn-compat wait">${esc(t.waitTimeoutShort(spec.timeoutS, spec.onTimeout === 'WARN'))}</span>${diag.errors.length > 0 ? `<span class="jn-err">${icon('alert')}${esc(diag.errors[0] ?? '')}${diag.errors.length > 1 ? ` (+${String(diag.errors.length - 1)})` : ''}</span>` : ''}</button>${actions}</div></li>`;
+}
+
+const HTTP_STATUSES = [200, 201, 204, 302, 400, 401, 403, 404, 409, 422, 500];
+const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+
+/** Les propriétés d'une attente : son type (seulement ce que le moteur exécute), sa cible, son délai. */
+function waitProps(state: DashboardState, node: JourneyNode, publish: boolean): string {
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const spec = node.wait ?? defaultWait();
+  const check = freshCheck(ui);
+  const diag = check?.nodes[node.id];
+  const off = publish ? '' : ' disabled';
+  const field = (key: string, label: string, value: string | undefined, mono = false): string =>
+    `<label class="field"><span>${esc(label)}</span><input data-jn="wait.${key}" value="${esc(value ?? '')}" maxlength="300" autocomplete="off" spellcheck="false"${mono ? ' class="mono"' : ''}${off}></label>`;
+  const types = `<label class="field"><span>${esc(t.waitTypeLabel)} <b class="req" aria-hidden="true">*</b></span><select data-jn="wait.type"${off}>${WAIT_TYPES.map((type) => `<option value="${type}"${type === spec.type ? ' selected' : ''}>${esc(t.waitTypes[type] ?? type)}</option>`).join('')}<optgroup label="${esc(t.notSupported)}">${t.waitUnsupported.map(([label]) => `<option disabled>${esc(label)}</option>`).join('')}</optgroup></select></label><ul class="plain jn-unsup">${t.waitUnsupported.map(([label, reason]) => `<li><small class="mu">${icon('cross')} ${esc(label)} : ${esc(reason)}</small></li>`).join('')}</ul>`;
+  const target =
+    spec.type === 'VISIBLE' || spec.type === 'HIDDEN'
+      ? `${field('selector', t.waitSelector, spec.selector, true)}${field('text', t.waitOrText, spec.text)}`
+      : spec.type === 'TEXT'
+        ? field('text', t.waitText, spec.text)
+        : spec.type === 'URL'
+          ? field('url', t.waitUrl, spec.url, true)
+          : `<div class="jn-row2"><label class="field"><span>${esc(t.waitMethod)}</span><select data-jn="wait.method"${off}><option value="">${esc(t.waitAnyMethod)}</option>${HTTP_METHODS.map((method) => `<option${spec.method === method ? ' selected' : ''}>${method}</option>`).join('')}</select></label><label class="field"><span>${esc(t.waitStatus)}</span><select data-jn="wait.status"${off}>${[...WAIT_STATUS_CLASSES, ...HTTP_STATUSES].map((status) => `<option value="${String(status)}"${String(spec.status ?? '2xx') === String(status) ? ' selected' : ''}>${String(status)}</option>`).join('')}</select></label></div>${field('url', t.waitRequestUrl, spec.url, true)}<p class="mu small">${esc(t.waitResponseNote)}</p>`;
+  const available = diag?.available ?? [];
+  const cite = publish
+    ? `<div class="jn-cite"><span class="mu small">${esc(t.waitCite)}</span>${check ? (available.length > 0 ? available.map((key) => `<button type="button" class="lib-key jn-cite-k" data-action="jn-wait-cite" data-key="${esc(key)}">${esc(key)}</button>`).join('') : `<small class="mu">${esc(t.waitCiteNone)}</small>`) : `<small class="mu">${esc(t.notChecked)}</small>`}<small class="mu block">${esc(t.waitCiteInfo)}</small></div>`
+    : '';
+  const timeout = `<label class="field"><span>${esc(t.waitTimeout)} <b class="req" aria-hidden="true">*</b></span><input type="number" data-jn="wait.timeoutS" min="${String(WAIT_TIMEOUT.min)}" max="${String(WAIT_TIMEOUT.max)}" step="1" value="${String(spec.timeoutS)}"${off}></label>`;
+  const onTimeout = `<fieldset class="jn-radios"><legend>${esc(t.waitOnTimeout)}</legend>${(['FAIL', 'WARN'] as const).map((value) => `<label><input type="radio" name="jn-wait-ot" data-jn="wait.onTimeout" value="${value}"${spec.onTimeout === value ? ' checked' : ''}${off}><span>${esc(value === 'FAIL' ? t.waitFail : t.waitWarn)}</span></label>`).join('')}</fieldset>${spec.onTimeout === 'WARN' ? `<p class="mu small">${esc(t.waitWarnNote)}</p>` : ''}<p class="mu small">${esc(t.waitInterval)} ${esc(t.waitFailureNote)}</p>`;
+  const problems = waitProblems(spec);
+  const timeoutBad = spec.timeoutS < WAIT_TIMEOUT.min || spec.timeoutS > WAIT_TIMEOUT.max;
+  const targetBad = problems.length - (timeoutBad ? 1 : 0) > 0;
+  const cited = waitReferences(spec);
+  const missing = (diag?.missing ?? []).length > 0;
+  const item = (key: string, ok: boolean | undefined): string =>
+    `<li class="${ok === undefined ? '' : ok ? 'ok' : 'ko'}">${icon(ok === false ? 'alert' : ok ? 'check' : 'info')}<span>${esc(t.waitValid[key]?.[ok === false ? 1 : 0] ?? key)}${ok === undefined ? ` <small>· ${esc(t.notChecked)}</small>` : ''}</span></li>`;
+  const validation = `<section class="jn-sec" aria-labelledby="jn-wv-t"><h4 id="jn-wv-t">${esc(t.waitValidTitle)}</h4><ul class="plain jn-val-list">${item('type', true)}${item('target', !targetBad)}${item('timeout', !timeoutBad)}${cited.length > 0 ? item('data', check ? !missing : undefined) : ''}</ul></section>`;
+  const actions = publish
+    ? `<div class="form-acts start"><button type="button" class="btn small" data-action="jn-duplicate" data-node="${esc(node.id)}">${icon('copy')}<span>${esc(t.duplicate)}</span></button><button type="button" class="btn small ghost" data-action="jn-remove" data-node="${esc(node.id)}">${icon('trash')}<span>${esc(t.remove)}</span></button></div>`
+    : '';
+  return `<div class="jn-props-h"><span class="jn-ic wait" aria-hidden="true">${icon('history')}</span><div class="jn-props-n"><h3 id="jn-props-t">${esc(t.wait)}</h3><p class="mu">${esc(t.waitSub)}</p></div></div><section class="jn-sec jn-waitf" aria-label="${esc(t.wait)}">${types}${target}${spec.type !== 'RESPONSE' && spec.type !== 'URL' && spec.selector ? '' : cite}${timeout}${onTimeout}</section>${validation}<section class="jn-sec" aria-labelledby="jn-dg-t"><h4 id="jn-dg-t">${esc(t.diagnostics)}</h4>${diagList(t, diag, check !== undefined)}</section>${ui.journey.mode === 'DIAGRAM' ? connectForm(state, node, publish) : ''}${actions}`;
+}
+
+/**
+ * LES LIENS DE DONNÉES du nœud choisi : de chaque bloc qui produit une donnée qu'il reçoit (vérification
+ * réelle), en pointillés et sur le côté — jamais confondus avec les connexions d'exécution.
+ */
+function dataLinks(state: DashboardState): string {
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const selected = ui.selected;
+  const check = freshCheck(ui);
+  if (!check || selected?.kind !== 'node') return '';
+  const graph = ui.journey.graph;
+  const target = graph.nodes.find((node) => node.id === selected.id);
+  if (!target || (target.kind !== 'BLOCK' && target.kind !== 'WAIT')) return '';
+  const byProducer = new Map<string, string[]>();
+  for (const item of check.nodes[target.id]?.satisfied ?? [])
+    if (graph.nodes.some((node) => node.id === item.from && node.id !== target.id))
+      byProducer.set(item.from, [...(byProducer.get(item.from) ?? []), item.key]);
+  return [...byProducer.entries()]
+    .map(([id, keys], index) => {
+      const from = graph.nodes.find((node) => node.id === id) as JourneyNode;
+      const a = { x: from.x + NODE_SIZE[from.kind].w, y: from.y + NODE_SIZE[from.kind].h / 2 + 8 };
+      const b = { x: target.x + NODE_SIZE[target.kind].w, y: target.y + NODE_SIZE[target.kind].h / 2 - 8 };
+      const bend = 70 + index * 26;
+      const right = Math.max(a.x, b.x) + bend;
+      const d = `M${String(a.x)} ${String(a.y)} C${String(right)} ${String(a.y)} ${String(right)} ${String(b.y)} ${String(b.x)} ${String(b.y)}`;
+      const label = t.dataLink(keys.join(', '));
+      return `<g class="jn-dlink"><path d="${d}" marker-start="url(#jn-dot)" marker-end="url(#jn-arrow)"><title>${esc(label)}</title></path><text x="${String(right - bend / 4 + 6)}" y="${String((a.y + b.y) / 2)}">${esc(keys.join(', '))}</text></g>`;
+    })
+    .join('');
+}
+
+/** La légende du diagramme : les formes et les deux sortes de liens. */
+function legend(t: Text, open: boolean): string {
+  const row = (cls: string, key: string): string =>
+    `<li><span class="jn-sw ${cls}" aria-hidden="true"></span>${esc(t.legendItems[key] ?? key)}</li>`;
+  return `<details class="jn-legend"${open ? ' open' : ''}><summary data-action="jn-legend">${esc(t.legend)}</summary><ul class="plain">${row('block', 'block')}${row('wait', 'wait')}${row('loop', 'loop')}${row('condition', 'condition')}${row('join', 'join')}${row('flow', 'flow')}${row('data', 'data')}</ul></details>`;
+}
+
+interface DockRow {
+  key: string;
+  source: string;
+  required?: boolean;
+}
+
+/**
+ * LE PANNEAU DES DONNÉES sous la scène, tiré de la vérification réelle : entrées et sorties du scénario,
+ * correspondances entre blocs (même nom, renommée, valeur saisie, jeu de données, manquante), variables
+ * (générées au rejeu ou valeurs des jeux) et erreurs. Rien n'est supposé : sans vérification, il le dit.
+ */
+function journeyDock(state: DashboardState, publish = false): string {
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const check = freshCheck(ui);
+  const graph = ui.journey.graph;
+  const nodes = graph.nodes.filter((node) => node.kind === 'BLOCK' || node.kind === 'WAIT');
+  const nameOf = (id: string): string => {
+    const node = graph.nodes.find((entry) => entry.id === id);
+    return node ? nodeLabel(t, node) : id;
+  };
+  const errorCount = check
+    ? check.errors.length +
+      Object.values(check.nodes).reduce((sum, diag) => sum + diag.errors.length, 0) +
+      Object.values(check.edges).reduce((sum, list) => sum + list.length, 0)
+    : 0;
+  const issueCount = check
+    ? check.errors.length +
+      check.warnings.length +
+      Object.values(check.nodes).reduce((sum, diag) => sum + diag.errors.length + diag.warnings.length, 0) +
+      Object.values(check.edges).reduce((sum, list) => sum + list.length, 0)
+    : 0;
+  const tabs = (['io', 'map', 'vars', 'issues', 'sim'] as const)
+    .map(
+      (tab) =>
+        `<button type="button" role="tab" id="jn-dk-${tab}" class="jn-dtab" data-action="jn-dock" data-tab="${tab}" aria-selected="${String(ui.dock === tab)}" aria-controls="jn-dock-p"${ui.dock === tab ? '' : ' tabindex="-1"'}>${icon(tab === 'io' ? 'right' : tab === 'map' ? 'link' : tab === 'vars' ? 'data' : tab === 'sim' ? 'play' : 'alert')}<span>${esc(tab === 'sim' ? simText(state).tab : (t.dockTabs[tab] ?? tab))}</span>${tab === 'issues' && check ? ` <small class="jn-chip ${errorCount > 0 ? 'ko' : issueCount > 0 ? 'warn' : 'ok'}">${String(issueCount)}</small>` : ''}</button>`,
+    )
+    .join('');
+  const head = `<div class="jn-dock-h"><div class="jn-dtabs" role="tablist" aria-label="${esc(t.dockLabel)}">${tabs}</div><button type="button" class="btn small ghost icon-only" data-action="jn-dock-toggle" aria-expanded="${String(ui.dockOpen)}" aria-label="${esc(ui.dockOpen ? t.dockHide : t.dockShow)}" title="${esc(ui.dockOpen ? t.dockHide : t.dockShow)}">${icon(ui.dockOpen ? 'down' : 'up')}</button></div>`;
+  if (!ui.dockOpen)
+    return `<section class="jn-dock closed" aria-label="${esc(t.dockLabel)}">${head}</section>`;
+  const table = (cols: string[], rows: string[], empty: string): string =>
+    rows.length === 0
+      ? `<p class="mu">${esc(empty)}</p>`
+      : `<div class="jn-tbl-w"><table class="jn-tbl"><thead><tr>${cols.map((col) => `<th scope="col">${esc(col)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+  let body: string;
+  if (ui.dock === 'sim')
+    body = simulationPanel(state, publish, ui.simKey !== undefined && ui.simKey !== logicKey(ui.journey));
+  else if (!check) body = `<p class="mu">${esc(ui.checking ? t.checking : t.checkToSee)}</p>`;
+  else if (ui.dock === 'io') {
+    const inputs: DockRow[] = [];
+    for (const node of nodes) {
+      const block = node.kind === 'BLOCK' ? blockOf(state, node.block) : undefined;
+      const diag = check.nodes[node.id];
+      for (const item of diag?.satisfied ?? [])
+        if (item.from === 'data' && node.kind === 'BLOCK') {
+          const owner =
+            nodes.find((entry) => blockOf(state, entry.block)?.data.some((data) => data.key === item.key))
+              ?.block ??
+            node.block ??
+            '?';
+          inputs.push({
+            key: item.key,
+            source: t.srcData(owner),
+            required: block?.contract.inputs.find((input) => input.key === item.key)?.required ?? true,
+          });
+        }
+      for (const [key, param] of Object.entries(node.params ?? {}))
+        if (param.mode === 'VALUE')
+          inputs.push({
+            key,
+            source: t.srcValue(node.block ?? '?'),
+            required: block?.contract.inputs.find((input) => input.key === key)?.required ?? true,
+          });
+    }
+    const unique = inputs.filter(
+      (row, index) =>
+        inputs.findIndex((other) => other.key === row.key && other.source === row.source) === index,
+    );
+    const producerOf = (key: string): string =>
+      nodes.find((node) => blockOf(state, node.block)?.contract.outputs.some((output) => output.key === key))
+        ?.block ??
+      nodes.find((node) =>
+        Object.values(node.params ?? {}).some((param) => param.mode === 'MAP' && param.key === key),
+      )?.block ??
+      '—';
+    const outputs = [
+      ...check.outputs.guaranteed.map((key) => ({ key, paths: '' })),
+      ...check.outputs.partial.map((item) => ({
+        key: item.key,
+        paths: t.outputsOnly(item.paths.map((path) => pathLetter(path - 1)).join(', ')),
+      })),
+    ];
+    body = `<div class="jn-dock-2"><section aria-labelledby="jn-di-t"><h4 id="jn-di-t">${esc(t.dockInputs)} <small class="mu">(${String(unique.length)})</small></h4><p class="mu small">${esc(t.dockInputsSub)}</p>${table(
+      [t.colKey, t.colType, t.colRequired, t.colSource],
+      unique.map(
+        (row) =>
+          `<tr><td><code class="lib-key">${esc(row.key)}</code></td><td>${esc(t.typeText)}</td><td>${esc(row.required === false ? t.noShort : t.yesShort)}</td><td>${esc(row.source)}</td></tr>`,
+      ),
+      t.none,
+    )}</section><section aria-labelledby="jn-do-t"><h4 id="jn-do-t">${esc(t.dockOutputs)} <small class="mu">(${String(outputs.length)})</small></h4><p class="mu small">${esc(t.dockOutputsSub)}</p>${table(
+      [t.colKey, t.colType, t.colSource],
+      outputs.map(
+        (row) =>
+          `<tr><td><code class="lib-key${row.paths ? ' warn' : ''}">${esc(row.key)}</code>${row.paths ? ` <small class="mu">${esc(row.paths)}</small>` : ''}</td><td>${esc(t.typeText)}</td><td>${esc(t.srcProduced(producerOf(row.key)))}</td></tr>`,
+      ),
+      t.outputsNone,
+    )}</section></div>`;
+  } else if (ui.dock === 'map') {
+    const rows: string[] = [];
+    let index = 0;
+    const status = (kind: string): string =>
+      `<span class="jn-chip ${kind === 'missing' ? 'ko' : kind === 'value' || kind === 'data' ? 'info' : 'ok'}">${kind === 'missing' ? icon('alert') : icon('check')}${esc(t.mapStatus[kind] ?? kind)}</span>`;
+    for (const node of nodes) {
+      const diag = check.nodes[node.id];
+      if (!diag) continue;
+      const renamed = new Map(
+        Object.entries(node.params ?? {}).flatMap(([input, param]) =>
+          param.mode === 'MAP' ? [[param.key, input] as const] : [],
+        ),
+      );
+      for (const item of diag.satisfied) {
+        index += 1;
+        const input = renamed.get(item.key) ?? item.key;
+        const source =
+          item.from === 'data' || item.from === 'scenario'
+            ? `<span class="mu">${esc(item.from === 'data' ? t.fromData : t.fromScenario)}</span>`
+            : `${esc(nameOf(item.from))} <code class="lib-key">${esc(item.key)}</code>`;
+        rows.push(
+          `<tr><td>${String(index)}</td><td>${source}</td><td aria-hidden="true">→</td><td>${esc(nameOf(node.id))} <code class="lib-key">${esc(input)}</code></td><td>${status(item.from === 'data' || item.from === 'scenario' ? 'data' : renamed.has(item.key) ? 'renamed' : 'auto')}</td></tr>`,
+        );
+      }
+      for (const [key, param] of Object.entries(node.params ?? {}))
+        if (param.mode === 'VALUE') {
+          index += 1;
+          rows.push(
+            `<tr><td>${String(index)}</td><td><span class="mu">« ${esc(param.value)} »</span></td><td aria-hidden="true">→</td><td>${esc(nameOf(node.id))} <code class="lib-key">${esc(key)}</code></td><td>${status('value')}</td></tr>`,
+          );
+        }
+      for (const key of [...new Set(diag.missing.map((item) => item.key))]) {
+        index += 1;
+        const proposal = diag.proposals?.find((entry) => entry.input === key);
+        const candidates = (proposal?.candidates ?? [])
+          .filter((entry) => entry.compatible)
+          .map((entry) => entry.key);
+        rows.push(
+          `<tr class="ko"><td>${String(index)}</td><td>${candidates.length > 0 ? `<small class="mu">${esc(proposal?.status === 'UNIQUE' ? `${t.proposalUnique} : ${candidates[0] ?? ''}` : t.mapCandidates(candidates.slice(0, 4).join(', ')))}</small>` : `<small class="mu">${esc(t.proposalNone)}</small>`}</td><td aria-hidden="true">→</td><td>${esc(nameOf(node.id))} <code class="lib-key ko">${esc(key)}</code></td><td>${status('missing')} <button type="button" class="btn small ghost" data-action="jn-map-fix" data-node="${esc(node.id)}">${esc(t.mapFix)}</button></td></tr>`,
+        );
+      }
+    }
+    body = table(['#', t.colFrom, '', t.colTo, t.colStatus], rows, t.mapNone);
+  } else if (ui.dock === 'vars') {
+    const rows: string[] = [];
+    const seen = new Set<string>();
+    for (const node of nodes) {
+      const block = node.kind === 'BLOCK' ? blockOf(state, node.block) : undefined;
+      for (const data of block?.data ?? []) {
+        if (seen.has(data.key)) continue;
+        seen.add(data.key);
+        const users = nodes
+          .filter((entry) =>
+            entry.kind === 'WAIT'
+              ? waitReferences(entry.wait ?? defaultWait()).includes(data.key)
+              : (check.nodes[entry.id]?.satisfied ?? []).some((item) => item.key === data.key) ||
+                (blockOf(state, entry.block)?.contract.inputs ?? []).some((input) => input.key === data.key),
+          )
+          .map((entry) => nameOf(entry.id));
+        rows.push(
+          `<tr><td><code class="lib-key">${esc(data.key)}</code></td><td>${esc(t.typeText)}</td><td>${esc(data.dynamic ? t.srcGenerated(node.block ?? '?') : t.srcLiteral(node.block ?? '?'))}</td><td>${users.length > 0 ? esc(users.join(', ')) : '—'}</td></tr>`,
+        );
+      }
+    }
+    body = table([t.colKey, t.colType, t.colOrigin, t.colUsedBy], rows, t.varsNone);
+  } else {
+    const items = [
+      ...check.errors.map((text) => ({ tone: 'ko', text, node: undefined as string | undefined })),
+      ...check.warnings.map((text) => ({ tone: 'warn', text, node: undefined as string | undefined })),
+      ...Object.entries(check.nodes).flatMap(([id, diag]) => [
+        ...diag.errors.map((text) => ({ tone: 'ko', text, node: id })),
+        ...diag.warnings.map((text) => ({ tone: 'warn', text, node: id })),
+      ]),
+      ...Object.values(check.edges).flatMap((list) =>
+        list.map((text) => ({ tone: 'ko', text, node: undefined as string | undefined })),
+      ),
+    ];
+    body =
+      items.length === 0
+        ? `<p class="ok-t">${icon('check')} ${esc(t.issuesNone)}</p>`
+        : `<ul class="plain jn-diag">${items
+            .map(
+              (item) =>
+                `<li class="${item.tone}">${icon(item.tone === 'ko' ? 'alert' : 'info')}<span>${item.node ? `<button type="button" class="link" data-action="jn-select" data-node="${esc(item.node)}">${esc(nameOf(item.node))}</button> · ` : ''}${esc(item.text)}</span></li>`,
+            )
+            .join('')}</ul>`;
+  }
+  return `<section class="jn-dock${ui.dock === 'sim' ? ' sim' : ''}" aria-label="${esc(t.dockLabel)}">${head}<div class="jn-dock-b" role="tabpanel" id="jn-dock-p" aria-labelledby="jn-dk-${ui.dock}">${body}</div></section>`;
+}
+
 /** Le panneau droit : les propriétés de la sélection (ou du parcours), puis la validation du parcours. */
 export function journeySide(state: DashboardState, publish: boolean): string {
   const t = journeyText(state);
@@ -1434,12 +2167,16 @@ export function journeySide(state: DashboardState, publish: boolean): string {
   const body = node
     ? node.kind === 'BLOCK'
       ? blockProps(state, node, publish)
-      : otherProps(state, node, publish)
+      : node.kind === 'WAIT'
+        ? waitProps(state, node, publish)
+        : node.kind === 'LOOP'
+          ? loopProps(state, node, publish)
+          : otherProps(state, node, publish)
     : edge
       ? edgeProps(state, edge, publish)
       : journeyProps(state, publish);
   const kicker = node
-    ? node.kind === 'BLOCK'
+    ? node.kind === 'BLOCK' || node.kind === 'WAIT' || node.kind === 'LOOP'
       ? t.propsBlock
       : t.propsShape
     : edge
@@ -1456,7 +2193,7 @@ export function journeyComposer(state: DashboardState, publish: boolean): string
   const toast = ui.toast
     ? `<div class="jn-toast" role="status">${icon('check')}<span>${esc(ui.toast)}</span><button type="button" class="btn small ghost icon-only" data-action="jn-toast-close" aria-label="${esc(t.close)}" title="${esc(t.close)}">${icon('close')}</button></div>`
     : '';
-  return `<div class="jn-composer" data-mode="${ui.journey.mode}">${journeyHead(state, publish)}${modeBar(state, publish)}<div class="jn-body">${palette(state, publish)}<div class="jn-stage${ui.toast ? ' has-toast' : ''}" data-jn-stage>${stage}${toast}</div></div></div>`;
+  return `<div class="jn-composer" data-mode="${ui.journey.mode}">${journeyHead(state, publish)}${modeBar(state, publish)}<div class="jn-body">${palette(state, publish)}<div class="jn-center${ui.dockOpen ? ' docked' : ''}"><div class="jn-stage${ui.toast ? ' has-toast' : ''}" data-jn-stage>${stage}${toast}</div>${journeyDock(state, publish)}</div></div></div>`;
 }
 
 // ── Styles ───────────────────────────────────────────────────────────────────────────────────
@@ -1739,6 +2476,90 @@ export const JOURNEY_CSS = `
 .jn-pernode>li{padding:8px 10px;border:1px solid var(--qa-color-border);border-radius:8px}
 .ok-t{color:var(--qa-color-primary-2);display:flex;gap:6px;align-items:center;margin:0}
 .ok-t .ico{width:14px;height:14px}
+/* Attente : orange (synchronisation), jamais confondue avec un bloc. */
+.jn-composer{--jn-data:var(--qa-color-data,#2F7DE1);--jn-wait:color-mix(in srgb,var(--qa-color-warning) 88%,#c2410c);--jn-wait-soft:var(--qa-color-warning-soft);--jn-loop:#7C3AED;--jn-loop-soft:color-mix(in srgb,#7C3AED 12%,var(--qa-color-surface))}
+.jn-ic.wait,.jn-pal-ic.wait{background:var(--jn-wait-soft);color:var(--jn-wait)}
+.jn-pal-ic.condition{background:var(--qa-color-warning-soft);color:var(--qa-color-warning)}
+.jn-pal-ic.join{background:var(--qa-color-surface-2);color:var(--qa-color-muted)}
+.jn-node.wait{border-color:color-mix(in srgb,var(--jn-wait) 70%,var(--qa-color-border));background:color-mix(in srgb,var(--jn-wait) 7%,var(--qa-color-surface))}
+.jn-node.wait.sel{border-color:var(--jn-sel)}
+.jn-node.wait .jn-n-t small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px}
+.jn-card.wait .jn-card-box{border-color:color-mix(in srgb,var(--jn-wait) 55%,var(--qa-color-border));background:color-mix(in srgb,var(--jn-wait) 5%,var(--qa-color-surface))}
+.jn-card.wait.sel .jn-card-box{border-color:var(--jn-wait);box-shadow:0 0 0 2px color-mix(in srgb,var(--jn-wait) 22%,transparent)}
+.jn-compat.wait{color:color-mix(in srgb,var(--jn-wait) 80%,var(--qa-color-text));background:var(--jn-wait-soft);border-color:color-mix(in srgb,var(--jn-wait) 30%,var(--qa-color-border))}
+/* Catalogue : contrôle du flux, puis ce qui n'est pas pris en charge (sans bouton). */
+.jn-pal-flow{margin-top:10px;padding-top:8px;border-top:1px solid var(--qa-color-border)}
+.jn-pal-flow h4{margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--qa-color-muted)}
+.jn-pal-item.flow .jn-pal-pick{cursor:grab}
+.jn-pal-item.flow .jn-pal-t small{font-size:11px;line-height:1.25}
+.jn-pal-item.off{cursor:not-allowed;opacity:.72}
+.jn-pal-item.off:hover{background:none}
+.jn-pal-item.off .jn-pal-ic{background:var(--qa-color-surface-2);color:var(--qa-color-muted)}
+.jn-pal-off summary{font-size:12px}
+/* Légende et liens de données (pointillés, sur le côté : jamais un lien d'exécution). */
+.jn-legend{position:absolute;right:10px;top:10px;max-width:180px;z-index:3;background:color-mix(in srgb,var(--qa-color-surface) 94%,transparent);border:1px solid var(--qa-color-border);border-radius:8px;padding:6px 10px;font-size:11.5px;box-shadow:0 2px 6px color-mix(in srgb,var(--qa-color-text) 8%,transparent)}
+.jn-legend summary{cursor:pointer;font-weight:600}
+.jn-legend ul{display:grid;gap:3px;margin-top:4px}
+.jn-legend li{display:flex;align-items:center;gap:6px}
+.jn-sw{display:inline-block;width:14px;height:10px;border-radius:3px;border:1.5px solid var(--qa-color-primary);background:var(--qa-color-primary-soft)}
+.jn-sw.wait{border-color:var(--jn-wait);background:var(--jn-wait-soft)}
+.jn-sw.loop{border-color:var(--jn-loop);background:var(--jn-loop-soft)}
+.jn-sw.condition{width:10px;height:10px;transform:rotate(45deg);border-radius:1px;border-color:var(--qa-color-warning);background:var(--qa-color-warning-soft)}
+.jn-sw.join{border-radius:999px;border-style:dashed;border-color:var(--qa-color-muted);background:var(--qa-color-surface)}
+.jn-sw.flow{height:0;border:0;border-top:2px solid var(--qa-color-text);border-radius:0;background:none}
+.jn-sw.data{height:0;border:0;border-top:2px dashed var(--jn-data);border-radius:0;background:none}
+.jn-dlink path{fill:none;stroke:var(--jn-data);stroke-width:1.6;stroke-dasharray:5 4}
+.jn-dlink text{font-size:11px;fill:var(--jn-data);paint-order:stroke;stroke:var(--qa-color-surface);stroke-width:3px}
+#jn-dot circle{fill:var(--jn-data)}
+/* Propriétés d'une attente. */
+.jn-waitf{display:flex;flex-direction:column;gap:8px}
+.jn-waitf .field input,.jn-waitf .field select{width:100%;box-sizing:border-box}
+.jn-row2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+.jn-radios{border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:4px}
+.jn-radios legend{font-size:12.5px;font-weight:600;margin-bottom:2px}
+.jn-radios label{display:flex;align-items:center;gap:6px;font-size:13px}
+.jn-unsup{display:flex;flex-direction:column;gap:2px}
+.jn-unsup .ico{width:11px;height:11px;vertical-align:-1px}
+.jn-cite{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+.jn-cite-k{cursor:pointer;border:1px dashed color-mix(in srgb,var(--qa-color-primary) 45%,var(--qa-color-border))}
+.req{color:var(--qa-color-danger)}
+.small{font-size:12px}
+/* Panneau des données sous la scène. */
+.jn-center{display:flex;flex-direction:column;gap:10px;min-width:0}
+.jn-center.docked .jn-stage{height:max(360px,calc(var(--jn-h) - 210px))}
+.jn-dock{border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface);min-width:0}
+.jn-dock-h{display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid var(--qa-color-border)}
+.jn-dock.closed .jn-dock-h{border-bottom:0}
+.jn-dtabs{display:flex;flex-wrap:nowrap;gap:2px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:thin}
+.jn-dtab{display:inline-flex;flex:none;white-space:nowrap;align-items:center;gap:5px;padding:5px 8px;border:0;border-radius:7px;background:none;font:inherit;font-size:12.5px;color:var(--qa-color-muted);cursor:pointer}
+.jn-dtab .ico{width:13px;height:13px}
+.jn-dtab[aria-selected="true"]{background:var(--qa-color-primary-2);color:var(--qa-color-surface);font-weight:600}
+.jn-dtab[aria-selected="true"] .jn-chip{background:var(--qa-color-surface)}
+.jn-dock-b{padding:8px 12px;max-height:230px;overflow:auto}
+.jn-dock.sim .jn-dock-b{max-height:min(68vh,640px)}
+.jn-dock-b h4{margin:0;font-size:13px}
+.jn-dock-2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.jn-tbl-w{overflow-x:auto}
+.jn-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.jn-tbl th{text-align:left;font-weight:600;color:var(--qa-color-muted);padding:4px 6px;border-bottom:1px solid var(--qa-color-border);white-space:nowrap}
+.jn-tbl td{padding:5px 6px;border-bottom:1px solid color-mix(in srgb,var(--qa-color-border) 60%,transparent);vertical-align:middle}
+.jn-tbl tr.ko td{background:color-mix(in srgb,var(--qa-color-danger) 4%,transparent)}
+.jn-tbl .jn-chip,.jn-tbl .lib-key{white-space:nowrap}
+.jn-card.wait .jn-compat.wait{align-self:flex-start}
+.jn-tbl .jn-chip .ico{width:11px;height:11px;margin-right:3px}
+.jn-chip.info{color:var(--jn-data);background:color-mix(in srgb,var(--jn-data) 9%,var(--qa-color-surface));border-color:color-mix(in srgb,var(--jn-data) 25%,var(--qa-color-border))}
+.lib-wait{display:flex;flex-direction:column;gap:8px;margin-top:12px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--qa-color-warning) 40%,var(--qa-color-border));border-radius:8px;background:color-mix(in srgb,var(--qa-color-warning) 4%,var(--qa-color-surface))}
+.lib-wait h4{display:flex;align-items:center;gap:6px;margin:0;font-size:13.5px}
+.lib-wait h4 .ico{width:15px;height:15px;color:var(--qa-color-warning)}
+.lib-wait .field input,.lib-wait .field select{width:100%;box-sizing:border-box}
+.lib-wait-open{margin-top:10px}
+.jn-proposal{margin-top:4px;padding:6px 8px;border-radius:8px;border:1px dashed var(--qa-color-border);font-size:12.5px;display:flex;flex-direction:column;gap:4px}
+.jn-proposal p{display:flex;align-items:center;gap:6px;margin:0;font-weight:600}
+.jn-proposal p .ico{width:13px;height:13px}
+.jn-proposal.unique{border-color:color-mix(in srgb,var(--qa-color-primary) 50%,var(--qa-color-border));background:var(--qa-color-primary-soft)}
+.jn-proposal.ambiguous{border-color:color-mix(in srgb,var(--qa-color-warning) 55%,var(--qa-color-border));background:var(--qa-color-warning-soft)}
+.jn-proposal.none{border-color:color-mix(in srgb,var(--qa-color-danger) 45%,var(--qa-color-border))}
+.jn-proposal li{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 /* Écrans de bureau plus étroits : récents en rail, panneaux plus fins ; le canvas garde la priorité. */
 @media (max-width:1599px){
   .lib-shell.recent-auto .lib-recent-col{display:none}
@@ -1760,5 +2581,7 @@ export const JOURNEY_CSS = `
   .jn-palette{height:280px}
   .jn-side{grid-template-columns:minmax(0,1fr)}
   .jn-acts{margin-left:0}
+  .jn-dock-2,.jn-row2{grid-template-columns:minmax(0,1fr)}
+  .jn-legend{display:none}
 }
-`;
+${LOOP_CSS}${SIM_CSS}`;

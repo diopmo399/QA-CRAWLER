@@ -9,10 +9,13 @@ import {
   type JourneyBranch,
   type JourneyNode,
 } from '../core/journey.js';
+import { defaultWait, sanitizeWait } from '../core/wait.js';
 import {
   acceptVersion,
   addBlock,
+  addLoop,
   addShape,
+  addWait,
   bounds,
   connect,
   duplicateNode,
@@ -29,11 +32,20 @@ import {
   setBranch,
   setLabel,
   setParam,
+  setWait,
   switchMode,
   undo,
   type JourneyUi,
 } from './dashboard-journey.js';
 import { can } from './dashboard-access.js';
+import {
+  applyLoopField,
+  loopAddBlock,
+  loopAddWait,
+  loopMoveItem,
+  loopRemoveItem,
+  loopText,
+} from './dashboard-journey-loop.js';
 import type { DashboardState } from './dashboard-view.js';
 
 export interface JourneyHost {
@@ -72,7 +84,7 @@ type Drag =
 type Carried =
   | { kind: 'block'; name: string }
   | { kind: 'node'; id: string }
-  | { kind: 'shape'; shape: 'CONDITION' | 'JOIN' | 'END' };
+  | { kind: 'shape'; shape: 'CONDITION' | 'JOIN' | 'END' | 'WAIT' | 'LOOP' };
 
 const ZOOM_MIN = 0.3;
 const ZOOM_MAX = 2;
@@ -178,6 +190,65 @@ export class JourneyController {
     }, delay);
   }
 
+  /** SIMULATION STATIQUE : l'aperçu du parcours (rien n'est exécuté). */
+  async preview(): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!api || !projectId) return;
+    const ui = this.ui;
+    const journey: Journey = { ...ui.journey, name: ui.journey.name.trim() || 'parcours' };
+    const key = logicKey(ui.journey);
+    ui.sim = { ...(ui.sim ?? { path: 0 }), previewBusy: true, previewError: undefined };
+    this.host.paint();
+    try {
+      const preview = await api.journeys.preview(projectId, journey);
+      ui.sim = { ...(ui.sim ?? { path: 0 }), preview, previewBusy: false };
+      ui.simKey = key;
+    } catch (error) {
+      ui.sim = { ...(ui.sim ?? { path: 0 }), previewBusy: false, previewError: message(error) };
+    }
+    this.host.paint();
+  }
+
+  /**
+   * EXÉCUTION DE SIMULATION : un vrai rejeu dans l'environnement isolé choisi ; la progression vient du moteur
+   * et le résultat affiché est celui de l'exécution (jamais présumé).
+   */
+  async simulate(): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    const sim = this.ui.sim;
+    if (!api || !projectId || !sim?.env || sim.running) return;
+    const ui = this.ui;
+    const journey: Journey = { ...ui.journey, name: ui.journey.name.trim() || 'parcours' };
+    ui.sim = { ...sim, running: true, error: undefined, detail: undefined, status: undefined };
+    this.host.paint();
+    try {
+      const started = await api.journeys.simulate(projectId, journey, {
+        environmentId: sim.env,
+        path: sim.path,
+      });
+      ui.sim = { ...(ui.sim ?? sim), run: started.run, status: started.status };
+      this.host.paint();
+      await new Promise<void>((resolve) => {
+        const subscription = api.explorations.subscribe(started.id, (event) => {
+          if (event.type === 'completed' || event.type === 'failed') {
+            subscription.close();
+            resolve();
+          } else if (event.type === 'status' && ui.sim) {
+            ui.sim = { ...ui.sim, status: event.status };
+            this.host.paint();
+          }
+        });
+      });
+      const detail = await api.executions.get(projectId, started.run);
+      ui.sim = { ...(ui.sim ?? sim), running: false, detail };
+    } catch (error) {
+      ui.sim = { ...(ui.sim ?? sim), running: false, error: message(error) };
+    }
+    this.host.paint();
+  }
+
   async check(): Promise<void> {
     const api = this.host.api();
     const projectId = this.projectId();
@@ -270,6 +341,28 @@ export class JourneyController {
     }, 4000);
   }
 
+  /** Après l'ajout d'une attente : ses propriétés s'ouvrent, une confirmation discrète le dit. */
+  private addedWait(message?: string): void {
+    const t = journeyText(this.host.state);
+    if (this.host.state.lib.propsOpen === false) this.host.state.lib.propsOpen = true;
+    this.host.state.lib.wide = false;
+    this.ui.toast = message ?? t.toastWait;
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => {
+      this.toastTimer = undefined;
+      this.ui.toast = undefined;
+      this.host.paint();
+    }, 4000);
+  }
+
+  /** L'attente choisie (ou rien). */
+  private selectedWait(): JourneyNode | undefined {
+    const selected = this.ui.selected;
+    if (selected?.kind !== 'node') return undefined;
+    const node = this.ui.journey.graph.nodes.find((entry) => entry.id === selected.id);
+    return node?.kind === 'WAIT' ? node : undefined;
+  }
+
   click(action: string, target: HTMLElement): boolean {
     const ui = this.ui;
     const data = target.dataset;
@@ -277,6 +370,109 @@ export class JourneyController {
       case 'jn-add':
         if (data.block) this.addBlockNamed(data.block);
         return true;
+      case 'jn-add-wait': {
+        if (!this.publish) return true;
+        this.host.state.lib.tab = 'composer';
+        const id = addWait(ui);
+        this.addedWait();
+        this.changed(
+          `.jn-node[data-jn-node="${CSS.escape(id)}"], [data-jn-node="${CSS.escape(id)}"] [data-action="jn-select"]`,
+        );
+        return true;
+      }
+      case 'jn-add-loop': {
+        if (!this.publish) return true;
+        this.host.state.lib.tab = 'composer';
+        const id = addLoop(ui);
+        this.addedWait(loopText(this.host.state).toast);
+        this.changed(
+          `.jn-node[data-jn-node="${CSS.escape(id)}"], [data-jn-node="${CSS.escape(id)}"] [data-action="jn-select"]`,
+        );
+        return true;
+      }
+      case 'jn-loop-add-block': {
+        if (!this.publish || !data.loop) return true;
+        const select = this.host.root.querySelector<HTMLSelectElement>(
+          `[data-jn="loop.pick"][data-loop="${CSS.escape(data.loop)}"]`,
+        );
+        const block = (this.host.state.lib.blocks ?? []).find((entry) => entry.name === select?.value);
+        if (!block) {
+          select?.focus();
+          return true;
+        }
+        loopAddBlock(ui, data.loop, block);
+        this.changed(`[data-jn="loop.pick"][data-loop="${CSS.escape(data.loop)}"]`);
+        return true;
+      }
+      case 'jn-preview':
+        void this.preview();
+        return true;
+      case 'jn-simulate':
+        if (this.publish) void this.simulate();
+        return true;
+      case 'jn-loop-add-wait':
+        if (!this.publish || !data.loop) return true;
+        loopAddWait(ui, data.loop);
+        this.changed();
+        return true;
+      case 'jn-loop-remove':
+        if (!this.publish || !data.loop || !data.item) return true;
+        loopRemoveItem(ui, data.loop, data.item);
+        this.changed();
+        return true;
+      case 'jn-loop-move':
+        if (!this.publish || !data.loop || !data.item) return true;
+        loopMoveItem(ui, data.loop, data.item, Number(data.delta) || 0);
+        this.changed();
+        return true;
+      case 'jn-dock':
+        ui.dock =
+          data.tab === 'map'
+            ? 'map'
+            : data.tab === 'vars'
+              ? 'vars'
+              : data.tab === 'issues'
+                ? 'issues'
+                : data.tab === 'sim'
+                  ? 'sim'
+                  : 'io';
+        ui.dockOpen = true;
+        this.host.paint();
+        this.focus(`#jn-dk-${ui.dock}`);
+        return true;
+      case 'jn-dock-toggle':
+        ui.dockOpen = !ui.dockOpen;
+        this.host.paint();
+        this.focus('[data-action="jn-dock-toggle"]');
+        return true;
+      case 'jn-apply-map': {
+        // Une proposition retenue par une personne : la correspondance est enregistrée explicitement.
+        if (!this.publish || !data.node || !data.key || !data.to) return true;
+        setParam(ui, data.node, data.key, { mode: 'MAP', key: data.to });
+        this.changed(`[data-jn="param.mode"][data-key="${CSS.escape(data.key)}"]`);
+        return true;
+      }
+      case 'jn-map-fix':
+        if (!data.node) return true;
+        ui.selected = { kind: 'node', id: data.node };
+        ui.propsTab = 'params';
+        if (this.host.state.lib.propsOpen === false) this.host.state.lib.propsOpen = true;
+        this.host.paint();
+        this.focus('#jn-pp-params select, #jn-pp-params input, .jn-waitf select');
+        return true;
+      case 'jn-wait-cite': {
+        const node = this.selectedWait();
+        if (!node || !data.key || !this.publish) return true;
+        const spec = node.wait ?? defaultWait();
+        const field = spec.type === 'URL' || spec.type === 'RESPONSE' ? 'url' : 'text';
+        setWait(
+          ui,
+          node.id,
+          sanitizeWait({ ...spec, [field]: `${spec[field] ?? ''}\${testData:${data.key}}` }),
+        );
+        this.changed(`[data-jn="wait.${field}"]`);
+        return true;
+      }
       case 'jn-shape': {
         if (!this.publish) return true;
         const kind = data.kind;
@@ -503,6 +699,10 @@ export class JourneyController {
       case 'jn-focus-palette':
         this.focus('.jn-palette input[data-jn="palette"]');
         return true;
+      case 'jn-legend':
+        // Le repli natif de <details> suit ce clic : l'état est gardé pour les redessins.
+        ui.legendOpen = !ui.legendOpen;
+        return true;
       case 'jn-group': {
         // Le repli natif de <details> suit ce clic : l'état est gardé pour les redessins.
         const group = data.group ?? '';
@@ -564,6 +764,74 @@ export class JourneyController {
           if (committed) this.changed();
         }
         return true;
+      case 'loop.type':
+      case 'loop.times':
+      case 'loop.source':
+      case 'loop.items':
+      case 'loop.itemsFrom':
+      case 'loop.as':
+      case 'loop.maxIterations':
+      case 'loop.timeoutS':
+      case 'loop.onFailure':
+      case 'loop.while.type':
+      case 'loop.while.value':
+      case 'loop.item.wait.type':
+      case 'loop.item.wait.value':
+      case 'loop.item.param': {
+        // Les réglages sont retenus quand le champ est validé (changement, sortie) : jamais à chaque frappe.
+        if (!committed || !this.publish) return true;
+        if (applyLoopField(ui, key, target))
+          this.changed(
+            ['loop.type', 'loop.source', 'loop.onFailure', 'loop.while.type', 'loop.item.wait.type'].includes(
+              key,
+            )
+              ? `[data-jn="${key}"]${target.dataset.item ? `[data-item="${CSS.escape(target.dataset.item)}"]` : ''}`
+              : undefined,
+          );
+        return true;
+      }
+      case 'loop.pick':
+        return true;
+      case 'sim.env':
+        ui.sim = { ...(ui.sim ?? { path: 0 }), env: value };
+        this.host.paint();
+        this.focus('[data-jn="sim.env"]');
+        return true;
+      case 'sim.path':
+        ui.sim = { ...(ui.sim ?? { path: 0 }), path: Number(value) || 0 };
+        this.host.paint();
+        return true;
+      case 'wait.type':
+      case 'wait.selector':
+      case 'wait.text':
+      case 'wait.url':
+      case 'wait.method':
+      case 'wait.status':
+      case 'wait.timeoutS':
+      case 'wait.onTimeout': {
+        const node = this.selectedWait();
+        if (!node) return true;
+        const spec: Record<string, unknown> = { ...(node.wait ?? defaultWait()) };
+        const name = key.slice('wait.'.length);
+        if (name === 'type' && !committed) return true;
+        if (name === 'timeoutS') {
+          const seconds = Number(value);
+          if (value.trim() === '' || Number.isNaN(seconds)) return true;
+          spec.timeoutS = seconds;
+        } else if (name === 'status') spec.status = /^\d+$/.test(value) ? Number(value) : value;
+        else if (name === 'method' && value === '') delete spec.method;
+        else spec[name] = value;
+        setWait(ui, node.id, sanitizeWait(spec));
+        // Une liste ou un choix garde le focus ; un champ texte validé en le quittant ne le reprend pas (le
+        // clic qui l'a fait quitter n'est pas avalé).
+        if (committed)
+          this.changed(
+            ['type', 'method', 'status', 'onTimeout'].includes(name)
+              ? `[data-jn="${key}"]${name === 'onTimeout' ? ':checked' : ''}`
+              : undefined,
+          );
+        return true;
+      }
       case 'param.mode':
         if (selected && committed && target.dataset.key) {
           const mode = value;
@@ -801,7 +1069,7 @@ export class JourneyController {
       card.classList.add('moving');
     } else if (shape?.dataset.jnShape) {
       const kind = shape.dataset.jnShape;
-      if (kind === 'CONDITION' || kind === 'JOIN' || kind === 'END')
+      if (kind === 'CONDITION' || kind === 'JOIN' || kind === 'END' || kind === 'WAIT' || kind === 'LOOP')
         this.carried = { kind: 'shape', shape: kind };
     }
     if (!this.carried) return;
@@ -820,7 +1088,11 @@ export class JourneyController {
     if (gap?.dataset.jnGap !== undefined) return { gap: Number(gap.dataset.jnGap) };
     const canvas = target.closest<HTMLElement>('[data-jn-canvas]');
     if (canvas && this.carried.kind !== 'node') return { canvas };
-    if (target.closest('.jn-line') && this.carried.kind !== 'shape') return { line: true };
+    if (
+      target.closest('.jn-line') &&
+      (this.carried.kind !== 'shape' || this.carried.shape === 'WAIT' || this.carried.shape === 'LOOP')
+    )
+      return { line: true };
     return undefined;
   }
 
@@ -834,7 +1106,11 @@ export class JourneyController {
     const canvas = target.closest<HTMLElement>('[data-jn-canvas]');
     canvas?.classList.add('drop');
     for (const element of this.host.root.querySelectorAll('.jn-edge.drop')) element.classList.remove('drop');
-    if (canvas && this.carried?.kind === 'block') {
+    if (
+      canvas &&
+      (this.carried?.kind === 'block' ||
+        (this.carried?.kind === 'shape' && (this.carried.shape === 'WAIT' || this.carried.shape === 'LOOP')))
+    ) {
       const edge = this.edgeNear(this.worldPoint(canvas, event.clientX, event.clientY));
       if (edge) this.host.root.querySelector(`[data-jn-edge="${CSS.escape(edge)}"]`)?.classList.add('drop');
     }
@@ -877,6 +1153,17 @@ export class JourneyController {
           this.host.state.lib.tab = 'composer';
           this.added(block.name);
         }
+      } else if (carried.kind === 'shape' && carried.shape === 'WAIT') {
+        // Comme un bloc : déposée sur une connexion, son insertion entre les deux nœuds est proposée.
+        const edge = this.edgeNear(point);
+        const id = addWait(ui, { x: point.x - NODE_SIZE.WAIT.w / 2, y: point.y - NODE_SIZE.WAIT.h / 2 });
+        ui.pendingInsert = edge ? { edge, node: id } : undefined;
+        this.addedWait();
+      } else if (carried.kind === 'shape' && carried.shape === 'LOOP') {
+        const edge = this.edgeNear(point);
+        const id = addLoop(ui, { x: point.x - NODE_SIZE.LOOP.w / 2, y: point.y - NODE_SIZE.LOOP.h / 2 });
+        ui.pendingInsert = edge ? { edge, node: id } : undefined;
+        this.addedWait(loopText(this.host.state).toast);
       } else if (carried.kind === 'shape')
         addShape(
           ui,
@@ -893,6 +1180,12 @@ export class JourneyController {
           addBlock(ui, block, { index });
           this.added(block.name);
         }
+      } else if (carried.kind === 'shape' && carried.shape === 'WAIT') {
+        addWait(ui, { index });
+        this.addedWait();
+      } else if (carried.kind === 'shape' && carried.shape === 'LOOP') {
+        addLoop(ui, { index });
+        this.addedWait(loopText(this.host.state).toast);
       } else if (carried.kind === 'node') {
         const cards = [...this.host.root.querySelectorAll<HTMLElement>('.jn-card[data-jn-node]')].map(
           (element) => element.dataset.jnNode,
@@ -933,7 +1226,8 @@ export class JourneyController {
     if (event.button !== 0 || this.ui.journey.mode !== 'DIAGRAM') return;
     const target = event.target as Element | null;
     const canvas = target?.closest<HTMLElement>('[data-jn-canvas]');
-    if (!target || !canvas || target.closest('.jn-tools-v, .jn-float, .jn-insert, .jn-toast')) return;
+    if (!target || !canvas || target.closest('.jn-tools-v, .jn-float, .jn-insert, .jn-toast, .jn-legend'))
+      return;
     const ui = this.ui;
     const port = target.closest<HTMLElement>('[data-jn-port]');
     if (port && this.publish) {

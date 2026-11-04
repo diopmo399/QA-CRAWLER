@@ -32,6 +32,9 @@ import type {
   DeclaredContract,
   LibraryAddInput,
   LibraryBlockCheck,
+  BlockOutputInput,
+  FieldDeclaration,
+  FieldDeclarationResult,
   LibraryBlockView,
   LibrarySourcePreview,
   GroupCheckView,
@@ -94,6 +97,8 @@ import type {
   TrendsView,
 } from './contracts.js';
 import type { Journey, JourneyCheck, JourneySummary } from './journey.js';
+import type { JourneyPreview } from './journey-loop.js';
+import type { WaitSpec } from './wait.js';
 import { SDK_API_VERSION } from './contracts.js';
 import type {
   EnvironmentCapabilities,
@@ -331,6 +336,30 @@ export interface QaCrawlerClient {
     ): Promise<LibraryBlockView>;
     /** Valide le contenu modifié d'un bloc : il devient sa version suivante. */
     validateVersion(projectId: string, name: string): Promise<LibraryBlockView>;
+    /**
+     * Insère une attente dans un bloc, après l'étape `after` (0 : avant la première). Le bloc devient CHANGED :
+     * sa version suivante est à valider explicitement (`validateVersion`).
+     */
+    insertWait(
+      projectId: string,
+      name: string,
+      input: { after: number; wait: WaitSpec; name?: string },
+    ): Promise<LibraryBlockView>;
+    /**
+     * AJOUTE UNE SORTIE à un bloc : une étape exécutable (génération, capture d'écran, d'adresse, de réponse,
+     * transmission d'une entrée) est insérée ; le bloc passe à CHANGED (nouvelle version à valider).
+     */
+    addOutput(projectId: string, name: string, input: BlockOutputInput): Promise<LibraryBlockView>;
+    /**
+     * Déclare des données d'un bloc (libellé, sens, type, défaut, confirmation). Un changement incompatible
+     * sur un bloc utilisé est refusé (409) sans `acceptIncompatible: true`.
+     */
+    declareFields(
+      projectId: string,
+      name: string,
+      fields: FieldDeclaration[],
+      options?: { acceptIncompatible?: boolean },
+    ): Promise<FieldDeclarationResult>;
     /** Les parcours suivis dont un bloc a changé depuis leur composition. */
     drift(projectId: string): Promise<CompositionDrift[]>;
     /** Le détail d'un bloc : ses étapes en mots, ses groupes internes, ses données (sans valeur). */
@@ -365,6 +394,17 @@ export interface QaCrawlerClient {
       options?: { revision?: string; previous?: string },
     ): Promise<Journey>;
     check(projectId: string, journey: Journey): Promise<JourneyCheck>;
+    /** SIMULATION STATIQUE : l'aperçu du parcours (provenance des entrées, portée des sorties) ; rien n'est exécuté. */
+    preview(projectId: string, journey: Journey): Promise<JourneyPreview>;
+    /**
+     * EXÉCUTION DE SIMULATION : un vrai rejeu du chemin choisi par le moteur, dans un environnement de
+     * développement ou de test choisi explicitement (refus 422 sinon) ; le parcours n'est pas enregistré.
+     */
+    simulate(
+      projectId: string,
+      journey: Journey,
+      options: { environmentId: string; path?: number; headed?: boolean; slowMoMs?: number },
+    ): Promise<ExplorationSnapshot & { run: string; simulation: { journey: string; path: number } }>;
     /** Crée le(s) scénario(s) d'un parcours enregistré ; `perPath` : un par chemin (parcours avec conditions). */
     publish(
       projectId: string,
@@ -1050,6 +1090,9 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       save: (projectId, journey, options = {}) =>
         request('POST', `${project(projectId)}/journeys`, { journey, ...options }),
       check: (projectId, journey) => request('POST', `${project(projectId)}/journeys/check`, { journey }),
+      preview: (projectId, journey) => request('POST', `${project(projectId)}/journeys/preview`, { journey }),
+      simulate: (projectId, journey, options) =>
+        request('POST', `${project(projectId)}/journeys/simulate`, { journey, ...options }),
       publish: (projectId, name, options = {}) =>
         request('POST', `${project(projectId)}/journeys/publish`, { name, ...options }),
       toBlock: (projectId, name, input) =>
@@ -1068,6 +1111,15 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request('PUT', `${project(projectId)}/library/${encodeURIComponent(name)}/contract`, { contract }),
       validateVersion: (projectId, name) =>
         request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/version`, {}),
+      insertWait: (projectId, name, input) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/wait`, input),
+      addOutput: (projectId, name, input) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/outputs`, input),
+      declareFields: (projectId, name, fields, options = {}) =>
+        request('PUT', `${project(projectId)}/library/${encodeURIComponent(name)}/fields`, {
+          fields,
+          ...(options.acceptIncompatible ? { acceptIncompatible: true } : {}),
+        }),
       drift: (projectId) => request('GET', `${project(projectId)}/library/drift`),
       details: (projectId, name) =>
         request('GET', `${project(projectId)}/library/${encodeURIComponent(name)}`),

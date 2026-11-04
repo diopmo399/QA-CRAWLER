@@ -15,6 +15,10 @@ import {
   journeyStructure,
   linearOrder,
   QaCrawlerError,
+  sanitizeWait,
+  waitProblems,
+  waitReferences,
+  waitStep,
   type Journey,
   type JourneyGraph,
   type Project,
@@ -105,7 +109,7 @@ describe('modèle du parcours', () => {
     expect(Object.values(found.edges).flat()).toEqual(
       expect.arrayContaining([
         'connexion vers un nœud absent',
-        'boucle : le moteur ne rejoue pas de boucle, retirez cette connexion',
+        'boucle non contrôlée : une connexion ne revient pas en arrière, utilisez un nœud Boucle (borné)',
       ]),
     );
   });
@@ -172,6 +176,110 @@ describe('modèle du parcours', () => {
     ]);
     expect(expandedStepsOf(flows, 'Loop')).toBeUndefined();
     expect(expandedStepsOf(flows, 'Broken')).toBeUndefined();
+  });
+
+  it('attente : validée, compilée en étape expect (délai, avertissement), données citées connues', () => {
+    expect(
+      sanitizeWait({
+        type: 'RESPONSE',
+        url: ' /api/items ',
+        method: 'post',
+        status: '2xx',
+        timeoutS: 12,
+        onTimeout: 'WARN',
+        selector: 'x',
+      }),
+    ).toEqual({
+      type: 'RESPONSE',
+      url: '/api/items',
+      method: 'POST',
+      status: '2xx',
+      timeoutS: 12,
+      onTimeout: 'WARN',
+    });
+    // Un type inconnu ne devient jamais une attente inventée : VISIBLE par défaut, à compléter.
+    expect(sanitizeWait({ type: 'SLEEP', timeoutS: 3 })).toEqual({
+      type: 'VISIBLE',
+      timeoutS: 3,
+      onTimeout: 'FAIL',
+    });
+    expect(waitProblems({ type: 'VISIBLE', timeoutS: 30, onTimeout: 'FAIL' })).toEqual([
+      'indiquez un sélecteur CSS ou un texte visible',
+    ]);
+    expect(waitProblems({ type: 'TEXT', text: 'ok', timeoutS: 0, onTimeout: 'FAIL' })[0]).toMatch(/délai/);
+    expect(
+      waitProblems({
+        type: 'HIDDEN',
+        selector: '#x-${testData:item.number}',
+        timeoutS: 5,
+        onTimeout: 'FAIL',
+      }),
+    ).toEqual(['un sélecteur CSS ne cite pas de donnée : utilisez un texte visible']);
+    expect(
+      waitReferences({
+        type: 'TEXT',
+        text: 'N° ${testData:item.number} / ${testData:item.number}',
+        timeoutS: 5,
+        onTimeout: 'FAIL',
+      }),
+    ).toEqual(['item.number']);
+    expect(
+      waitStep({ type: 'VISIBLE', selector: '.toast-success', timeoutS: 30, onTimeout: 'FAIL' }),
+    ).toEqual({
+      name: 'Attente : .toast-success visible',
+      expect: { visible: { css: '.toast-success' } },
+      timeoutMs: 30_000,
+    });
+    expect(waitStep({ type: 'RESPONSE', url: '/api/items', timeoutS: 5, onTimeout: 'WARN' })).toEqual({
+      name: 'Attente : /api/items → 2xx',
+      expect: { response: { url: '/api/items', status: '2xx' } },
+      timeoutMs: 5000,
+      optional: true,
+    });
+
+    const graph = graphOf(
+      [
+        node('s', 'START'),
+        node('a', 'BLOCK', { block: 'A' }),
+        node('w', 'WAIT', { wait: { type: 'TEXT', text: 'Enregistré', timeoutS: 10, onTimeout: 'FAIL' } }),
+        node('b', 'BLOCK', { block: 'B' }),
+        node('f', 'END'),
+      ],
+      [
+        ['s', 'a'],
+        ['a', 'w'],
+        ['w', 'b'],
+        ['b', 'f'],
+      ],
+    );
+    expect(journeyStructure(graph)).toMatchObject({ errors: [], nodes: {}, edges: {} });
+    // L'attente garde sa place dans la suite : le mode linéaire tient.
+    const linear = linearOrder(graph);
+    expect(linear.ok && linear.blocks.map((entry) => entry.id)).toEqual(['a', 'w', 'b']);
+    expect(compileJourneyPath(graph, ['s', 'a', 'w', 'b', 'f']).steps).toEqual([
+      { run: 'A' },
+      { name: 'Attente : texte « Enregistré »', expect: { text: 'Enregistré' }, timeoutMs: 10_000 },
+      { run: 'B' },
+    ]);
+    // Une attente incomplète ou sans sortie est signalée sur son nœud.
+    const broken = graphOf(
+      [
+        node('s', 'START'),
+        node('a', 'BLOCK', { block: 'A' }),
+        node('w', 'WAIT', { wait: { type: 'URL', timeoutS: 10, onTimeout: 'FAIL' } }),
+        node('f', 'END'),
+      ],
+      [
+        ['s', 'a'],
+        ['a', 'w'],
+        ['a', 'f'],
+      ],
+    );
+    expect(journeyStructure(broken).nodes.w).toEqual([
+      'indiquez le texte que l’adresse doit contenir',
+      'cette attente ne mène nulle part',
+      'aucune fin n’est atteinte depuis ce nœud',
+    ]);
   });
 
   it('compilation : run: par bloc, with: pour les données propres à une instance', () => {
@@ -492,5 +600,82 @@ describe('SDK — parcours visuels', () => {
       (await client.scenarios.list(project.id)).some((entry) => entry.name === 'Créer deux éléments'),
     ).toBe(true);
     expect(await refusal(client.journeys.open(project.id, 'Créer deux éléments'))).toMatch(/^404/);
+  });
+});
+
+describe('SDK — attentes dans un parcours', () => {
+  it('une attente cite une donnée produite plus haut, jamais régénérée ; avant son producteur, c’est une erreur', async () => {
+    const wait = {
+      type: 'TEXT',
+      text: 'N° ${testData:item.number}',
+      timeoutS: 15,
+      onTimeout: 'WARN',
+    } as const;
+    const good = journeyWith(
+      'Numéroter puis attendre',
+      graphOf(
+        [
+          node('s', 'START'),
+          node('n', 'BLOCK', { block: 'Numéroter (bloc)', version: 1 }),
+          node('w', 'WAIT', { wait }),
+          node('f', 'END'),
+        ],
+        [
+          ['s', 'n'],
+          ['n', 'w'],
+          ['w', 'f'],
+        ],
+      ),
+    );
+    const check = await client.journeys.check(project.id, good);
+    expect(check).toMatchObject({ ok: true, linear: true, publishable: 'SINGLE' });
+    expect(check.nodes.w?.satisfied).toEqual([{ key: 'item.number', from: 'n' }]);
+    expect(check.nodes.w?.available).toContain('item.number');
+
+    const early = journeyWith(
+      'Attendre trop tôt',
+      graphOf(
+        [
+          node('s', 'START'),
+          node('w', 'WAIT', { wait }),
+          node('n', 'BLOCK', { block: 'Numéroter (bloc)', version: 1 }),
+          node('f', 'END'),
+        ],
+        [
+          ['s', 'w'],
+          ['w', 'n'],
+          ['n', 'f'],
+        ],
+      ),
+    );
+    const refused = await client.journeys.check(project.id, early);
+    expect(refused.ok).toBe(false);
+    expect(refused.nodes.w?.missing).toEqual([{ key: 'item.number', path: 1 }]);
+    expect(refused.nodes.w?.errors).toEqual([
+      'la donnée item.number n’est produite par aucun bloc avant cette attente',
+    ]);
+
+    // Le scénario créé est lu par le moteur : l'attente est une étape expect, son délai et l'avertissement gardés,
+    // la donnée citée par référence (la valeur générée du run, jamais une nouvelle).
+    await client.journeys.save(project.id, good);
+    expect((await client.journeys.publish(project.id, 'Numéroter puis attendre')).scenarios).toEqual([
+      'Numéroter puis attendre',
+    ]);
+    const config = await loadProjectConfig(path.join(projectDir, PROJECT_FILE));
+    const loaded = await loadProjectMission(config, {
+      command: 'replay',
+      flows: ['Numéroter puis attendre'],
+    });
+    const steps = loaded.config.flows[0]?.steps ?? [];
+    expect(steps.map((step) => step.kind)).toEqual(['fill', 'expect']);
+    expect(steps[1]).toMatchObject({
+      kind: 'expect',
+      expect: { text: 'N° ${testData:item.number}' },
+      timeoutMs: 15_000,
+      optional: true,
+    });
+    expect(loaded.config.flows[0]?.testData?.values['item.number']).toMatchObject({
+      strategy: 'GENERATE_AT_REPLAY',
+    });
   });
 });

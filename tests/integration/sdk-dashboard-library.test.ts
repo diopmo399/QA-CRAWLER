@@ -258,9 +258,11 @@ describe('Dashboard — scenario library in Chromium', () => {
     const after = await reopened.locator('.jn-node.block').first().boundingBox();
     expect(Math.round((after?.x ?? 0) - before.x)).toBeGreaterThan(60);
     // Une condition déposée sur le diagramme : le mode linéaire est refusé, avec la raison.
-    await reopened.locator('[data-jn-shape="CONDITION"]').dragTo(reopened.locator('[data-jn-canvas]'), {
-      targetPosition: await spot(reopened.locator('[data-jn-canvas]'), 0.15, 0.3),
-    });
+    await reopened
+      .locator('.jn-tools-v [data-jn-shape="CONDITION"]')
+      .dragTo(reopened.locator('[data-jn-canvas]'), {
+        targetPosition: await spot(reopened.locator('[data-jn-canvas]'), 0.15, 0.3),
+      });
     await expect.poll(() => reopened.locator('.jn-node.condition').count()).toBe(1);
     await reopened.locator('#jn-mode-LINEAR').click();
     await reopened.locator('.jn-msg.warn', { hasText: 'n’est pas possible sans perte' }).waitFor();
@@ -341,7 +343,7 @@ describe('Dashboard — scenario library in Chromium', () => {
     await composer.locator('#jn-mode-DIAGRAM').click();
     const canvas = composer.locator('[data-jn-canvas]');
     await composer
-      .locator('[data-jn-shape="CONDITION"]')
+      .locator('.jn-tools-v [data-jn-shape="CONDITION"]')
       .dragTo(canvas, { targetPosition: await spot(canvas, 0.45, 0.2) });
     await composer.locator('input[data-jn="label"]').fill('Urgent ?');
     await composer.locator('input[data-jn="label"]').press('Tab');
@@ -470,6 +472,117 @@ describe('Dashboard — scenario library in Chromium', () => {
     await composer.locator('.lib-rail.props').waitFor();
     await composer.locator('.lib-rail.props [data-action="jn-panel"]').click();
     await composer.locator('.jn-side').waitFor();
+  });
+
+  it('waits: added from the catalog, configured with only what the engine runs, citing a data item produced before; the data panel reads the real check; data links in the diagram', async () => {
+    const composer = dashboard().locator('#lib-composer');
+    await tab('composer');
+    await composer.locator('[data-action="jn-new"]').click();
+    if (await composer.locator('[data-action="jn-discard-yes"]').count())
+      await composer.locator('[data-action="jn-discard-yes"]').click();
+    await composer.locator('input[data-jn="name"]').fill('Créer puis attendre');
+    await composer.locator('#jn-mode-LINEAR').click();
+    // Ce que le moteur ne sait pas faire est montré indisponible, sans bouton ; la boucle, exécutée, n'en est plus.
+    const off = composer.locator('.jn-pal-off');
+    await off.locator('summary').click();
+    expect(await off.locator('.jn-pal-item.off[aria-disabled="true"]').allTextContents()).toEqual([
+      expect.stringContaining('Document'),
+      expect.stringContaining('API'),
+    ]);
+    await composer.locator('.jn-pal-flow [data-action="jn-add-loop"]').waitFor();
+    expect(await off.locator('button').count()).toBe(0);
+    await composer.locator('.jn-pal-item[data-jn-block="Bloc création"] [data-action="jn-add"]').click();
+    await composer.locator('.jn-pal-flow [data-action="jn-add-wait"]').click();
+    await composer.locator('.jn-toast', { hasText: 'Attente ajoutée au parcours' }).waitFor();
+    const wait = composer.locator('.jn-card.wait');
+    await wait.waitFor();
+    await composer.locator('.jn-props h3', { hasText: 'Attente' }).waitFor();
+    // Les attentes non prises en charge sont dans la liste, désactivées.
+    expect(await composer.locator('select[data-jn="wait.type"] option[disabled]').allTextContents()).toEqual([
+      'Attendre qu’un élément soit cliquable',
+      'Durée fixe',
+    ]);
+    // Incomplète : la validation de l'attente le dit, la vérification aussi.
+    await composer.locator('.jn-val-list li.ko', { hasText: 'Cible à renseigner' }).waitFor();
+    await composer.locator('select[data-jn="wait.type"]').selectOption('TEXT');
+    // Citer une donnée produite avant l'attente (proposée par la vérification réelle).
+    await composer.locator('[data-action="jn-wait-cite"][data-key="item.title"]').click({ timeout: 15_000 });
+    expect(await composer.locator('input[data-jn="wait.text"]').inputValue()).toBe('${testData:item.title}');
+    await composer.locator('input[data-jn="wait.timeoutS"]').fill('12');
+    await composer.locator('input[data-jn="wait.timeoutS"]').press('Tab');
+    await composer.locator('input[data-jn="wait.onTimeout"][value="WARN"]').check();
+    await composer
+      .locator('.jn-props', { hasText: 'L’étape reste notée en échec dans le rapport' })
+      .waitFor();
+    await composer.locator('.jn-val-state.ok', { hasText: 'Parcours valide' }).waitFor({ timeout: 15_000 });
+    await composer.locator('.jn-val-list li.ok', { hasText: 'Données citées disponibles' }).waitFor();
+    await wait.locator('.jn-compat.wait', { hasText: '12 s · avertissement au délai' }).waitFor();
+    // Le panneau des données : correspondances, variables, erreurs.
+    const dock = composer.locator('.jn-dock');
+    await dock.locator('[data-action="jn-dock"][data-tab="map"]').click();
+    await dock
+      .locator('tr', { hasText: 'Connecté (même nom)' })
+      .filter({ hasText: 'Bloc création' })
+      .waitFor();
+    await dock.locator('[data-action="jn-dock"][data-tab="vars"]').click();
+    await dock
+      .locator('tr', { hasText: 'item.title' })
+      .filter({ hasText: 'Générée au rejeu par Bloc création' })
+      .waitFor();
+    // Placée avant le bloc qui la produit : l'erreur est dite, sur l'attente et dans le panneau.
+    await wait.locator('[data-action="jn-move"][data-to="0"]').click();
+    await dock.locator('[data-action="jn-dock"][data-tab="issues"]').click();
+    await dock
+      .locator('li.ko', { hasText: 'la donnée item.title n’est produite par aucun bloc avant cette attente' })
+      .waitFor({ timeout: 15_000 });
+    await composer.locator('[data-action="jn-undo"]').click();
+    await dock
+      .locator('.ok-t', { hasText: 'Aucune erreur ni aucun avertissement.' })
+      .waitFor({ timeout: 15_000 });
+    // En diagramme : l'attente en orange, le lien de données en pointillés vers elle, la légende.
+    await composer.locator('#jn-mode-DIAGRAM').click();
+    const node = composer.locator('.jn-node.wait');
+    await node.waitFor();
+    await node.click();
+    await composer.locator('.jn-dlink', { hasText: 'item.title' }).waitFor({ timeout: 15_000 });
+    await composer.locator('.jn-legend summary').click();
+    await composer.locator('.jn-legend[open]', { hasText: 'Lien de données' }).waitFor();
+    // Enregistré puis rouvert : l'attente et ses réglages sont gardés.
+    await composer.locator('[data-action="jn-save"]').click();
+    await composer.locator('.jn-chip.ok', { hasText: 'Enregistré' }).waitFor({ timeout: 15_000 });
+    const saved = await client.journeys.open(project.id, 'Créer puis attendre');
+    expect(saved.graph.nodes.find((entry) => entry.kind === 'WAIT')?.wait).toEqual({
+      type: 'TEXT',
+      text: '${testData:item.title}',
+      timeoutS: 12,
+      onTimeout: 'WARN',
+    });
+  });
+
+  it('inserts a wait into a block from its sheet: the block becomes changed, its next version only once validated', async () => {
+    await tab('catalog');
+    await dashboard().locator('.lib-tabpanel .lib-title[data-block="Bloc création"]').click();
+    const sheet = dashboard().locator('.lib-fiche');
+    await sheet.waitFor();
+    await dashboard().locator('[data-action="lib-sheet-tab"][data-tab="steps"]').click();
+    await sheet.locator('[data-action="lib-wait-open"]').click({ timeout: 15_000 });
+    await sheet.locator('select[data-lib="wait.after"]').selectOption('3');
+    await sheet.locator('select[data-lib="wait.type"]').selectOption('URL');
+    await sheet.locator('input[data-lib="wait.url"]').fill('/items/');
+    await sheet.locator('[data-action="lib-wait-insert"]').click();
+    await sheet
+      .locator('.notice', {
+        hasText: 'Attente insérée. Le bloc est modifié : validez-le pour créer la version 2.',
+      })
+      .waitFor({ timeout: 15_000 });
+    await sheet.locator('.pub-step.is-check', { hasText: '/items/' }).waitFor({ timeout: 15_000 });
+    expect(
+      (await client.library.list(project.id)).find((block) => block.name === 'Bloc création'),
+    ).toMatchObject({
+      state: 'CHANGED',
+      version: 1,
+    });
+    await page.keyboard.press('Escape');
   });
 
   it('on a phone: nothing scrolls sideways; one column, the composer reached from « Au parcours »', async () => {

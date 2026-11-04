@@ -38,10 +38,21 @@ const DYNAMIC = new Set<TestDataEntry['strategy']>([
 
 export const isDynamic = (entry: TestDataEntry): boolean => DYNAMIC.has(entry.strategy);
 
-/** Les clés saisies ({ testData: clé }) et citées (${testData:clé}) par des étapes. */
-export function dataUse(steps: readonly unknown[]): { fills: string[]; cites: string[] } {
+/**
+ * Les clés saisies ({ testData: clé }), citées (${testData:clé}) et capturées (`capture.as`) par des
+ * étapes ; la source `data` d'une capture est une citation.
+ */
+export function dataUse(steps: readonly unknown[]): {
+  fills: string[];
+  cites: string[];
+  captures: string[];
+  /** Les clés propres à une itération de boucle (variables, valeurs produites dans le corps) : jamais exposées. */
+  local: string[];
+} {
   const fills = new Set<string>();
   const cites = new Set<string>();
+  const captures = new Set<string>();
+  const local = new Set<string>();
   const visit = (node: unknown): void => {
     if (typeof node === 'string') {
       for (const match of node.matchAll(/\$\{testData:([^}]+)\}/g)) if (match[1]) cites.add(match[1].trim());
@@ -52,11 +63,37 @@ export function dataUse(steps: readonly unknown[]): { fills: string[]; cites: st
       return;
     }
     if (!isObject(node)) return;
+    if (isObject(node.loop)) {
+      // UNE BOUCLE : ses variables (`<as>`, `<as>.*`) et ce que son corps produit n'existent que pendant
+      // une itération ; seul ce que le corps lit d'AILLEURS est une entrée du bloc.
+      const loop = node.loop;
+      const as = typeof loop.as === 'string' ? loop.as : typeof loop.id === 'string' ? loop.id : '';
+      if (typeof loop.itemsFrom === 'string') cites.add(loop.itemsFrom);
+      visit(loop.while);
+      const inner = dataUse(Array.isArray(loop.steps) ? (loop.steps as unknown[]) : []);
+      const own = new Set([...inner.captures, ...inner.local]);
+      const isLocal = (key: string): boolean =>
+        (as !== '' && (key === as || key.startsWith(`${as}.`))) || own.has(key);
+      for (const key of inner.fills) (isLocal(key) ? local : fills).add(key);
+      for (const key of inner.cites) (isLocal(key) ? local : cites).add(key);
+      for (const key of own) local.add(key);
+      for (const [key, value] of Object.entries(node)) if (key !== 'loop') visit(value);
+      return;
+    }
     if (typeof node.testData === 'string' && Object.keys(node).length === 1) fills.add(node.testData);
+    if (isObject(node.capture)) {
+      if (typeof node.capture.as === 'string') captures.add(node.capture.as);
+      if (typeof node.capture.data === 'string') cites.add(node.capture.data);
+    }
     Object.values(node).forEach(visit);
   };
   steps.forEach(visit);
-  return { fills: [...fills].sort(), cites: [...cites].sort() };
+  return {
+    fills: [...fills].sort(),
+    cites: [...cites].sort(),
+    captures: [...captures].sort(),
+    local: [...local].sort(),
+  };
 }
 
 /** Le contenu exécutable d'un bloc, pour en tirer une empreinte stable (version vérifiable). */
@@ -103,21 +140,30 @@ export interface BlockContent {
   steps: readonly unknown[];
   data?: TestDataSet;
   declared?: DeclaredContract;
+  /** Les sorties qu'une personne a choisi de ne pas exposer (déclarations des données). */
+  hidden?: readonly string[];
 }
 
 /** Le contrat effectif d'un bloc (déclaré ou dérivé) et ce qui le contredit. */
 export function contractOf(block: BlockContent): { contract: BlockContract; problems: string[] } {
-  const { fills, cites } = dataUse(block.steps);
+  const { fills, cites, captures } = dataUse(block.steps);
   const own = block.data?.values ?? {};
   const defined = new Set(Object.keys(own));
+  const captured = new Set(captures.filter((key) => !defined.has(key)));
   const references = Object.values(own)
     .filter((entry) => entry.strategy === 'REFERENCE' && entry.reference && !defined.has(entry.reference))
     .map((entry) => entry.reference as string);
-  const produced = fills.filter((key) => defined.has(key));
-  const needed = [...new Set([...fills, ...cites, ...references])].filter((key) => !defined.has(key)).sort();
+  const hidden = new Set(block.hidden ?? []);
+  // Une sortie : saisie depuis son propre jeu, ou capturée pendant le rejeu (sauf si on l'a masquée).
+  const produced = [...new Set([...fills.filter((key) => defined.has(key)), ...captured])]
+    .filter((key) => !hidden.has(key))
+    .sort();
+  const needed = [...new Set([...fills, ...cites, ...references])]
+    .filter((key) => !defined.has(key) && !captured.has(key))
+    .sort();
   const dynamicOutput = (key: string): boolean => {
     const entry = own[key];
-    return entry !== undefined && isDynamic(entry);
+    return captured.has(key) || (entry !== undefined && isDynamic(entry));
   };
   if (!block.declared)
     return {

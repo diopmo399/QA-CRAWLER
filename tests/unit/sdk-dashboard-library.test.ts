@@ -348,8 +348,10 @@ describe('dashboard — scenario library', () => {
     for (const label of [
       'Vue d’ensemble',
       'Étapes',
+      'Entrées',
+      'Sorties',
       'Contrat',
-      'Données',
+      'Paramètres',
       'Dépendances',
       'Versions',
       'Provenance',
@@ -742,6 +744,91 @@ describe('dashboard — scenario library', () => {
     const diagnostics = renderDashboard(base('library', {}, { journey: ui, tab: 'diagnostics' }));
     expect(diagnostics).toMatch(/id="lib-tab-diagnostics"[^>]*aria-selected="true"/);
     expect(diagnostics).toContain('entrée user.name manquante');
+  });
+
+  it('wiring proposals from the check: reliable one to apply, ambiguous ones to choose, none; incompatible types said', () => {
+    const journey = journeyOfParts('Parcours', [{ block: 'Bloc <x>', version: 1 }]);
+    const [node] = journey.graph.nodes.filter((entry) => entry.kind === 'BLOCK');
+    const id = node?.id ?? '';
+    const withProposal = (proposal: object): string => {
+      const ui: JourneyUi = {
+        ...emptyJourneyUi(),
+        journey,
+        selected: { kind: 'node', id },
+        check: {
+          ok: false,
+          outputs: { guaranteed: [], partial: [] },
+          linear: true,
+          publishable: 'NONE',
+          paths: [{ index: 0, nodes: [], choices: [], check: { ...check } }],
+          nodes: {
+            [id]: {
+              errors: ['entrée user.name manquante'],
+              warnings: [],
+              available: ['account.name', 'other.name'],
+              missing: [{ key: 'user.name', path: 1 }],
+              produces: [],
+              satisfied: [],
+              proposals: [proposal as never],
+            },
+          },
+          edges: {},
+          errors: [],
+          warnings: [],
+        },
+      };
+      ui.checkedFor = logicKey(journey);
+      return renderDashboard(base('library', {}, { journey: ui }));
+    };
+    const unique = withProposal({
+      input: 'user.name',
+      type: 'text',
+      status: 'UNIQUE',
+      candidates: [
+        {
+          key: 'account.name',
+          from: 'data',
+          type: 'text',
+          compatible: true,
+          reason: 'même sens métier (« nom du compte »)',
+        },
+        {
+          key: 'other.name',
+          from: 'data',
+          type: 'email',
+          compatible: false,
+          reason: 'types incompatibles (identifier ≠ email)',
+        },
+      ],
+    });
+    expect(unique).toContain('<div class="jn-proposal unique" role="note">');
+    expect(unique).toContain('Correspondance proposée (fiable) : à retenir');
+    expect(unique).toContain(
+      'data-action="jn-apply-map" data-node="' +
+        id +
+        '" data-key="user.name" data-to="account.name">Utiliser account.name</button>',
+    );
+    expect(unique).toContain('types incompatibles (identifier ≠ email)');
+    const ambiguous = withProposal({
+      input: 'user.name',
+      type: 'text',
+      status: 'AMBIGUOUS',
+      candidates: [
+        {
+          key: 'account.name',
+          from: 'data',
+          type: 'text',
+          compatible: true,
+          reason: 'même nom final (name)',
+        },
+        { key: 'other.name', from: 'data', type: 'text', compatible: true, reason: 'même nom final (name)' },
+      ],
+    });
+    expect(ambiguous).toContain('Correspondance ambiguë : choisissez la donnée');
+    expect(ambiguous.match(/data-action="jn-apply-map"/g)?.length).toBe(2);
+    const none = withProposal({ input: 'user.name', type: 'text', status: 'NONE', candidates: [] });
+    expect(none).toContain('Aucune donnée compatible en amont');
+    expect(none).not.toContain('jn-apply-map');
   });
 
   it('the « Ajouter un bloc » window: four steps on the real source, the name checked, the contract derived or declared, creation only after a real check', () => {

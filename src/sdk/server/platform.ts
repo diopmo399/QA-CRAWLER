@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { hostMatches } from '../../config/config-loader.js';
 import type { ScenarioConfig } from '../../config/config.js';
 import type { ExplorationResult } from '../../model/exploration-result.js';
-import type { FlowRunReport } from '../../model/flow-run.js';
+import type { FlowRunReport, FlowStepReport } from '../../model/flow-run.js';
 import { loadProjectConfig } from '../../project/project-config.js';
 import type {
   Environment,
@@ -14,6 +14,7 @@ import type {
   EnvironmentInput,
   ExecutionDetail,
   ExecutionFlowView,
+  ExecutionStepView,
   ExecutionKind,
   ExecutionRecord,
   ExecutionVerdict,
@@ -398,6 +399,7 @@ export interface ExecutionMeta {
   startedAt: string;
   environment?: { id: string; name: string };
   scenarios?: string[];
+  simulation?: { journey: string; path: number };
 }
 
 export async function writeExecutionMeta(runDir: string, meta: ExecutionMeta): Promise<void> {
@@ -452,6 +454,7 @@ function recordOf(
     issues: result?.issues.length ?? 0,
     ...(meta?.environment ? { environment: meta.environment } : {}),
     ...(meta?.scenarios ? { scenarios: meta.scenarios } : {}),
+    ...(meta?.simulation ? { simulation: meta.simulation } : {}),
   };
 }
 
@@ -558,24 +561,55 @@ function relativeTo(directory: string, file: string | undefined): string | undef
     : relative.split(path.sep).join('/');
 }
 
+function stepView(step: FlowStepReport, directory: string): ExecutionStepView {
+  const screenshot = relativeTo(directory, step.screenshot);
+  return {
+    index: step.index,
+    kind: step.kind,
+    label: stepLabel(step),
+    status: step.status,
+    durationMs: step.durationMs,
+    // Une raison n'est jamais relayée pour une saisie (elle pourrait citer la valeur).
+    ...(step.reason && step.kind !== 'fill' && step.kind !== 'select' ? { reason: step.reason } : {}),
+    ...(screenshot ? { screenshot } : {}),
+    ...(step.loop
+      ? {
+          loop: {
+            id: step.loop.id,
+            type: step.loop.type,
+            as: step.loop.as,
+            maxIterations: step.loop.maxIterations,
+            timeoutMs: step.loop.timeoutMs,
+            onFailure: step.loop.onFailure,
+            ...(step.loop.planned !== undefined ? { planned: step.loop.planned } : {}),
+            stop: step.loop.stop,
+            iterations: step.loop.iterations.map((iteration) => ({
+              iteration: iteration.iteration,
+              status: iteration.status,
+              durationMs: iteration.durationMs,
+              variables: iteration.variables.map((variable) => ({ ...variable })),
+              steps: iteration.steps.map((inner) => stepView(inner, directory)),
+              ...(iteration.reason ? { reason: iteration.reason } : {}),
+            })),
+          },
+        }
+      : {}),
+  };
+}
+
+/** Le bloc d'une étape dépliée d'un `run:` : le préfixe de « Bloc › étape ». */
+function blockOfStep(name: string | undefined): string | undefined {
+  if (!name?.includes(' › ')) return undefined;
+  // `run: <bloc>` sans nom donne « run <bloc> › étape » : le bloc est le nom après « run ».
+  return name.split(' › ')[0]?.replace(/^run /, '');
+}
+
 function flowView(flow: FlowRunReport, directory: string): ExecutionFlowView {
   return {
     name: flow.name,
     status: flow.status,
     durationMs: flow.durationMs,
-    steps: flow.steps.map((step) => {
-      const screenshot = relativeTo(directory, step.screenshot);
-      return {
-        index: step.index,
-        kind: step.kind,
-        label: stepLabel(step),
-        status: step.status,
-        durationMs: step.durationMs,
-        // Une raison n'est jamais relayée pour une saisie (elle pourrait citer la valeur).
-        ...(step.reason && step.kind !== 'fill' && step.kind !== 'select' ? { reason: step.reason } : {}),
-        ...(screenshot ? { screenshot } : {}),
-      };
-    }),
+    steps: flow.steps.map((step) => stepView(step, directory)),
     ...(flow.divergence
       ? { divergence: { stepIndex: flow.divergence.stepIndex, reason: flow.divergence.reason } }
       : {}),
@@ -591,6 +625,14 @@ function flowView(flow: FlowRunReport, directory: string): ExecutionFlowView {
         ...flow.steps.flatMap((step) => step.testData ?? []),
       ]),
     ],
+    ...(flow.dataTrace
+      ? {
+          dataTrace: flow.dataTrace.map((entry) => {
+            const block = blockOfStep(entry.stepName);
+            return { ...entry, ...(block ? { block } : {}) };
+          }),
+        }
+      : {}),
   };
 }
 

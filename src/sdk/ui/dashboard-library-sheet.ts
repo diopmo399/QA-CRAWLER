@@ -1,9 +1,19 @@
+import { outputFormHtml, type OutputForm } from './dashboard-library-output.js';
 import type { BlockSourceComparison, LibraryBlockDetails, LibraryBlockView } from '../core/contracts.js';
 import { can } from './dashboard-access.js';
 import { kindOf, keys, originText, stateBadge } from './dashboard-library.js';
 import { icon } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
+import { WAIT_STATUS_CLASSES, WAIT_TIMEOUT, WAIT_TYPES, type WaitSpec } from '../core/wait.js';
+import { journeyText } from './dashboard-journey.js';
+import {
+  inputsTab,
+  outputsTab,
+  paramsSection,
+  stepRoleChip,
+  type FieldEdit,
+} from './dashboard-library-fields.js';
 
 /**
  * LA FICHE D'UN BLOC (panneau latéral à onglets) : vue d'ensemble, étapes, contrat, données,
@@ -15,6 +25,8 @@ import { esc } from './view.js';
 export const SHEET_TABS = [
   'overview',
   'steps',
+  'inputs',
+  'outputs',
   'contract',
   'data',
   'dependencies',
@@ -33,6 +45,12 @@ export interface BlockSheet {
   comparing?: boolean;
   confirmUpdate?: boolean;
   updating?: boolean;
+  /** Le formulaire « Insérer une attente » (onglet Étapes) : position et réglages. */
+  wait?: { after: number; spec: WaitSpec; busy?: boolean; error?: string };
+  /** La donnée en cours de correction (onglets Entrées / Sorties). */
+  field?: FieldEdit;
+  /** Le formulaire « Ajouter une sortie » (onglet Sorties). */
+  output?: OutputForm;
 }
 
 const date = (state: DashboardState, iso?: string): string =>
@@ -58,7 +76,31 @@ ${
 }`;
 }
 
-function stepsTab(state: DashboardState, sheet: BlockSheet): string {
+/**
+ * INSÉRER UNE ATTENTE dans le bloc, entre deux étapes : seulement les attentes que le moteur exécute ; le
+ * bloc passe à « modifié » et sa version suivante est validée explicitement (onglet Vue d'ensemble).
+ */
+function waitForm(state: DashboardState, sheet: BlockSheet): string {
+  const t = journeyText(state);
+  const w = sheet.wait;
+  const steps = sheet.details?.steps ?? [];
+  if (!w)
+    return `<div class="form-acts start lib-wait-open"><button type="button" class="btn small" data-action="lib-wait-open">${icon('history')}<span>${esc(t.insertWaitTitle)}</span></button></div>`;
+  const spec = w.spec;
+  const input = (key: string, label: string, value: string | undefined): string =>
+    `<label class="field"><span>${esc(label)}</span><input data-lib="wait.${key}" value="${esc(value ?? '')}" maxlength="300" autocomplete="off" spellcheck="false"></label>`;
+  const target =
+    spec.type === 'VISIBLE' || spec.type === 'HIDDEN'
+      ? `${input('selector', t.waitSelector, spec.selector)}${input('text', t.waitOrText, spec.text)}`
+      : spec.type === 'TEXT'
+        ? input('text', t.waitText, spec.text)
+        : spec.type === 'URL'
+          ? input('url', t.waitUrl, spec.url)
+          : `<label class="field"><span>${esc(t.waitMethod)}</span><select data-lib="wait.method"><option value="">${esc(t.waitAnyMethod)}</option>${['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((method) => `<option${spec.method === method ? ' selected' : ''}>${method}</option>`).join('')}</select></label>${input('url', t.waitRequestUrl, spec.url)}<label class="field"><span>${esc(t.waitStatus)}</span><select data-lib="wait.status">${[...WAIT_STATUS_CLASSES, 200, 201, 204, 302, 400, 404, 409, 422, 500].map((status) => `<option value="${String(status)}"${String(spec.status ?? '2xx') === String(status) ? ' selected' : ''}>${String(status)}</option>`).join('')}</select></label><p class="mu small">${esc(t.waitResponseNote)}</p>`;
+  return `<section class="lib-wait" role="group" aria-labelledby="lib-wait-t"><h4 id="lib-wait-t">${icon('history')}<span>${esc(t.insertWaitTitle)}</span></h4><p class="mu small">${esc(t.insertWaitInfo)}</p><label class="field"><span>${esc(t.insertWaitAfter)}</span><select data-lib="wait.after"><option value="0"${w.after === 0 ? ' selected' : ''}>${esc(t.insertWaitStart)}</option>${steps.map((step) => `<option value="${String(step.position)}"${w.after === step.position ? ' selected' : ''}>${String(step.position)} · ${esc(step.label.slice(0, 70))}</option>`).join('')}</select></label><label class="field"><span>${esc(t.waitTypeLabel)}</span><select data-lib="wait.type">${WAIT_TYPES.map((type) => `<option value="${type}"${type === spec.type ? ' selected' : ''}>${esc(t.waitTypes[type] ?? type)}</option>`).join('')}<optgroup label="${esc(t.notSupported)}">${t.waitUnsupported.map(([label]) => `<option disabled>${esc(label)}</option>`).join('')}</optgroup></select></label>${target}<label class="field"><span>${esc(t.waitTimeout)}</span><input type="number" data-lib="wait.timeoutS" min="${String(WAIT_TIMEOUT.min)}" max="${String(WAIT_TIMEOUT.max)}" value="${String(spec.timeoutS)}"></label><label class="field"><span>${esc(t.waitOnTimeout)}</span><select data-lib="wait.onTimeout"><option value="FAIL"${spec.onTimeout === 'FAIL' ? ' selected' : ''}>${esc(t.waitFail)}</option><option value="WARN"${spec.onTimeout === 'WARN' ? ' selected' : ''}>${esc(t.waitWarn)}</option></select></label>${w.error ? `<p class="err" role="alert">${esc(w.error)}</p>` : ''}<div class="form-acts start"><button type="button" class="btn small primary" data-action="lib-wait-insert"${w.busy ? ' disabled' : ''} aria-busy="${String(Boolean(w.busy))}">${esc(t.insertWaitDo)}</button><button type="button" class="btn small ghost" data-action="lib-wait-cancel">${esc(t.cancel)}</button></div></section>`;
+}
+
+function stepsTab(state: DashboardState, sheet: BlockSheet, publish = false): string {
   const l = state.t.lib;
   const details = sheet.details;
   if (!details) return loading(state, sheet);
@@ -70,12 +112,14 @@ function stepsTab(state: DashboardState, sheet: BlockSheet): string {
   const rows = details.steps
     .map((step) => {
       const head = groupAt.get(step.position);
-      return `${head ? `<li class="lib-sgroup">${icon('library')}<span>${esc(head)}</span></li>` : ''}<li class="pub-step${step.kind === 'expect' ? ' is-check' : ''}"><span class="pub-pos">${String(step.position)}</span><span>${esc(step.label)}</span></li>`;
+      return `${head ? `<li class="lib-sgroup">${icon('library')}<span>${esc(head)}</span></li>` : ''}<li class="pub-step${step.kind === 'expect' ? ' is-check' : ''}"><span class="pub-pos">${String(step.position)}</span><span>${esc(step.label)}${stepRoleChip(state, step.role)}</span></li>`;
     })
     .join('');
-  return details.steps.length === 0
-    ? `<p class="mu">${esc(l.noSteps)}</p>`
-    : `<ol class="plain pub-steps lib-fsteps" aria-label="${esc(l.tabs.steps)}">${rows}</ol>`;
+  return `${
+    details.steps.length === 0
+      ? `<p class="mu">${esc(l.noSteps)}</p>`
+      : `<ol class="plain pub-steps lib-fsteps" aria-label="${esc(l.tabs.steps)}">${rows}</ol>`
+  }${publish ? waitForm(state, sheet) : ''}`;
 }
 
 function contractTab(state: DashboardState, block: LibraryBlockView, publish: boolean): string {
@@ -101,8 +145,9 @@ function dataTab(state: DashboardState, sheet: BlockSheet): string {
   const l = state.t.lib;
   const details = sheet.details;
   if (!details) return loading(state, sheet);
-  if (details.data.length === 0) return `<p class="mu">${esc(l.noData)}</p>`;
-  return `<table class="tbl lib-data"><thead><tr><th scope="col">${esc(l.dataKey)}</th><th scope="col">${esc(l.dataStrategy)}</th></tr></thead><tbody>${details.data
+  const params = paramsSection(state, details.block);
+  if (details.data.length === 0) return `${params}<p class="mu">${esc(l.noData)}</p>`;
+  return `${params}<table class="tbl lib-data"><thead><tr><th scope="col">${esc(l.dataKey)}</th><th scope="col">${esc(l.dataStrategy)}</th></tr></thead><tbody>${details.data
     .map(
       (entry) =>
         `<tr><td><code>${esc(entry.key)}</code></td><td>${esc(l.strategies[entry.strategy] ?? entry.strategy)}${entry.detail ? ` <code>${esc(entry.detail)}</code>` : ''}${entry.dynamic ? ` <small class="mu">· ${esc(l.dynamic)}</small>` : ''}</td></tr>`,
@@ -223,16 +268,20 @@ export function blockSheet(state: DashboardState): string {
     sheet.tab === 'overview'
       ? overviewTab(state, block, publish)
       : sheet.tab === 'steps'
-        ? stepsTab(state, sheet)
-        : sheet.tab === 'contract'
-          ? contractTab(state, block, publish)
-          : sheet.tab === 'data'
-            ? dataTab(state, sheet)
-            : sheet.tab === 'dependencies'
-              ? dependenciesTab(state, block)
-              : sheet.tab === 'versions'
-                ? versionsTab(state, block)
-                : provenanceTab(state, block, sheet, publish);
+        ? stepsTab(state, sheet, publish)
+        : sheet.tab === 'inputs'
+          ? inputsTab(state, block, sheet, publish)
+          : sheet.tab === 'outputs'
+            ? `${outputsTab(state, block, sheet, publish)}${outputFormHtml(state, block, sheet.details, sheet.output, publish)}`
+            : sheet.tab === 'contract'
+              ? contractTab(state, block, publish)
+              : sheet.tab === 'data'
+                ? dataTab(state, sheet)
+                : sheet.tab === 'dependencies'
+                  ? dependenciesTab(state, block)
+                  : sheet.tab === 'versions'
+                    ? versionsTab(state, block)
+                    : provenanceTab(state, block, sheet, publish);
   const tabs = SHEET_TABS.map(
     (tab) =>
       `<button role="tab" id="lib-tab-${tab}" data-action="lib-sheet-tab" data-tab="${tab}" aria-selected="${String(tab === sheet.tab)}" aria-controls="lib-tabpanel" tabindex="${tab === sheet.tab ? '0' : '-1'}">${esc(l.tabs[tab])}</button>`,

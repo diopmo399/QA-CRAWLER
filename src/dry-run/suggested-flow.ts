@@ -1,5 +1,6 @@
 import { stringify } from 'yaml';
 import type { FlowExpectation, FlowStep, FlowTarget } from '../config/flow-schema.js';
+import { captureYaml, loopYaml } from '../config/flow-schema.js';
 import type { GherkinIntent } from '../semantics/resolution/intent.js';
 import type { FlowIntentGraph } from './flow-intent-graph.js';
 import type {
@@ -172,6 +173,10 @@ export function rawStepOf(step: FlowStep): Record<string, unknown> {
         dragAndDrop: { item: step.item, ...(step.from ? { from: step.from } : {}), to: step.to },
         ...common,
       };
+    case 'capture':
+      return { capture: captureYaml(step.capture, rawTarget), ...common };
+    case 'loop':
+      return { loop: loopYaml(step.loop, rawStepOf, rawExpectation), ...common };
   }
 }
 
@@ -394,6 +399,9 @@ function plainSentenceOf(step: FlowStep, language: Language): string | undefined
     case 'expect':
       return expectationSentence(step.expect, language);
     case 'manual':
+    case 'capture':
+    case 'loop':
+      // Une capture, une boucle n'ont pas de phrase Gherkin : YAML seulement.
       return undefined;
     case 'screenshot':
       return fr ? `je prends une capture "${step.label}"` : `I take a screenshot "${step.label}"`;

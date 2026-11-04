@@ -1,7 +1,12 @@
 import type { TestDataEntry, TestDataSet, TestDataStrategy } from './test-data-set.js';
 
 export type ResolvedTestData =
-  | { kind: 'value'; value: string; strategy: TestDataStrategy | 'PROVIDER'; generated: boolean }
+  | {
+      kind: 'value';
+      value: string;
+      strategy: TestDataStrategy | 'PROVIDER' | 'ITERATION';
+      generated: boolean;
+    }
   /** PRESERVE_EXISTING : la valeur déjà dans le champ est gardée, rien n'est saisi. */
   | { kind: 'preserve' }
   | { kind: 'missing'; reason: string };
@@ -21,6 +26,43 @@ export interface TestDataRunContextOptions {
   now?: () => Date;
 }
 
+/** D'où vient une donnée du run (traçabilité). */
+export type DataTraceOrigin = 'GENERATED' | 'CAPTURED' | 'ITERATION' | 'USED';
+
+/** Où en est le run quand une donnée est produite ou lue : l'étape, et la boucle/itération éventuelles. */
+export interface DataTraceWhere {
+  /** Position de l'étape (1…n) dans le flow, ou dans le corps de la boucle. */
+  step?: number;
+  /** La description de l'étape (son nom : « Bloc › étape » pour une étape d'un bloc rejoué). */
+  stepName?: string;
+  /** Les boucles englobantes : `persons#2` (id et itération à partir de 1). */
+  loops?: { id: string; iteration: number }[];
+}
+
+/**
+ * Une entrée de la trace des données d'un run : une valeur PRODUITE (générée, capturée, variable
+ * d'itération) ou LUE (citée par une étape). La valeur n'est gardée que pour une clé non sensible.
+ */
+export interface DataTraceEntry extends DataTraceWhere {
+  at: string;
+  key: string;
+  origin: DataTraceOrigin;
+  /** La valeur (absente pour une clé sensible, ou une lecture). */
+  value?: string;
+  /** Une clé sensible : la valeur n'est jamais gardée. */
+  masked?: boolean;
+}
+
+/** Une portée d'itération : les variables de l'itération et les valeurs produites pendant celle-ci. */
+interface IterationScope {
+  id: string;
+  iteration: number;
+  values: Map<string, string>;
+}
+
+const SENSITIVE_KEY = /(password|passwd|secret|token|apikey|api-key|credential|motdepasse|mot-de-passe)/i;
+const TRACE_LIMIT = 2_000;
+
 /**
  * TEST DATA RUN CONTEXT : `{ testData: clé }` → une valeur, UNE FOIS PAR RUN. La même clé
  * citée trois fois (créer avec l'e-mail, chercher par l'e-mail, vérifier l'e-mail) donne la
@@ -38,20 +80,87 @@ export interface TestDataRunContextOptions {
 export class TestDataRunContext {
   private readonly cache = new Map<string, string>();
   private readonly produced = new Map<string, string>();
+  /** Les portées d'itération ouvertes (la plus interne en dernier). */
+  private readonly scopes: IterationScope[] = [];
+  private readonly traced: DataTraceEntry[] = [];
+  private where: DataTraceWhere = {};
 
   constructor(private readonly options: TestDataRunContextOptions) {}
 
-  /** La clé a-t-elle déjà reçu sa valeur pendant ce run (saisie, génération) ? */
+  /** La clé a-t-elle déjà reçu sa valeur pendant ce run (saisie, génération, itération en cours) ? */
   has(key: string): boolean {
-    return this.cache.has(key);
+    return this.scoped(key) !== undefined || this.cache.has(key);
   }
 
   /**
    * Les valeurs produites pendant ce run, par clé (générées, modèles, fournisseur) : en mémoire seulement,
    * pour le correction manager (lier une ligne de tableau à la donnée du run). Jamais un identifiant.
+   * Pendant une boucle, les valeurs de l'itération en cours masquent celles du run.
    */
   values(): { key: string; value: string }[] {
-    return [...this.cache.entries()].map(([key, value]) => ({ key, value }));
+    const merged = new Map(this.cache);
+    for (const scope of this.scopes) for (const [key, value] of scope.values) merged.set(key, value);
+    return [...merged.entries()].map(([key, value]) => ({ key, value }));
+  }
+
+  /**
+   * UNE ITÉRATION DE BOUCLE commence : ses variables (`person.firstName`, `person.index`) n'existent que
+   * pendant l'itération ; ce qui est généré ou capturé pendant celle-ci aussi (l'itération suivante produit
+   * sa propre valeur). Les valeurs déjà produites avant la boucle restent les mêmes.
+   */
+  enterIteration(id: string, iteration: number, variables: Readonly<Record<string, string>>): void {
+    const scope: IterationScope = { id, iteration, values: new Map(Object.entries(variables)) };
+    this.scopes.push(scope);
+    for (const [key, value] of scope.values) this.record(key, 'ITERATION', value);
+  }
+
+  /** L'itération en cours se termine : ses variables et ses valeurs disparaissent. */
+  leaveIteration(): void {
+    this.scopes.pop();
+  }
+
+  /** La position courante du run (étape, boucles) : rattachée à chaque entrée de la trace. */
+  locate(where: DataTraceWhere): void {
+    this.where = where;
+  }
+
+  /** Les boucles et itérations en cours (`[{ id: 'persons', iteration: 2 }]`). */
+  loops(): { id: string; iteration: number }[] {
+    return this.scopes.map((scope) => ({ id: scope.id, iteration: scope.iteration }));
+  }
+
+  /** Une étape LIT cette clé (citation, saisie) : tracé sans la valeur. */
+  used(key: string): void {
+    this.record(key, 'USED');
+  }
+
+  /** La trace des données de ce run (bornée), dans l'ordre. */
+  trace(): DataTraceEntry[] {
+    return this.traced.map((entry) => ({ ...entry, ...(entry.loops ? { loops: [...entry.loops] } : {}) }));
+  }
+
+  private scoped(key: string): string | undefined {
+    for (let index = this.scopes.length - 1; index >= 0; index -= 1) {
+      const value = this.scopes[index]?.values.get(key);
+      if (value !== undefined) return value;
+    }
+    return undefined;
+  }
+
+  private record(key: string, origin: DataTraceOrigin, value?: string): void {
+    if (this.traced.length >= TRACE_LIMIT) return;
+    const masked = SENSITIVE_KEY.test(key);
+    const loops = this.loops();
+    this.traced.push({
+      at: (this.options.now ?? (() => new Date()))().toISOString(),
+      key,
+      origin,
+      ...(value !== undefined && !masked ? { value } : {}),
+      ...(value !== undefined && masked ? { masked: true } : {}),
+      ...(this.where.step !== undefined ? { step: this.where.step } : {}),
+      ...(this.where.stepName !== undefined ? { stepName: this.where.stepName } : {}),
+      ...(loops.length > 0 ? { loops } : {}),
+    });
   }
 
   /**
@@ -64,6 +173,33 @@ export class TestDataRunContext {
       this.cache.set(entry.key, entry.value);
       this.produced.set(entry.value, entry.key);
     }
+  }
+
+  /**
+   * UNE VALEUR CAPTURÉE pendant le run (écran, adresse, réponse) : gardée comme les valeurs générées, citée
+   * ensuite avec la même valeur. Une clé qui a déjà une AUTRE valeur dans ce run n'est jamais écrasée (la raison
+   * est rendue ; undefined : gardée).
+   */
+  capture(key: string, value: string): string | undefined {
+    // La même valeur déjà connue (générée juste avant) : rien à refaire, rien à tracer deux fois.
+    if ((this.scoped(key) ?? this.cache.get(key)) === value) return undefined;
+    const scope = this.scopes.at(-1);
+    // Dans une boucle, une clé que le run ne connaît pas encore appartient à l'itération.
+    if (scope && !this.cache.has(key)) {
+      const known = scope.values.get(key);
+      if (known !== undefined && known !== value)
+        return `testData.${key} already has another value in this iteration: nothing is overwritten`;
+      scope.values.set(key, value);
+      this.record(key, 'CAPTURED', value);
+      return undefined;
+    }
+    const known = this.cache.get(key);
+    if (known !== undefined && known !== value)
+      return `testData.${key} already has another value in this run: nothing is overwritten`;
+    this.cache.set(key, value);
+    this.produced.set(value, key);
+    this.record(key, 'CAPTURED', value);
+    return undefined;
   }
 
   /** Valeur d'une clé : jeux de données dans l'ordre de priorité (celui du flow, puis celui de la mission). */
@@ -79,6 +215,10 @@ export class TestDataRunContext {
   ): ResolvedTestData {
     if (visiting.has(key)) return { kind: 'missing', reason: `circular reference through "${key}"` };
     visiting.add(key);
+    // Une variable (ou une valeur) de l'itération en cours l'emporte : c'est la donnée de CETTE itération.
+    const iteration = this.scoped(key);
+    if (iteration !== undefined)
+      return { kind: 'value', value: iteration, strategy: 'ITERATION', generated: false };
     const entry = sets.map((set) => set?.values[key]).find((candidate) => candidate !== undefined);
     if (!entry) {
       const value = this.once(key, sources.fallback);
@@ -131,16 +271,26 @@ export class TestDataRunContext {
 
   /** Une valeur générée une seule fois par clé et par run ; deux clés ne partagent jamais une valeur générée. */
   private once(key: string, make: () => string | undefined): string | undefined {
-    const cached = this.cache.get(key);
+    const cached = this.scoped(key) ?? this.cache.get(key);
     if (cached !== undefined) return cached;
     let value = make();
     if (value === undefined) return undefined;
+    // Dans une boucle : une valeur PAR ITÉRATION (deux personnes ne reçoivent jamais le même e-mail).
+    const scope = this.scopes.at(-1);
+    const owner = scope ? `${key}@${scope.id}#${String(scope.iteration)}` : key;
     // Le même e-mail pour deux entités distinctes (deux clients) provoquerait un conflit : une variante.
-    for (let index = 2; this.produced.has(value) && this.produced.get(value) !== key; index += 1)
+    for (let index = 2; this.produced.has(value) && this.produced.get(value) !== owner; index += 1)
       value = variant(value, index);
-    this.cache.set(key, value);
-    this.produced.set(value, key);
-    this.options.onGenerated?.(key, 'generated once for this run');
+    if (scope) scope.values.set(key, value);
+    else this.cache.set(key, value);
+    this.produced.set(value, owner);
+    this.record(key, 'GENERATED', value);
+    this.options.onGenerated?.(
+      key,
+      scope
+        ? `generated once for iteration ${String(scope.iteration)} of loop ${scope.id}`
+        : 'generated once for this run',
+    );
     return value;
   }
 

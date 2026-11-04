@@ -32,6 +32,127 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Boucles exécutées par le moteur** (étape `loop`, jamais aplatie) :
+  - **`REPEAT`** (`times`), **`FOR_EACH`** (`items` écrits, ou `itemsFrom` : une donnée du run en tableau JSON)
+    et **`WHILE`** (une condition d'écran vérifiée avant chaque itération).
+  - **Limites** : `maxIterations` (100 au plus ; 20 par défaut pour `WHILE`), `timeoutMs` global (10 min au
+    plus), `onFailure` : `STOP` ou `CONTINUE`. Une condition `WHILE` encore vraie au plafond est un échec
+    (protection contre la boucle infinie). Une collection plus longue que le plafond est refusée, jamais
+    tronquée. Deux niveaux d'imbrication au plus.
+  - **Variables d'itération** : `${testData:<as>.index}`, `${testData:<as>}`, `${testData:<as>.<champ>}`.
+  - **Portée des valeurs** : ce qui est généré ou capturé dans le corps n'existe que pendant l'itération (une
+    valeur générée par itération) ; les valeurs produites avant la boucle restent les mêmes.
+  - **Attentes, captures, générations et blocs (`run:`)** s'utilisent dans le corps.
+  - **Rapport** : chaque itération (variables, étapes, statut, raison) et la raison de l'arrêt
+    (`COMPLETED`, `CONDITION_FALSE`, `MAX_ITERATIONS`, `TIMEOUT`, `FAILED`, `REFUSED`).
+- **Trace des données de chaque exécution** (`dataTrace`) : chaque valeur générée, capturée ou variable
+  d'itération, et chaque lecture, avec l'étape, le bloc et l'itération. La valeur d'une clé sensible n'est
+  jamais gardée.
+- **Capture `generate` et `transform`** : une étape `capture` peut générer une valeur (`generate:
+company`) ; toute capture peut être transformée (`uppercase`, `lowercase`, `trim`, `digits`).
+- **« Ajouter une sortie » à un bloc** (`library.addOutput`) : une étape exécutable est insérée dans le bloc.
+  - **Sources** : variable générée, texte ou attribut d'un élément, adresse, réponse HTTP observée, entrée
+    transmise.
+  - **Description** : libellé, sens et type sont enregistrés.
+  - **Version** : le bloc passe à `CHANGED` ; sa nouvelle version est à valider. Une clé déjà connue est
+    refusée, une source incomplète aussi.
+- **Nœud Boucle dans le compositeur** : un conteneur (violet) de blocs et d'attentes, configuré avec ce que le
+  moteur exécute.
+  - **Compilation** : il se compile en une étape `loop:`.
+  - **Vérification** : les entrées des blocs du corps peuvent lire les variables d'itération. Une donnée
+    produite dans la boucle et lue après elle est une erreur. Les versions des blocs du corps sont suivies
+    comme les autres.
+  - **Cycles** : une connexion qui revient en arrière reste refusée (boucle non contrôlée).
+- **Simulation d'un parcours** :
+  - **Aperçu statique** (`journeys.preview`) : provenance de chaque entrée, portée de chaque sortie,
+    itérations et variables connues d'avance. Rien n'est exécuté ; une valeur générée ou capturée est dite
+    « connue à l'exécution », jamais inventée.
+  - **Exécution de simulation** (`journeys.simulate`) : un vrai rejeu du chemin choisi, seulement dans un
+    environnement de développement ou de test (422 sinon). Le parcours n'est pas enregistré ; l'exécution
+    est marquée `simulation`.
+- **Dashboard** :
+  - un onglet Simulation (aperçu, puis exécution réelle) dans le compositeur ;
+  - le formulaire « Ajouter une sortie » dans l'onglet Sorties de la fiche ;
+  - dans l'écran Exécution, les itérations de chaque boucle et la traçabilité des données (producteurs,
+    consommateurs, historique des valeurs).
+
+- **Étape `capture` dans le moteur** : une valeur lue pendant le rejeu devient une donnée du run (`as`),
+  citée ensuite comme les autres (`${testData:clé}`, `{ testData: clé }`), avec la même valeur.
+  - **Sources** : le texte ou un attribut d'un élément (filtré par `pattern`), l'adresse (paramètre ou
+    motif), un champ JSON de la réponse d'une requête observée, ou une donnée déjà produite dans le run
+    (`data`).
+  - **Moment et échec** : la capture attend jusqu'au délai de l'étape. En échec, elle dit pourquoi ; avec
+    `optional`, elle avertit sans arrêter le scénario.
+  - **Garde-fous** :
+    - une clé qui évoque un secret est refusée ;
+    - une valeur masquée n'est jamais capturée ;
+    - une donnée définie par un jeu n'est pas remplacée ;
+    - une donnée qui a déjà une autre valeur dans le run n'est jamais écrasée.
+  - **Réponses HTTP** : le moteur ne garde que les corps des écritures (POST, PUT, PATCH) et des erreurs,
+    masqués. Pour un rejeu qui contient une capture de réponse, `network.captureBodies` est activé ; sans
+    corps gardé, la capture échoue en le disant.
+  - **Tests générés** : les générateurs Playwright et Java marquent la capture comme non générée (elle
+    remplit le contexte de données de QA-CRAWLER).
+- **Contrat de données enrichi** (`contract.fields`). Chaque entrée, sortie ou candidate porte :
+  - un identifiant stable et son nom technique ;
+  - un libellé, une description et un sens métier ;
+  - un type, déclaré, proposé d'après un indice ou `text` par défaut ;
+  - son caractère obligatoire et sa provenance (entrée, générée, capturée, valeur du jeu, valeur fixe
+    saisie) ;
+  - sa version de définition et son statut de détection (confirmée, probable, inconnue), avec sa
+    justification ;
+  - les étapes qui la produisent ou la lisent.
+
+  Une sortie générée ou capturée est confirmée par les étapes. Une valeur fixe du jeu n'est que probable.
+  Une valeur littérale saisie dans un champ est une entrée possible, jamais ajoutée sans une personne. Les
+  anciens contrats restent tels quels (`inputs`, `outputs`), sans conversion ni rupture.
+
+- **Déclarations de données** (`library.declareFields`) :
+  - confirmer une détection, corriger libellé, description, sens, type et valeur par défaut, retirer une
+    sortie ;
+  - un changement incompatible (type ou sens déclarés, sortie retirée) incrémente la version de la donnée,
+    pas celle du bloc ;
+  - sur un bloc utilisé, ce changement est refusé (409, les scénarios et parcours dépendants nommés) tant
+    qu'il n'est pas validé explicitement.
+- **Raccordement** :
+  - la vérification d'un parcours propose, pour chaque entrée manquante, les données disponibles sur tous
+    les chemins ;
+  - une proposition « fiable » est la seule compatible au plus fort indice (sens métier, puis type, puis
+    nom final) ; sinon elle est ambiguë, ou absente ;
+  - deux types connus différents donnent une erreur (déclarés) ou un avertissement (proposés) ;
+  - rien n'est retenu sans un clic, et retenir une proposition enregistre une correspondance (`MAP`). Mêmes règles en
+    mode linéaire et en diagramme.
+- **Fiche d'un bloc** :
+  - onglets Entrées et Sorties : type, sens, provenance, étapes, version, détection et pourquoi ; Confirmer,
+    Corriger, Ne plus exposer, Valider un changement incompatible ;
+  - onglet Paramètres (l'ancien « Données ») : entrées configurables, défauts, contraintes, générateurs ;
+  - onglet Étapes : le rôle de chaque étape (action, navigation, génération, capture, attente,
+    vérification).
+- **Attentes (Wait) dans le compositeur et dans les blocs** : un nœud `WAIT` attend une condition avant de
+  continuer, jusqu'à un délai (1 à 300 s) : un élément visible ou disparu (sélecteur CSS ou texte), un
+  texte métier, une adresse, ou une réponse HTTP (méthode, adresse, statut). Il se compile en étape
+  `expect` ordinaire, avec `timeoutMs`, sans rien de nouveau dans l'exécuteur. « Continuer avec un
+  avertissement » devient `optional: true` : l'étape reste notée en échec avec ce qui manquait, le
+  scénario continue et son verdict n'en dépend pas. Une attente peut citer une donnée produite plus haut
+  (`${testData:clé}`) : elle est lue dans le run, jamais régénérée. La vérification exige qu'une donnée
+  générée au rejeu soit produite avant l'attente qui la cite, chemin par chemin. Le moteur n'attend pas
+  qu'un élément soit cliquable, n'a pas de pause de durée fixe et ne laisse pas régler l'intervalle de
+  vérification : ces options sont montrées comme non prises en charge, jamais réglables.
+  `library.insertWait` insère une attente entre deux étapes d'un bloc enregistré. Les groupes métier sont
+  décalés, le bloc passe à « modifié », et sa version suivante n'existe qu'après validation explicite.
+  Les parcours qui l'utilisent gardent leur version tant qu'ils ne l'acceptent pas.
+- **Compositeur : contrôle du flux, liens de données et panneau des données.**
+  - Le catalogue propose l'attente (et, en diagramme, la condition et la jonction). Boucle, Document et
+    API y figurent comme indisponibles, sans bouton, avec la raison.
+  - L'attente est orange, avec une horloge. Ses propriétés reprennent le type, la cible, le délai, le
+    comportement au délai et la validation de l'attente.
+  - Le nœud choisi montre en pointillés ses liens de données, distincts du flux d'exécution, et une
+    légende les nomme.
+  - Sous la scène, un panneau à quatre onglets lit la vérification réelle : entrées et sorties du
+    scénario, correspondances entre blocs (même nom, renommée, valeur saisie, jeu de données, manquante,
+    avec les candidates), variables (générées au rejeu ou valeurs des jeux) et erreurs/avertissements.
+- Le lien « Ouvrir la bibliothèque » d'une notice de publication ouvre le catalogue, où le bloc publié est
+  visible.
 - **Fenêtre « Ajouter un bloc »** : une grande fenêtre centrée (la page reste visible, le parcours en cours
   n'est pas touché) avec un assistant en quatre étapes — Informations (nom vérifié avant l'envoi,
   description, catégorie déduite de l'origine, version initiale v1, origine : un scénario ou un groupe

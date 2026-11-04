@@ -1,7 +1,13 @@
 import type { Locator, Page } from 'playwright';
 import { clickRobust } from '../execution/robust-click.js';
 import { setCheckedRobust } from '../execution/checkable.js';
-import { describeTarget, type FlowExpectation, type FlowTarget } from '../config/flow-schema.js';
+import {
+  describeTarget,
+  type FlowCapture,
+  type FlowExpectation,
+  type FlowTarget,
+} from '../config/flow-schema.js';
+import { REDACTED } from '../security/redactor.js';
 import { toLocator } from '../execution/locator-resolver.js';
 import {
   describeRow,
@@ -609,6 +615,49 @@ export class FlowStepExecutor {
     return failures.length > 0 ? failures.join('; ') : undefined;
   }
 
+  /**
+   * CAPTURE : lit la valeur d'une source (texte ou attribut d'un élément, adresse, champ JSON d'une réponse
+   * observée), jusqu'au délai de l'étape. La donnée du run (`data`) est lue par l'appelant. Jamais une valeur
+   * masquée, jamais une réponse dont le moteur n'a pas gardé le corps (rien n'est supposé).
+   */
+  async capture(
+    page: Page,
+    capture: Exclude<FlowCapture, { from: 'data' } | { from: 'generate' }>,
+    timeoutMs: number,
+    network: readonly NetworkExchange[] = [],
+  ): Promise<{ value: string } | { error: string }> {
+    const filtered = (
+      raw: string | null | undefined,
+      pattern?: string,
+    ): { value: string } | { error: string } => {
+      const text = (raw ?? '').replace(/\s+/g, ' ').trim();
+      if (text === '') return { error: 'the captured value is empty' };
+      if (text.includes(REDACTED)) return { error: 'the value is masked (sensitive): never captured' };
+      if (pattern === undefined) return { value: text };
+      const match = new RegExp(pattern).exec(text)?.[1];
+      return match ? { value: match } : { error: `/${pattern}/ does not match "${text.slice(0, 80)}"` };
+    };
+    if (capture.from === 'text' || capture.from === 'attribute') {
+      const found = await this.locate(page, capture.target, timeoutMs, { strict: true });
+      if (typeof found === 'string') return { error: `${describeTarget(capture.target)}: ${found}` };
+      const raw =
+        capture.from === 'text'
+          ? await found.innerText().catch(() => undefined)
+          : await found.getAttribute(capture.attribute).catch(() => undefined);
+      if (capture.from === 'attribute' && (raw === null || raw === undefined))
+        return { error: `${describeTarget(capture.target)} has no attribute ${capture.attribute}` };
+      return filtered(raw, capture.pattern);
+    }
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const attempt =
+        capture.from === 'url' ? urlValue(page.url(), capture) : responseValue(capture, network);
+      if ('value' in attempt || attempt.final || Date.now() >= deadline || page.isClosed())
+        return 'value' in attempt ? filtered(attempt.value) : { error: attempt.error };
+      await page.waitForTimeout(200).catch(() => undefined);
+    }
+  }
+
   /** <select> natif : selectOption ; listes personnalisées (Angular Material, combobox ARIA) : l'ouvrir, puis cliquer sur l'option. */
   private async select(page: Page, locator: Locator, option: string, timeoutMs: number): Promise<void> {
     const tag = await locator.evaluate((el) => el.tagName.toLowerCase());
@@ -628,6 +677,76 @@ export class FlowStepExecutor {
     if (this.settleTimeMs > 0) await page.waitForTimeout(this.settleTimeMs).catch(() => undefined);
     if (untilReady) await waitForScreenReady(page, this.readyTimeoutMs);
   }
+}
+
+/** Une valeur de l'adresse : un paramètre, ou le groupe 1 d'un motif. */
+function urlValue(
+  href: string,
+  capture: Extract<FlowCapture, { from: 'url' }>,
+): { value: string } | { error: string; final?: boolean } {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return { error: `the address is not readable (${href})` };
+  }
+  if (capture.param !== undefined) {
+    const value = url.searchParams.get(capture.param);
+    return value ? { value } : { error: `the address has no parameter ${capture.param} (${url.pathname})` };
+  }
+  const match = new RegExp(capture.pattern ?? '(.*)').exec(`${url.pathname}${url.search}${url.hash}`)?.[1];
+  return match
+    ? { value: decodeURIComponent(match) }
+    : { error: `/${capture.pattern ?? ''}/ does not match the address ${url.pathname}` };
+}
+
+/**
+ * Un champ JSON de la DERNIÈRE réponse observée qui correspond (méthode, adresse) et a réussi (2xx). Le
+ * moteur ne garde le corps que des écritures (POST, PUT, PATCH) et des erreurs, avec network.captureBodies :
+ * sans corps gardé, la capture échoue en le disant.
+ */
+function responseValue(
+  capture: Extract<FlowCapture, { from: 'response' }>,
+  network: readonly NetworkExchange[],
+): { value: string } | { error: string; final?: boolean } {
+  const pattern = capture.url.includes('*') ? pathPatternToRegex(capture.url) : undefined;
+  // Le moteur ajoute le corps (masqué) aux échanges qu'il garde (CapturedNetworkExchange).
+  const exchanges: readonly (NetworkExchange & { responseBody?: string })[] = network;
+  const last = exchanges
+    .filter((exchange) => {
+      if (capture.method && exchange.method.toUpperCase() !== capture.method) return false;
+      if (!pattern) return exchange.url.includes(capture.url);
+      try {
+        return pattern.test(new URL(exchange.url).pathname);
+      } catch {
+        return false;
+      }
+    })
+    .at(-1);
+  const label = `${capture.method ? `${capture.method} ` : ''}"${capture.url}"`;
+  if (!last) return { error: `no request ${label} seen during the flow` };
+  if (last.status === undefined && last.failure === undefined)
+    return { error: `${label} has not answered yet` };
+  if (last.status === undefined || last.status < 200 || last.status > 299)
+    return { error: `${label} answered ${String(last.status ?? last.failure)}`, final: true };
+  if (last.responseBody === undefined)
+    return {
+      error: `the body of ${label} was not kept: the engine keeps the body of write responses only, with network.captureBodies`,
+    };
+  let node: unknown;
+  try {
+    node = JSON.parse(last.responseBody);
+  } catch {
+    return { error: `the body of ${label} is not JSON`, final: true };
+  }
+  for (const part of capture.field.split('.')) {
+    if (Array.isArray(node) && /^\d+$/.test(part)) node = node[Number(part)];
+    else if (node !== null && typeof node === 'object') node = (node as Record<string, unknown>)[part];
+    else node = undefined;
+  }
+  if (typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean')
+    return { value: String(node) };
+  return { error: `the response of ${label} has no value at ${capture.field}`, final: true };
 }
 
 /** La dernière requête qui correspond n'a pas encore de réponse (ni d'échec). */

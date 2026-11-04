@@ -1346,6 +1346,8 @@ export interface ProjectDetail extends ProjectSummary {
 }
 
 export const ENVIRONMENT_KINDS = ['DEVELOPMENT', 'TEST', 'CERTIFICATION', 'PREPRODUCTION', 'OTHER'] as const;
+/** Les environnements où une simulation peut réellement s'exécuter (isolés des opérations métier réelles). */
+export const SIMULATION_ENVIRONMENT_KINDS = ['DEVELOPMENT', 'TEST'] as const;
 export type EnvironmentKind = (typeof ENVIRONMENT_KINDS)[number];
 
 /**
@@ -1418,10 +1420,152 @@ export interface DeclaredContract {
 export interface BlockContract {
   source: 'DECLARED' | 'DERIVED';
   inputs: { key: string; required: boolean }[];
-  /** Les données que le bloc saisit à partir de son propre jeu ; dynamic : résolue au rejeu. */
+  /** Les données que le bloc saisit à partir de son propre jeu ou capture ; dynamic : résolue au rejeu. */
   outputs: { key: string; dynamic: boolean }[];
   preconditions: string[];
   postconditions: string[];
+  /**
+   * LES DONNÉES DU CONTRAT, décrites (entrées, sorties, et candidates repérées dans les étapes). Absent
+   * d'un ancien contrat lu sans analyse : les listes `inputs` / `outputs` restent la référence.
+   */
+  fields?: ContractFields;
+}
+
+/**
+ * LES TYPES D'UNE DONNÉE. Le moteur saisit et cite du texte : `text` est le type de toute valeur. Les autres
+ * types sont DÉCLARÉS (ou proposés d'après un indice) pour vérifier les correspondances ; aucune valeur n'est
+ * jamais convertie.
+ */
+export const DATA_TYPES = ['text', 'number', 'date', 'email', 'identifier', 'boolean', 'url'] as const;
+
+/**
+ * « AJOUTER UNE SORTIE » à un bloc : une sortie n'est jamais une simple déclaration, elle est produite par une
+ * ÉTAPE exécutable insérée dans le bloc (le moteur la joue à chaque rejeu) :
+ *   GENERATED      une valeur générée par le fournisseur du run (une fois par exécution)
+ *   DOM_TEXT       le texte d'un élément de l'écran
+ *   DOM_ATTRIBUTE  un attribut d'un élément de l'écran
+ *   URL            un paramètre ou une partie (motif) de l'adresse courante
+ *   RESPONSE       un champ d'une réponse HTTP observée pendant le rejeu (écritures, corps masqués)
+ *   INPUT          une entrée (ou une donnée) du bloc, transmise telle quelle
+ * Une transformation (majuscules, minuscules, espaces, chiffres) vaut pour toutes les sources.
+ */
+export const OUTPUT_SOURCES = ['GENERATED', 'DOM_TEXT', 'DOM_ATTRIBUTE', 'URL', 'RESPONSE', 'INPUT'] as const;
+export type OutputSource = (typeof OUTPUT_SOURCES)[number];
+export const OUTPUT_GENERATORS = [
+  'company',
+  'email',
+  'firstName',
+  'lastName',
+  'phone',
+  'address',
+  'city',
+  'postalCode',
+  'text',
+  'unique',
+] as const;
+export const OUTPUT_TRANSFORMS = ['uppercase', 'lowercase', 'trim', 'digits'] as const;
+
+export interface BlockOutputInput {
+  /** La clé technique de la sortie (`company.id`). */
+  key: string;
+  label?: string;
+  description?: string;
+  meaning?: string;
+  type?: DataType;
+  /** Après quelle étape la produire (0 : avant la première ; par défaut : à la fin). */
+  after?: number;
+  source: OutputSource;
+  generator?: string;
+  /** DOM_TEXT / DOM_ATTRIBUTE : l'élément (sélecteur CSS, ou identifiant de test). */
+  selector?: string;
+  testId?: string;
+  attribute?: string;
+  /** DOM_TEXT / DOM_ATTRIBUTE / URL : un motif (groupe 1 retenu). */
+  pattern?: string;
+  /** URL : un paramètre de l'adresse. */
+  param?: string;
+  /** RESPONSE : la requête observée et le champ lu (`items.0.id`). */
+  method?: string;
+  url?: string;
+  field?: string;
+  /** INPUT : la donnée transmise. */
+  from?: string;
+  transform?: (typeof OUTPUT_TRANSFORMS)[number];
+}
+export type DataType = (typeof DATA_TYPES)[number];
+
+/**
+ * LA PROVENANCE : fournie en entrée, générée au rejeu, capturée pendant le rejeu, valeur fixe du jeu du
+ * bloc, ou valeur littérale saisie dans une étape (candidate, pas encore une donnée du contrat).
+ */
+export type FieldOrigin = 'INPUT' | 'GENERATED' | 'CAPTURED' | 'DATA' | 'LITERAL';
+
+/**
+ * LE STATUT DE DÉTECTION : CONFIRMED (établi par les étapes enregistrées ou confirmé par une personne),
+ * PROBABLE (suggéré par un indice, sans preuve suffisante), UNKNOWN (rôle indéterminé).
+ */
+export type FieldDetection = 'CONFIRMED' | 'PROBABLE' | 'UNKNOWN';
+
+/** Une donnée du contrat, décrite. */
+export interface ContractField {
+  /** Identifiant stable : bloc, sens et clé (ne change pas avec les versions). */
+  id: string;
+  direction: 'input' | 'output' | 'candidate';
+  /** Le nom technique : la clé de donnée de test. */
+  key: string;
+  label?: string;
+  description?: string;
+  /** Le sens métier (« identifiant de la commande créée »). */
+  meaning?: string;
+  type: DataType;
+  /** D'où vient le type : déclaré par une personne, proposé d'après un indice, ou texte par défaut. */
+  typeSource: 'DECLARED' | 'INFERRED' | 'DEFAULT';
+  required: boolean;
+  origin: FieldOrigin;
+  /** La version de la définition de cette donnée (une évolution incompatible l'incrémente). */
+  version: number;
+  detection: FieldDetection;
+  /** Pourquoi : ce qui établit ou suggère la donnée, en mots. */
+  evidence: string[];
+  /** Les étapes (positions 1…n) qui la produisent (sortie) ou la lisent (entrée). */
+  steps: number[];
+  /** Valeur par défaut d'une entrée (déclarée ; jamais une valeur sensible). */
+  defaultValue?: string;
+  /** Une sortie qu'une personne a choisi de ne pas exposer. */
+  exposed: boolean;
+  /** Le générateur d'une donnée générée (email, unique…). */
+  generator?: string;
+  /** Une capture : sa source et son comportement en cas d'échec. */
+  capture?: { source: string; onFailure: 'FAIL' | 'WARN' };
+}
+
+export interface ContractFields {
+  inputs: ContractField[];
+  outputs: ContractField[];
+  /** Valeurs littérales saisies par les étapes : des entrées possibles, proposées, jamais supposées. */
+  candidates: ContractField[];
+}
+
+/** Ce qu'une personne déclare d'une donnée (persisté dans le registre ; tout est facultatif). */
+export interface FieldDeclaration {
+  direction: 'input' | 'output';
+  key: string;
+  label?: string;
+  description?: string;
+  meaning?: string;
+  type?: DataType;
+  defaultValue?: string;
+  /** true : la personne confirme la détection ; false : elle la rejette (sortie non exposée). */
+  confirmed?: boolean;
+}
+
+/** Le résultat d'une déclaration : les versions changées, et ce qui dépend du bloc. */
+export interface FieldDeclarationResult {
+  block: LibraryBlockView;
+  /** Les données dont la définition a changé de façon incompatible (version incrémentée). */
+  incompatible: { key: string; direction: 'input' | 'output'; version: number; reason: string }[];
+  /** Les scénarios et parcours qui utilisent le bloc. */
+  dependents: string[];
 }
 
 /**
@@ -1538,6 +1682,11 @@ export interface ExtractionStepView {
   kind: string;
   label: string;
   groupId?: string;
+  /**
+   * Le rôle de l'étape dans le bloc (fiche) : une action, une navigation, la saisie d'une donnée générée
+   * au rejeu, une capture, une attente (vérification avec délai propre) ou une vérification.
+   */
+  role?: 'action' | 'navigation' | 'generation' | 'capture' | 'wait' | 'check' | 'loop';
 }
 
 export interface ExtractionBlockPlan {
@@ -1759,6 +1908,11 @@ export interface ExecutionRecord {
   issues: number;
   environment?: { id: string; name: string };
   scenarios?: string[];
+  /**
+   * Une EXÉCUTION DE SIMULATION d'un parcours (non enregistré comme scénario) : un vrai rejeu du moteur,
+   * dans un environnement isolé (développement ou test) — ses résultats sont réels.
+   */
+  simulation?: { journey: string; path: number };
 }
 
 /** Une étape jouée, telle que le moteur l'a rapportée (libellé sans valeur saisie). */
@@ -1771,6 +1925,48 @@ export interface ExecutionStepView {
   reason?: string;
   /** La capture de l'étape, relative au dossier du run (servie par un lien de rapport). */
   screenshot?: string;
+  /** Une étape `loop` : ses itérations RÉELLEMENT exécutées (jamais estimées). */
+  loop?: ExecutionLoopView;
+}
+
+/** Le déroulé réel d'une boucle dans une exécution. */
+export interface ExecutionLoopView {
+  id: string;
+  type: 'REPEAT' | 'FOR_EACH' | 'WHILE';
+  as: string;
+  maxIterations: number;
+  timeoutMs: number;
+  onFailure: 'STOP' | 'CONTINUE';
+  planned?: number;
+  /** COMPLETED, CONDITION_FALSE, MAX_ITERATIONS, TIMEOUT, FAILED, REFUSED. */
+  stop: string;
+  iterations: {
+    iteration: number;
+    status: string;
+    durationMs: number;
+    /** Les variables de l'itération ; la valeur d'une clé sensible n'est jamais rendue. */
+    variables: { key: string; value?: string }[];
+    steps: ExecutionStepView[];
+    reason?: string;
+  }[];
+}
+
+/**
+ * Une entrée de la TRACE DES DONNÉES d'une exécution : une valeur produite (générée, capturée, variable
+ * d'itération) ou lue (citée par une étape), avec l'étape, le bloc (le préfixe « Bloc › » du nom de l'étape)
+ * et l'itération. La valeur d'une clé sensible n'est jamais rendue.
+ */
+export interface ExecutionDataTraceView {
+  at: string;
+  key: string;
+  origin: 'GENERATED' | 'CAPTURED' | 'ITERATION' | 'USED';
+  value?: string;
+  masked?: boolean;
+  step?: number;
+  stepName?: string;
+  /** Le bloc de la bibliothèque qui a produit ou lu la donnée (d'après « Bloc › étape »). */
+  block?: string;
+  loops?: { id: string; iteration: number }[];
 }
 
 export interface ExecutionFlowView {
@@ -1784,6 +1980,8 @@ export interface ExecutionFlowView {
   assertions: { id: string; description: string; status: string }[];
   /** Les clés de données de test utilisées (jamais leurs valeurs). */
   testData: string[];
+  /** La trace des données de ce flow (production, lecture, itérations). */
+  dataTrace?: ExecutionDataTraceView[];
 }
 
 export interface ExecutionDetail extends ExecutionRecord {

@@ -2263,6 +2263,8 @@ export class QaCrawlerDashboard extends Base {
           view === 'traceability' ||
           view === 'indicators'
         ) {
+          // Après une publication, le lien mène au catalogue, où le bloc publié est visible.
+          if (view === 'library' && target.dataset.tab === 'catalog') this.state.lib.tab = 'catalog';
           if (projectId) this.navigate({ view, projectId });
           else this.navigate({ view: 'projects' });
         } else this.navigate({ view: 'overview' });
@@ -2602,7 +2604,16 @@ export class QaCrawlerDashboard extends Base {
     else if (part === 'insert' && key === 'block') lib.insert.block = value;
     else if (part === 'insert' && key === 'at') lib.insert.at = value === 'end' ? 'end' : 'start';
     else if (part === 'group' && key === 'name' && lib.group) lib.group.name = value;
-    else return;
+    else if (part === 'wait' && key) {
+      this.library.waitField(key, value);
+      return;
+    } else if (part === 'field' && key) {
+      this.library.fieldInput(key, value);
+      return;
+    } else if (part === 'output' && key) {
+      this.library.outputField(key, value);
+      return;
+    } else return;
     // La recherche et les critères se voient tout de suite.
     if (['query', 'origin', 'state', 'usage', 'sort', 'kind', 'groupBy'].includes(part)) this.paint();
   }

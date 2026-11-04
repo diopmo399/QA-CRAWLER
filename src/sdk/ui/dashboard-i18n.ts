@@ -1348,13 +1348,23 @@ const fr = {
     tabs: {
       overview: 'Vue d’ensemble',
       steps: 'Étapes',
+      inputs: 'Entrées',
+      outputs: 'Sorties',
       contract: 'Contrat',
-      data: 'Données',
+      data: 'Paramètres',
       dependencies: 'Dépendances',
       versions: 'Versions',
       provenance: 'Provenance',
     } as Record<
-      'overview' | 'steps' | 'contract' | 'data' | 'dependencies' | 'versions' | 'provenance',
+      | 'overview'
+      | 'steps'
+      | 'inputs'
+      | 'outputs'
+      | 'contract'
+      | 'data'
+      | 'dependencies'
+      | 'versions'
+      | 'provenance',
       string
     >,
     contractDerivedNote:
@@ -3487,8 +3497,10 @@ const en: DashboardStrings = {
     tabs: {
       overview: 'Overview',
       steps: 'Steps',
+      inputs: 'Inputs',
+      outputs: 'Outputs',
       contract: 'Contract',
-      data: 'Data',
+      data: 'Parameters',
       dependencies: 'Dependencies',
       versions: 'Versions',
       provenance: 'Provenance',

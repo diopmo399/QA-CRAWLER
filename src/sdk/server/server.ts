@@ -5,6 +5,8 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from 'yaml';
+import { allSteps } from '../../config/flow-schema.js';
+import { addBlockOutput } from './library-outputs.js';
 import { slug } from '../../knowledge/signatures.js';
 import { loadProjectMission, projectConfigSchema } from '../../project/project-config.js';
 import { runMission } from '../../orchestrator.js';
@@ -39,6 +41,7 @@ import {
   removeFromLibrary,
   updateFromSource,
   validateVersion,
+  insertWaitInBlock,
 } from './library.js';
 import { revisionOfText, type ExtractionSource } from './library-extract.js';
 import {
@@ -46,9 +49,12 @@ import {
   getJourney,
   listJourneys,
   journeyToBlock,
+  previewJourney,
   publishJourney,
+  simulationFlow,
   removeJourney,
   saveJourney,
+  declareFields,
 } from './library-journeys.js';
 import { parseTestDataSet, TestDataSetError } from '../../data/test-data-set.js';
 import {
@@ -131,6 +137,7 @@ import {
   RECORDING_CONTROLS,
   RECORDING_NAME_PATTERN,
   SDK_API_VERSION,
+  SIMULATION_ENVIRONMENT_KINDS,
 } from '../core/contracts.js';
 import { isTerminal } from '../core/lifecycle.js';
 import { ExplorationManager, stepLabel, stepReason, type MissionRunner } from './explorations.js';
@@ -2249,6 +2256,12 @@ async function handleJourneys(
     json(await libraryCall(() => checkJourney(project.dir, body.journey)));
     return;
   }
+  if (item === 'preview' && method === 'POST') {
+    // SIMULATION STATIQUE : rien n'est exécuté ni écrit.
+    const body = await readJson(request);
+    json(await libraryCall(() => previewJourney(project.dir, body.journey)));
+    return;
+  }
   if (method !== 'POST') throw new HttpError(404, 'NOT_FOUND', 'unknown journey route');
   refuseArchived(project);
   const body = await readJson(request);
@@ -2488,6 +2501,35 @@ async function handleLibrary(
   }
   if (item !== undefined && action === 'source' && method === 'POST') {
     json(await libraryCall(() => updateFromSource(project.dir, decodeURIComponent(item), loadSource)));
+    return;
+  }
+  if (item !== undefined && action === 'fields' && method === 'PUT') {
+    const name = decodeURIComponent(item);
+    const body = await readJson(request);
+    json(
+      await libraryCall(() =>
+        declareFields(project.dir, name, {
+          fields: body.fields,
+          acceptIncompatible: body.acceptIncompatible,
+        }),
+      ),
+    );
+    return;
+  }
+  if (item !== undefined && action === 'wait' && method === 'POST') {
+    const name = decodeURIComponent(item);
+    const body = await readJson(request);
+    json(
+      await libraryCall(() =>
+        insertWaitInBlock(project.dir, name, { after: body.after, wait: body.wait, name: body.name }),
+      ),
+    );
+    return;
+  }
+  if (item !== undefined && action === 'outputs' && method === 'POST') {
+    const name = decodeURIComponent(item);
+    const body = await readJson(request);
+    json(await libraryCall(() => addBlockOutput(project.dir, name, body)));
     return;
   }
   if (item !== undefined && action === 'version' && method === 'POST') {
@@ -3207,6 +3249,49 @@ async function handlePlatform(
     await handleLibrary(ctx, project, item, action, method, request, json);
     return true;
   }
+  if (sub === 'journeys' && item === 'simulate' && action === undefined && method === 'POST') {
+    // EXÉCUTION DE SIMULATION : un vrai rejeu du moteur, seulement dans un environnement isolé, explicite.
+    const project = await projectOf(ctx, id);
+    refuseArchived(project);
+    const body = await readJson(request);
+    const environmentId = textOf(body.environmentId, 80);
+    if (!environmentId)
+      throw new HttpError(
+        400,
+        'BAD_REQUEST',
+        'environmentId: a simulation runs in an explicitly chosen environment',
+      );
+    const environment = await environmentOf(project, environmentId);
+    if (!environment) throw new HttpError(404, 'NOT_FOUND', `unknown environment ${environmentId}`);
+    if (!SIMULATION_ENVIRONMENT_KINDS.some((kind) => kind === environment.kind))
+      throw new HttpError(
+        422,
+        'NOT_ISOLATED',
+        `a simulation runs only in a development or test environment (${environment.name} is ${environment.kind}): it really executes the blocks`,
+      );
+    requireWrites(request, project.id, environment);
+    const pathIndex = typeof body.path === 'number' && Number.isInteger(body.path) ? body.path : 0;
+    const { flow, name } = await libraryCall(() => simulationFlow(project.dir, body.journey, pathIndex));
+    const journeyRaw = body.journey as { name?: unknown } | undefined;
+    const journeyName = typeof journeyRaw?.name === 'string' ? journeyRaw.name.slice(0, 80) : name;
+    const visible = visibleBrowserOf(ctx, body);
+    const { execution, runDir } = await launchReplay(ctx, project, {
+      flows: [flow],
+      names: [name],
+      environment,
+      ...(visible ? { visible } : {}),
+      simulation: { journey: journeyName, path: pathIndex },
+    });
+    json(
+      {
+        ...execution.snapshot(),
+        run: path.basename(runDir),
+        simulation: { journey: journeyName, path: pathIndex },
+      },
+      202,
+    );
+    return true;
+  }
   if (sub === 'journeys' && action === undefined) {
     const project = await projectOf(ctx, id);
     await handleJourneys(project, item, method, request, json);
@@ -3427,6 +3512,8 @@ async function launchReplay(
     configure?: (config: Awaited<ReturnType<typeof projectMission>>['config']) => void;
     /** Un écouteur du moteur en plus (progression d'une investigation), retiré à la fin du run. */
     watch?: (runDir: string) => ExplorationListener;
+    /** Une exécution de simulation d'un parcours (marquée comme telle dans sa fiche). */
+    simulation?: { journey: string; path: number };
   },
 ): Promise<{ execution: ReturnType<ExplorationManager['start']>; runDir: string }> {
   const flowsDir = await flowsDirOf(project.dir);
@@ -3444,6 +3531,14 @@ async function launchReplay(
     ...(options.flows ? { flows: [], extraFlows: options.flows } : {}),
     ...(options.environment ? { environment: options.environment } : {}),
   });
+  // Une capture depuis une réponse HTTP ne s'exécute que si le moteur garde les corps des réponses
+  // (écritures seulement, corps masqués) : activé pour ce rejeu seulement, quand un scénario en contient une.
+  if (
+    loaded.config.flows.some((flow) =>
+      allSteps(flow.steps).some((step) => step.kind === 'capture' && step.capture.from === 'response'),
+    )
+  )
+    Object.assign(loaded.config.network, { captureBodies: true });
   options.configure?.(loaded.config);
   const runDir = path.join(reportsDir, `run-${new Date().toISOString().replace(/[:.]/g, '-')}`);
   await writeExecutionMeta(runDir, {
@@ -3453,6 +3548,7 @@ async function launchReplay(
       ? { environment: { id: options.environment.id, name: options.environment.name } }
       : {}),
     scenarios: options.names,
+    ...(options.simulation ? { simulation: options.simulation } : {}),
   });
   const watchKey = path.resolve(runDir);
   if (options.watch) ctx.replayWatchers.set(watchKey, options.watch(runDir));
