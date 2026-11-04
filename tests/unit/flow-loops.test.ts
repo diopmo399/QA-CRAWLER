@@ -244,11 +244,68 @@ describe('loop iterations — variables and data scope', () => {
     expect(
       trace
         .filter((entry) => entry.key === 'person.id')
-        .map((entry) => [entry.value, entry.loops?.[0]?.iteration]),
+        .map((entry) => [entry.origin, entry.value, entry.valueId, entry.loops?.[0]?.iteration]),
     ).toEqual([
-      ['id-1', 1],
-      ['id-2', 2],
+      ['CAPTURED', 'id-1', 'person.id@1', 1],
+      ['OVERWRITE_REFUSED', 'other', undefined, 1],
+      ['CAPTURED', 'id-2', 'person.id@2', 2],
+      ['OVERWRITE_REFUSED', 'other', undefined, 2],
     ]);
+  });
+
+  it('links each use to the event that produced the value, by kind of use; transformations and retention', () => {
+    const run = new TestDataRunContext({ runId: 'r', env: {} });
+    const sources = { fallback: () => undefined, generate: () => 'Acme Name' };
+    const sets = [
+      {
+        id: 's',
+        name: 's',
+        source: 'MANUAL' as const,
+        values: {
+          'company.name': {
+            key: 'company.name',
+            strategy: 'GENERATE_AT_REPLAY' as const,
+            generator: 'company',
+            sensitive: false,
+          },
+        },
+      },
+    ];
+    run.locate({ step: 2, stepName: 'Create company › fill "Company name"' });
+    run.resolve('company.name', sets, sources);
+    run.used('company.name', 'ASSIGN', 'Acme Name');
+    run.capture('company.code', 'ab-12');
+    run.transformed('company.code', 'uppercase');
+    run.locate({ step: 7, stepName: 'Create request › expect' });
+    run.used('company.name', 'VALIDATE', 'Acme Name');
+    run.used('request.title', 'READ', 'Fixed title');
+    const [generated, assigned, captured, transformed, validated, fixed] = run.trace();
+    expect(generated).toMatchObject({ id: 'd1', origin: 'GENERATED', valueId: 'company.name@1' });
+    expect(assigned).toMatchObject({
+      origin: 'USED',
+      use: 'ASSIGN',
+      valueId: 'company.name@1',
+      source: 'd1',
+    });
+    expect(captured).toMatchObject({ origin: 'CAPTURED', valueId: 'company.code@1' });
+    expect(transformed).toMatchObject({ origin: 'TRANSFORMED', detail: 'uppercase', source: captured?.id });
+    expect(validated).toMatchObject({
+      use: 'VALIDATE',
+      value: 'Acme Name',
+      source: 'd1',
+      stepName: 'Create request › expect',
+    });
+    expect(fixed).toMatchObject({ use: 'READ', fixed: true, value: 'Fixed title' });
+    expect(fixed?.source).toBeUndefined();
+
+    const quiet = new TestDataRunContext({ runId: 'r', env: {}, traceValues: false });
+    quiet.capture('company.code', 'ab-12');
+    quiet.used('company.code', 'READ', 'ab-12');
+    expect(quiet.trace()).toEqual([
+      expect.objectContaining({ origin: 'CAPTURED', withheld: true, valueId: 'company.code@1' }),
+      expect.objectContaining({ origin: 'USED', withheld: true, source: 'd1' }),
+    ]);
+    expect(JSON.stringify(quiet.trace())).not.toContain('ab-12');
   });
 
   it('never keeps the value of a sensitive key in the trace', () => {

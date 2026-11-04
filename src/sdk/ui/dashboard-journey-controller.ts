@@ -38,6 +38,9 @@ import {
   type JourneyUi,
 } from './dashboard-journey.js';
 import { can } from './dashboard-access.js';
+import { emptyTraceUi } from './dashboard-journey-trace.js';
+
+const TRACE_TABS = ['trace', 'vars', 'map', 'graph'] as const;
 import {
   applyLoopField,
   loopAddBlock,
@@ -188,6 +191,36 @@ export class JourneyController {
       this.checkTimer = undefined;
       void this.check();
     }, delay);
+  }
+
+  /** TRAÇABILITÉ : définitions, correspondances et traces de l'exécution choisie (la plus récente par défaut). */
+  async loadTrace(): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!api || !projectId) return;
+    const ui = this.ui;
+    const journey: Journey = { ...ui.journey, name: ui.journey.name.trim() || 'parcours' };
+    const key = logicKey(ui.journey);
+    const current = ui.trace ?? emptyTraceUi();
+    ui.trace = { ...current, loading: true, error: undefined };
+    this.host.paint();
+    try {
+      const data = await api.journeys.traceability(
+        projectId,
+        journey,
+        current.run ? { run: current.run } : {},
+      );
+      ui.trace = {
+        ...(ui.trace ?? current),
+        loading: false,
+        data,
+        key,
+        ...(data.run ? { run: data.run.run } : {}),
+      };
+    } catch (error) {
+      ui.trace = { ...(ui.trace ?? current), loading: false, error: message(error) };
+    }
+    this.host.paint();
   }
 
   /** SIMULATION STATIQUE : l'aperçu du parcours (rien n'est exécuté). */
@@ -404,6 +437,39 @@ export class JourneyController {
         this.changed(`[data-jn="loop.pick"][data-loop="${CSS.escape(data.loop)}"]`);
         return true;
       }
+      case 'jn-view':
+        ui.view = data.view === 'trace' ? 'trace' : 'compose';
+        this.host.paint();
+        if (ui.view === 'trace') void this.loadTrace();
+        this.focus('#jn-mode-TRACE');
+        return true;
+      case 'jn-trace-load':
+        void this.loadTrace();
+        return true;
+      case 'jn-trace-tab':
+        ui.trace = {
+          ...(ui.trace ?? emptyTraceUi()),
+          tab: TRACE_TABS.find((tab) => tab === data.tab) ?? 'trace',
+        };
+        this.host.paint();
+        this.focus(`[data-action="jn-trace-tab"][data-tab="${ui.trace.tab}"]`);
+        return true;
+      case 'jn-trace-pick':
+        ui.trace = {
+          ...(ui.trace ?? emptyTraceUi()),
+          ...(data.key ? { selected: data.key } : {}),
+          ...(data.tab === 'trace' ? { tab: 'trace' as const } : {}),
+        };
+        this.host.paint();
+        if (data.key) this.focus(`.tc-var[data-key="${CSS.escape(data.key)}"]`);
+        return true;
+      case 'jn-trace-center':
+        ui.trace = {
+          ...(ui.trace ?? emptyTraceUi()),
+          center: data.center === 'graph' ? 'graph' : 'timeline',
+        };
+        this.host.paint();
+        return true;
       case 'jn-preview':
         void this.preview();
         return true;
@@ -535,6 +601,7 @@ export class JourneyController {
         return true;
       case 'jn-mode': {
         const mode = data.mode === 'DIAGRAM' ? 'DIAGRAM' : 'LINEAR';
+        ui.view = 'compose';
         const refused = switchMode(ui, mode);
         const t = journeyText(this.host.state);
         ui.modeMessage = refused ? t.linearRefused(refused) : undefined;
@@ -791,6 +858,16 @@ export class JourneyController {
         return true;
       }
       case 'loop.pick':
+        return true;
+      case 'trace.query':
+        ui.trace = { ...(ui.trace ?? emptyTraceUi()), query: value };
+        this.host.paint();
+        this.focus('[data-jn="trace.query"]');
+        return true;
+      case 'trace.run':
+        if (!committed) return true;
+        ui.trace = { ...(ui.trace ?? emptyTraceUi()), run: value };
+        void this.loadTrace();
         return true;
       case 'sim.env':
         ui.sim = { ...(ui.sim ?? { path: 0 }), env: value };

@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { allSteps } from '../../config/flow-schema.js';
 import { addBlockOutput } from './library-outputs.js';
+import { journeyTraceability } from './library-traceability.js';
 import { slug } from '../../knowledge/signatures.js';
 import { loadProjectMission, projectConfigSchema } from '../../project/project-config.js';
 import { runMission } from '../../orchestrator.js';
@@ -2254,6 +2255,22 @@ async function handleJourneys(
   if (item === 'check' && method === 'POST') {
     const body = await readJson(request);
     json(await libraryCall(() => checkJourney(project.dir, body.journey)));
+    return;
+  }
+  if (item === 'traceability' && method === 'POST') {
+    // TRAÇABILITÉ : définitions, correspondances et traces d'une exécution réelle (rien n'est exécuté).
+    const body = await readJson(request);
+    const run = textOf(body.run, 120);
+    json(
+      await libraryCall(() =>
+        journeyTraceability(project.dir, {
+          projectId: project.id,
+          reportsDir: path.join(project.dir, REPORTS_DIR),
+          journey: body.journey,
+          ...(run ? { run } : {}),
+        }),
+      ),
+    );
     return;
   }
   if (item === 'preview' && method === 'POST') {

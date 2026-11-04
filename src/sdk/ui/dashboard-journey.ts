@@ -32,6 +32,13 @@ import {
 import { icon } from './dashboard-parts.js';
 import { LOOP_CSS, loopCard, loopNodeInner, loopProps, loopText } from './dashboard-journey-loop.js';
 import { SIM_CSS, simText, simulationPanel, type SimulationUi } from './dashboard-journey-sim.js';
+import {
+  TRACE_VIEW_CSS,
+  traceDetail,
+  traceUiText,
+  traceView,
+  type TraceUi,
+} from './dashboard-journey-trace.js';
 import { defaultLoop } from '../core/journey-loop.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
@@ -98,6 +105,9 @@ export interface JourneyUi {
   /** La simulation (aperçu statique, exécution réelle) et la logique au moment de l'aperçu. */
   sim?: SimulationUi;
   simKey?: string;
+  /** La vue : composer le parcours, ou « Données & Traçabilité » (lecture seule). */
+  view?: 'compose' | 'trace';
+  trace?: TraceUi;
   dockOpen: boolean;
   /** La légende du diagramme dépliée (repliée par défaut : elle ne masque pas les nœuds). */
   legendOpen?: boolean;
@@ -1237,9 +1247,11 @@ function modeBar(state: DashboardState, publish: boolean): string {
   )
     .map(
       (mode) =>
-        `<button type="button" role="radio" id="jn-mode-${mode}" class="btn small${journey.mode === mode ? ' primary' : ''}" data-action="jn-mode" data-mode="${mode}" aria-checked="${String(journey.mode === mode)}">${icon(mode === 'LINEAR' ? 'menu' : 'merge')}<span>${esc(t.modes[mode])}</span></button>`,
+        `<button type="button" role="radio" id="jn-mode-${mode}" class="btn small${journey.mode === mode && ui.view !== 'trace' ? ' primary' : ''}" data-action="jn-mode" data-mode="${mode}" aria-checked="${String(journey.mode === mode && ui.view !== 'trace')}">${icon(mode === 'LINEAR' ? 'menu' : 'merge')}<span>${esc(t.modes[mode])}</span></button>`,
     )
-    .join('')}</span>`;
+    .join(
+      '',
+    )}<button type="button" role="radio" id="jn-mode-TRACE" class="btn small${ui.view === 'trace' ? ' primary' : ''}" data-action="jn-view" data-view="trace" aria-checked="${String(ui.view === 'trace')}">${icon('traceability')}<span>${esc(traceUiText(state).view)}</span></button></span>`;
   const history = publish
     ? `<span class="jn-grp"><button type="button" class="btn small ghost icon-only" data-action="jn-undo" aria-label="${esc(t.undo)}" title="${esc(t.undo)}"${ui.undo.length === 0 ? ' disabled' : ''}>${icon('undo')}</button><button type="button" class="btn small ghost icon-only jn-redo" data-action="jn-redo" aria-label="${esc(t.redo)}" title="${esc(t.redo)}"${ui.redo.length === 0 ? ' disabled' : ''}>${icon('undo')}</button></span>`
     : '';
@@ -2160,6 +2172,8 @@ function journeyDock(state: DashboardState, publish = false): string {
 export function journeySide(state: DashboardState, publish: boolean): string {
   const t = journeyText(state);
   const ui = state.lib.journey;
+  if (ui.view === 'trace')
+    return `<aside class="jn-side" aria-label="${esc(traceUiText(state).detailTitle)}"><section class="jn-props" aria-live="polite">${traceDetail(state, ui.trace)}</section></aside>`;
   const selected = ui.selected;
   const graph = ui.journey.graph;
   const node = selected?.kind === 'node' ? graph.nodes.find((entry) => entry.id === selected.id) : undefined;
@@ -2193,6 +2207,8 @@ export function journeyComposer(state: DashboardState, publish: boolean): string
   const toast = ui.toast
     ? `<div class="jn-toast" role="status">${icon('check')}<span>${esc(ui.toast)}</span><button type="button" class="btn small ghost icon-only" data-action="jn-toast-close" aria-label="${esc(t.close)}" title="${esc(t.close)}">${icon('close')}</button></div>`
     : '';
+  if (ui.view === 'trace')
+    return `<div class="jn-composer" data-mode="TRACE">${journeyHead(state, publish)}${modeBar(state, publish)}${traceView(state, ui.trace ?? { tab: 'trace', center: 'timeline', query: '' }, ui.trace?.key !== undefined && ui.trace.key !== logicKey(ui.journey))}</div>`;
   return `<div class="jn-composer" data-mode="${ui.journey.mode}">${journeyHead(state, publish)}${modeBar(state, publish)}<div class="jn-body">${palette(state, publish)}<div class="jn-center${ui.dockOpen ? ' docked' : ''}"><div class="jn-stage${ui.toast ? ' has-toast' : ''}" data-jn-stage>${stage}${toast}</div>${journeyDock(state, publish)}</div></div></div>`;
 }
 
@@ -2584,4 +2600,4 @@ export const JOURNEY_CSS = `
   .jn-dock-2,.jn-row2{grid-template-columns:minmax(0,1fr)}
   .jn-legend{display:none}
 }
-${LOOP_CSS}${SIM_CSS}`;
+${LOOP_CSS}${SIM_CSS}${TRACE_VIEW_CSS}`;

@@ -32,6 +32,32 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Traçabilité des données entre blocs** :
+  - **Événements de la trace** : chaque événement a un identifiant (`d1`, `d2`…) et une occurrence de valeur
+    (`company.name@1`), commune à sa production et à toutes ses utilisations. Une utilisation pointe vers
+    l'événement qui a produit la valeur (`source`).
+  - **Sortes d'événements** : génération, capture, transformation, variable d'itération, utilisation
+    (`ASSIGN` saisie, `READ` citation, `VALIDATE` vérification) et écrasement refusé. Une valeur fixe du jeu
+    est notée `fixed`.
+  - **Rétention** : par défaut, les événements et leurs liens sont gardés sans les valeurs ; la vue le dit
+    (« non conservée ») et la confirmation repose sur l'occurrence de valeur, pas sur la valeur.
+    `testData.traceValues: true` (section `mission` du projet) garde les valeurs ; celles des clés sensibles
+    ne le sont jamais.
+  - **Modèle d'un parcours** (`journeys.traceability`) : les définitions (contrats des blocs), les
+    correspondances (explicites, automatiques, jeu de données, itération, suggérées non confirmées,
+    manquantes) et les traces d'une exécution réelle (la plus récente, ou celle choisie). Chaque donnée a un
+    statut justifié : confirmée seulement si une production puis une utilisation de la même occurrence ont été
+    observées. Une entrée manquante, une collision ou une version ancienne d'un bloc sont signalées.
+  - **Vue « Données & Traçabilité »** du compositeur (à côté des modes linéaire et diagramme) :
+    - le flux d'exécution en haut, liens de contrôle et liens de données distingués ;
+    - les données du scénario à gauche, filtrables ;
+    - la chronologie ou le graphe de la donnée au centre ;
+    - sa fiche à droite (provenance, version, type, valeur masquée si sensible, producteurs,
+      consommateurs, statut et justification) ;
+    - les onglets Variables, Correspondances et Graphique de dépendances ;
+    - la navigation vers les étapes du bloc, et les états sans exécution, sans trace, en chargement et en
+      erreur.
+
 - **Boucles exécutées par le moteur** (étape `loop`, jamais aplatie) :
   - **`REPEAT`** (`times`), **`FOR_EACH`** (`items` écrits, ou `itemsFrom` : une donnée du run en tableau JSON)
     et **`WHILE`** (une condition d'écran vérifiée avant chaque itération).

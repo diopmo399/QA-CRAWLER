@@ -274,7 +274,11 @@ export function rightFor(segments: readonly string[], method: string): Right {
     case 'journeys':
       // Vérifier un parcours visuel ne change rien ; l'enregistrer, le retirer, en créer des scénarios ou un bloc : publier.
       // Un aperçu (simulation statique) ne change rien ; une exécution de simulation joue l'application.
-      return item === 'check' || item === 'preview' ? 'VIEW' : item === 'simulate' ? 'RUN' : 'PUBLISH';
+      return item === 'check' || item === 'preview' || item === 'traceability'
+        ? 'VIEW'
+        : item === 'simulate'
+          ? 'RUN'
+          : 'PUBLISH';
     case 'executions':
     case 'explorations':
       return 'RUN';

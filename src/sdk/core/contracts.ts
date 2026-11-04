@@ -1957,13 +1957,24 @@ export interface ExecutionLoopView {
  * et l'itération. La valeur d'une clé sensible n'est jamais rendue.
  */
 export interface ExecutionDataTraceView {
+  /** L'identifiant de l'événement dans l'exécution (`d12`). */
+  id?: string;
   at: string;
   key: string;
-  origin: 'GENERATED' | 'CAPTURED' | 'ITERATION' | 'USED';
+  origin: 'GENERATED' | 'CAPTURED' | 'TRANSFORMED' | 'ITERATION' | 'USED' | 'OVERWRITE_REFUSED';
+  /** L'occurrence de valeur (`company.name@1`), commune à sa production et à ses utilisations. */
+  valueId?: string;
+  /** L'événement qui a produit la valeur utilisée (lien source → cible). */
+  source?: string;
+  /** USED : saisie (ASSIGN), citation (READ), vérification (VALIDATE). */
+  use?: 'ASSIGN' | 'READ' | 'VALIDATE';
   value?: string;
   masked?: boolean;
-  /** La valeur n'est pas gardée : la mission ne garde pas les valeurs (`testData.traceValues: false`). */
+  /** La rétention du projet interdit de garder les valeurs. */
   withheld?: boolean;
+  /** Une valeur fixe du jeu de données (définie statiquement). */
+  fixed?: boolean;
+  detail?: string;
   step?: number;
   stepName?: string;
   /** Le bloc de la bibliothèque qui a produit ou lu la donnée (d'après « Bloc › étape »). */

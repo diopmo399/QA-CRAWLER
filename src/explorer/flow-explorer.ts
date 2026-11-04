@@ -2605,7 +2605,8 @@ export class FlowExplorer {
         let step = intent.step;
         const correlated = 'target' in intent.step && referencedTestDataKeys(intent.step.target).length > 0;
         if (referencedTestDataKeys(step).length > 0) {
-          const cited = this.citeTestData(step, flow);
+          // Une sonde ne joue rien : ses citations ne sont pas des utilisations.
+          const cited = this.citeTestData(step, flow, false);
           if (!cited.ok) return { status: 'NOT_FOUND', reason: cited.reason, confidence: 0, final: true };
           step = cited.value;
         }
@@ -4101,7 +4102,7 @@ export class FlowExplorer {
         ? { kind: 'value' as const, value: known }
         : this.testDataValue(undefined, key, flow);
     if (data.kind !== 'value') return { error: `testData.${key} has no value` };
-    this.testDataRun.used(key);
+    this.testDataRun.used(key, 'READ', data.value);
     return parseLoopItems(data.value, key);
   }
 
@@ -5664,7 +5665,7 @@ export class FlowExplorer {
           ? this.testDataValue(action, step.value.testData, flow)
           : undefined;
       if (data?.kind === 'value' && typeof step.value !== 'string' && 'testData' in step.value)
-        this.testDataRun.used(step.value.testData);
+        this.testDataRun.used(step.value.testData, 'ASSIGN', data.value);
       if (data?.kind === 'preserve')
         return {
           page,
@@ -8977,6 +8978,7 @@ export class FlowExplorer {
     }
     const refused = this.testDataRun.capture(capture.as, result.value);
     if (refused !== undefined) return { error: refused };
+    if (capture.transform) this.testDataRun.transformed(capture.as, capture.transform);
     this.listener.onTestData?.({
       at: new Date().toISOString(),
       event: 'TEST_DATA_CAPTURED',
@@ -8986,7 +8988,9 @@ export class FlowExplorer {
   }
 
   /** Les références ${testData:clé} d'une étape, résolues par le contexte du run (même valeur pour tout le run). */
-  private citeTestData(step: FlowStep, flow: FlowConfig): ResolvedReferences<FlowStep> {
+  private citeTestData(step: FlowStep, flow: FlowConfig, trace = true): ResolvedReferences<FlowStep> {
+    // Comment l'étape utilise la donnée : saisie, vérification, ou citation dans une action.
+    const use = step.kind === 'fill' ? 'ASSIGN' : step.kind === 'expect' ? 'VALIDATE' : 'READ';
     return resolveTestDataReferences(step, (key) => {
       // Une CITATION vise une donnée connue : jamais une valeur inventée pour une clé que rien ne définit.
       const defined =
@@ -8996,7 +9000,7 @@ export class FlowExplorer {
       if (!defined)
         return { error: `unknown test data key "${key}" (not in the data set, never entered in this run)` };
       const data = this.testDataValue(undefined, key, flow);
-      if (data.kind === 'value') this.testDataRun.used(key);
+      if (data.kind === 'value' && trace) this.testDataRun.used(key, use, data.value);
       return data.kind === 'value'
         ? { value: data.value }
         : { error: data.kind === 'missing' ? data.reason : 'PRESERVE_EXISTING: no value to cite' };

@@ -463,9 +463,12 @@ export class LibraryController {
       case 'lib-wait-insert':
         void this.insertWait();
         return true;
-      case 'lib-open':
-        this.open(target.dataset.block ?? '');
+      case 'lib-open': {
+        // Depuis la traçabilité : la fiche s'ouvre sur l'onglet demandé (les étapes du bloc).
+        const tab = SHEET_TABS.find((entry) => entry === target.dataset.sheetTab) ?? 'overview';
+        this.open(target.dataset.block ?? '', tab);
         return true;
+      }
       case 'lib-sheet-close':
         this.close();
         return true;

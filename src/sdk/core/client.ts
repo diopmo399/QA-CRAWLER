@@ -98,6 +98,7 @@ import type {
 } from './contracts.js';
 import type { Journey, JourneyCheck, JourneySummary } from './journey.js';
 import type { JourneyPreview } from './journey-loop.js';
+import type { JourneyTraceability } from './journey-trace.js';
 import type { WaitSpec } from './wait.js';
 import { SDK_API_VERSION } from './contracts.js';
 import type {
@@ -396,6 +397,15 @@ export interface QaCrawlerClient {
     check(projectId: string, journey: Journey): Promise<JourneyCheck>;
     /** SIMULATION STATIQUE : l'aperçu du parcours (provenance des entrées, portée des sorties) ; rien n'est exécuté. */
     preview(projectId: string, journey: Journey): Promise<JourneyPreview>;
+    /**
+     * TRAÇABILITÉ DES DONNÉES : définitions (contrats), correspondances (configurées, suggérées, manquantes) et
+     * traces observées d'une exécution réelle du parcours (la plus récente, ou `run`). Rien n'est exécuté.
+     */
+    traceability(
+      projectId: string,
+      journey: Journey,
+      options?: { run?: string },
+    ): Promise<JourneyTraceability>;
     /**
      * EXÉCUTION DE SIMULATION : un vrai rejeu du chemin choisi par le moteur, dans un environnement de
      * développement ou de test choisi explicitement (refus 422 sinon) ; le parcours n'est pas enregistré.
@@ -1091,6 +1101,8 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request('POST', `${project(projectId)}/journeys`, { journey, ...options }),
       check: (projectId, journey) => request('POST', `${project(projectId)}/journeys/check`, { journey }),
       preview: (projectId, journey) => request('POST', `${project(projectId)}/journeys/preview`, { journey }),
+      traceability: (projectId, journey, options = {}) =>
+        request('POST', `${project(projectId)}/journeys/traceability`, { journey, ...options }),
       simulate: (projectId, journey, options) =>
         request('POST', `${project(projectId)}/journeys/simulate`, { journey, ...options }),
       publish: (projectId, name, options = {}) =>

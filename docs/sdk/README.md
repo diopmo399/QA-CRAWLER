@@ -300,6 +300,7 @@ const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisate
 | `library.declareFields(projectId, name, fields, options?)` | `PUT /api/projects/:id/library/:name/fields`                     |
 | `library.addOutput(projectId, name, input)`                | `POST /api/projects/:id/library/:name/outputs`                   |
 | `journeys.preview(projectId, journey)`                     | `POST /api/projects/:id/journeys/preview`                        |
+| `journeys.traceability(projectId, journey, { run? })`      | `POST /api/projects/:id/journeys/traceability`                   |
 | `journeys.simulate(projectId, journey, options)`           | `POST /api/projects/:id/journeys/simulate`                       |
 | `library.drift(projectId)`                                 | `GET /api/projects/:id/library/drift`                            |
 | `library.details(projectId, name)`                         | `GET /api/projects/:id/library/:name`                            |
@@ -544,6 +545,30 @@ capturée (`CAPTURED`), variable d'itération (`ITERATION`) ou lecture (`USED`).
 - **Rétention** : les autres valeurs ne sont gardées que si la mission le permet (`testData.traceValues: true`
   dans la section `mission` du fichier projet). Par défaut, l'entrée est gardée sans sa valeur
   (`withheld: true`) et les variables des itérations n'ont que leur numéro (`<as>.index`).
+
+- **Événements** : chaque entrée a un `id` (`d12`) et une occurrence de valeur `valueId` (`company.name@1`),
+  la même pour la production et pour toutes les utilisations. Une utilisation (`USED`, `use` : `ASSIGN`,
+  `READ`, `VALIDATE`) pointe vers l'événement producteur (`source`). `TRANSFORMED` suit une capture
+  transformée. `OVERWRITE_REFUSED` note une capture qui aurait écrasé une autre valeur. Une valeur fixe du jeu
+  est notée `fixed: true` (sans `source`).
+- **Rétention** : sans `testData.traceValues: true`, les événements, leurs `valueId` et leurs `source` sont
+  gardés sans les valeurs (`withheld: true`) : la traçabilité reste complète, seules les valeurs manquent.
+
+**Traçabilité d'un parcours** (`journeys.traceability(projectId, journey, { run? })`,
+`src/sdk/server/library-traceability.ts`) : rien n'est exécuté.
+
+- **`variables`** : chaque donnée avec son type, son sens, sa version, son origine, ses producteurs et ses
+  consommateurs (nœud, bloc, version retenue et version de la bibliothèque, étapes du contrat).
+- **Statut** : `CONFIRMED` seulement si une production puis une utilisation de la même occurrence ont été
+  observées dans l'exécution choisie. Les autres statuts : `PRODUCED_ONLY`, `STATIC`, `NOT_OBSERVED`,
+  `NO_EXECUTION`, `MISSING`, `UNSUPPORTED`. Chaque statut a sa `justification` ; `problems` liste les
+  collisions, les entrées manquantes et les versions anciennes.
+- **`correspondences`** : `EXPLICIT`, `AUTOMATIC`, `DATA`, `LOOP`, `SUGGESTED` (jamais retenue sans
+  validation) et `MISSING`.
+- **`runs`** : les exécutions réelles du parcours, c'est-à-dire de ses scénarios créés ou de ses simulations.
+  Les `events` sont ceux de l'exécution la plus récente ou de `run`, rattachés au nœud quand le bloc est
+  unique dans le parcours.
+- **`state`** : `NO_EXECUTION` ou `NO_TRACES` quand il n'y a rien d'observé.
 
 **Sorties ajoutées** : `library.addOutput(projectId, name, { key, source, … })` insère une étape `capture`
 dans un bloc seul dans son fichier, après l'étape `after` (par défaut : à la fin).
@@ -1304,6 +1329,12 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - Le Run Monitor suit les flows et les étapes, pas les groupes métier (absents des événements
   d'exploration).
 - La comparaison ne compare pas les captures d'écran de deux exécutions.
+- Traçabilité :
+  - un bloc répété plusieurs fois dans un parcours (hors boucle) : ses événements ne sont pas rattachés à une
+    instance précise ;
+  - une donnée renommée par `with:` est tracée sous la clé du scénario ;
+  - les valeurs fixes du jeu sont vues à leur utilisation seulement (rien n'est produit pendant le run) ;
+  - la trace est bornée à 2 000 événements par mission.
 - Boucles :
   - les tests générés (Playwright TS, Java) ne reproduisent pas une boucle : elle est signalée, jamais
     aplatie ; seul le moteur l'exécute ;
