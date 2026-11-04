@@ -24,6 +24,8 @@ export interface TestDataRunContextOptions {
   /** TEST_DATA_GENERATED_FOR_RUN (la clé seulement, jamais la valeur). */
   onGenerated?: (key: string, strategy: string) => void;
   now?: () => Date;
+  /** false : la trace garde les événements sans aucune valeur (`withheld`). Par défaut : les valeurs. */
+  traceValues?: boolean;
 }
 
 /** D'où vient une donnée du run (traçabilité). */
@@ -51,6 +53,8 @@ export interface DataTraceEntry extends DataTraceWhere {
   value?: string;
   /** Une clé sensible : la valeur n'est jamais gardée. */
   masked?: boolean;
+  /** La valeur existait, mais la mission ne garde pas les valeurs (`testData.traceValues: false`). */
+  withheld?: boolean;
 }
 
 /** Une portée d'itération : les variables de l'itération et les valeurs produites pendant celle-ci. */
@@ -150,13 +154,15 @@ export class TestDataRunContext {
   private record(key: string, origin: DataTraceOrigin, value?: string): void {
     if (this.traced.length >= TRACE_LIMIT) return;
     const masked = SENSITIVE_KEY.test(key);
+    const kept = this.options.traceValues !== false;
     const loops = this.loops();
     this.traced.push({
       at: (this.options.now ?? (() => new Date()))().toISOString(),
       key,
       origin,
-      ...(value !== undefined && !masked ? { value } : {}),
+      ...(value !== undefined && !masked && kept ? { value } : {}),
       ...(value !== undefined && masked ? { masked: true } : {}),
+      ...(value !== undefined && !masked && !kept ? { withheld: true } : {}),
       ...(this.where.step !== undefined ? { step: this.where.step } : {}),
       ...(this.where.stepName !== undefined ? { stepName: this.where.stepName } : {}),
       ...(loops.length > 0 ? { loops } : {}),

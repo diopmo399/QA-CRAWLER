@@ -47,7 +47,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
     (`COMPLETED`, `CONDITION_FALSE`, `MAX_ITERATIONS`, `TIMEOUT`, `FAILED`, `REFUSED`).
 - **Trace des données de chaque exécution** (`dataTrace`) : chaque valeur générée, capturée ou variable
   d'itération, et chaque lecture, avec l'étape, le bloc et l'itération. La valeur d'une clé sensible n'est
-  jamais gardée.
+  jamais gardée. Les autres valeurs ne sont gardées (trace et variables des itérations) que si la mission le
+  permet : `testData.traceValues: true` ; par défaut, l'événement est gardé sans sa valeur (`withheld`), et
+  une valeur produite pendant le run ne sort pas du moteur.
 - **Capture `generate` et `transform`** : une étape `capture` peut générer une valeur (`generate:
 company`) ; toute capture peut être transformée (`uppercase`, `lowercase`, `trim`, `digits`).
 - **« Ajouter une sortie » à un bloc** (`library.addOutput`) : une étape exécutable est insérée dans le bloc.

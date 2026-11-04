@@ -151,6 +151,11 @@ describe('SDK platform — real engine', () => {
     expect(flow?.testData).toContain('request.title');
     // La valeur générée pour ce run n'apparaît nulle part dans la réponse du SDK.
     expect(JSON.stringify(detail)).not.toContain(recette.records()[0]?.title ?? '@@');
+    // La trace garde l'événement (généré, puis lu), sans la valeur : le projet ne garde pas les valeurs.
+    expect(flow?.dataTrace?.find((entry) => entry.origin === 'GENERATED')).toMatchObject({
+      key: 'request.title',
+      withheld: true,
+    });
     // Les preuves : les captures et le rapport sont des fichiers réels du run.
     const shot = flow?.steps.find((step) => step.screenshot)?.screenshot;
     if (shot)

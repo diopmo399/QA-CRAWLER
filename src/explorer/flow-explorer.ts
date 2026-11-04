@@ -1055,6 +1055,7 @@ export class FlowExplorer {
     this.testDataRun = new TestDataRunContext({
       runId: this.runId,
       env: this.env,
+      traceValues: config.testData.traceValues,
       onGenerated: (key) => {
         this.listener.onTestData?.({
           at: new Date().toISOString(),
@@ -3996,8 +3997,11 @@ export class FlowExplorer {
         status: 'PASSED',
         startedAt: new Date(iterationStarted).toISOString(),
         durationMs: 0,
+        // Sans `testData.traceValues`, seul le numéro d'itération garde sa valeur (pas une donnée du run).
         variables: Object.entries(variables).map(([key, value]) =>
-          LOOP_SENSITIVE.test(key) ? { key } : { key, value },
+          LOOP_SENSITIVE.test(key) || (!this.config.testData.traceValues && key !== `${loop.as}.index`)
+            ? { key }
+            : { key, value },
         ),
         steps: [],
       };

@@ -1962,6 +1962,8 @@ export interface ExecutionDataTraceView {
   origin: 'GENERATED' | 'CAPTURED' | 'ITERATION' | 'USED';
   value?: string;
   masked?: boolean;
+  /** La valeur n'est pas gardée : la mission ne garde pas les valeurs (`testData.traceValues: false`). */
+  withheld?: boolean;
   step?: number;
   stepName?: string;
   /** Le bloc de la bibliothèque qui a produit ou lu la donnée (d'après « Bloc › étape »). */

@@ -25,7 +25,8 @@ const FR = {
     `plafond ${String(max)} · délai ${String(Math.round(timeout / 1000))} s · ${policy === 'CONTINUE' ? 'continuer après un échec' : 'arrêter au premier échec'}`,
   variables: 'Variables',
   traceTitle: 'Traçabilité des données',
-  traceSub: 'Valeurs réellement produites et lues pendant cette exécution (clés sensibles masquées).',
+  traceSub:
+    'Données réellement produites et lues pendant cette exécution (clés sensibles masquées ; valeurs gardées seulement si la mission le permet : testData.traceValues).',
   colKey: 'Donnée',
   colOrigin: 'Origine',
   colValue: 'Valeur',
@@ -39,6 +40,7 @@ const FR = {
     USED: 'Lue',
   } as Record<string, string>,
   masked: 'masquée',
+  withheld: 'non conservée',
   none: '—',
   traceNone: 'Aucune donnée produite ou lue n’a été rapportée.',
   history: 'Historique des valeurs',
@@ -64,7 +66,8 @@ const EN: Text = {
     `cap ${String(max)} · timeout ${String(Math.round(timeout / 1000))} s · ${policy === 'CONTINUE' ? 'continue after a failure' : 'stop at the first failure'}`,
   variables: 'Variables',
   traceTitle: 'Data traceability',
-  traceSub: 'Values really produced and read during this run (sensitive keys masked).',
+  traceSub:
+    'Data really produced and read during this run (sensitive keys masked; values kept only when the mission allows it: testData.traceValues).',
   colKey: 'Data',
   colOrigin: 'Origin',
   colValue: 'Value',
@@ -73,6 +76,7 @@ const EN: Text = {
   colIteration: 'Iteration',
   origins: { GENERATED: 'Generated', CAPTURED: 'Captured', ITERATION: 'Iteration variable', USED: 'Read' },
   masked: 'masked',
+  withheld: 'not kept',
   none: '—',
   traceNone: 'No produced or read data was reported.',
   history: 'Value history',
@@ -94,7 +98,7 @@ export function loopIterationsHtml(
   const iterations = loop.iterations
     .map(
       (iteration) =>
-        `<li class="tr-it"><details${iteration.status === 'PASSED' ? '' : ' open'}><summary>${pill(iteration.status, results[iteration.status] ?? iteration.status)} <b>${esc(t.iteration(iteration.iteration))}</b>${iteration.variables.length > 0 ? ` <span class="tr-vars">${iteration.variables.map((variable) => `<code class="lib-key">${esc(variable.key)}</code>${variable.value === undefined ? ` <small class="mu">${esc(t.masked)}</small>` : ` = <span class="tr-v">${esc(variable.value)}</span>`}`).join(' ')}</span>` : ''}</summary><ol class="steps tr-steps">${iteration.steps.map((inner) => `<li>${pill(inner.status, results[inner.status] ?? inner.status)}<span>${String(inner.index)}. ${esc(inner.label)}</span>${inner.reason ? `<small class="why">${esc(inner.reason)}</small>` : ''}${loopIterationsHtml(locale, inner, results)}</li>`).join('')}</ol>${iteration.reason ? `<p class="why">${esc(iteration.reason)}</p>` : ''}</details></li>`,
+        `<li class="tr-it"><details${iteration.status === 'PASSED' ? '' : ' open'}><summary>${pill(iteration.status, results[iteration.status] ?? iteration.status)} <b>${esc(t.iteration(iteration.iteration))}</b>${iteration.variables.length > 0 ? ` <span class="tr-vars">${iteration.variables.map((variable) => `<code class="lib-key">${esc(variable.key)}</code>${variable.value === undefined ? ` <small class="mu">${esc(t.withheld)}</small>` : ` = <span class="tr-v">${esc(variable.value)}</span>`}`).join(' ')}</span>` : ''}</summary><ol class="steps tr-steps">${iteration.steps.map((inner) => `<li>${pill(inner.status, results[inner.status] ?? inner.status)}<span>${String(inner.index)}. ${esc(inner.label)}</span>${inner.reason ? `<small class="why">${esc(inner.reason)}</small>` : ''}${loopIterationsHtml(locale, inner, results)}</li>`).join('')}</ol>${iteration.reason ? `<p class="why">${esc(iteration.reason)}</p>` : ''}</details></li>`,
     )
     .join('');
   return `<div class="tr-loop"><p class="tr-loop-h"><b>${esc(t.iterations(loop.iterations.length, loop.planned))}</b> · ${esc(t.stop)} : ${esc(t.stops[loop.stop] ?? loop.stop)} <small class="mu">(${esc(t.limits(loop.maxIterations, loop.timeoutMs, loop.onFailure))})</small></p><ol class="plain tr-its">${iterations}</ol></div>`;
@@ -113,7 +117,7 @@ export function dataTraceHtml(locale: string, flow: ExecutionFlowView): string {
   const rows = trace
     .map(
       (entry) =>
-        `<tr class="tr-${entry.origin.toLowerCase()}"><td><code class="lib-key">${esc(entry.key)}</code></td><td><span class="tr-o ${entry.origin.toLowerCase()}">${esc(t.origins[entry.origin] ?? entry.origin)}</span></td><td>${entry.masked ? `<small class="mu">${esc(t.masked)}</small>` : entry.value !== undefined ? `<span class="tr-v">${esc(entry.value)}</span>` : esc(t.none)}</td><td>${esc(entry.block ?? t.none)}</td><td>${entry.step !== undefined ? `${String(entry.step)}${entry.stepName ? ` <small class="mu">${esc(entry.stepName.split(' › ').at(-1) ?? '')}</small>` : ''}` : esc(t.none)}</td><td>${esc(iterationOf(entry) || t.none)}</td></tr>`,
+        `<tr class="tr-${entry.origin.toLowerCase()}"><td><code class="lib-key">${esc(entry.key)}</code></td><td><span class="tr-o ${entry.origin.toLowerCase()}">${esc(t.origins[entry.origin] ?? entry.origin)}</span></td><td>${entry.masked ? `<small class="mu">${esc(t.masked)}</small>` : entry.withheld ? `<small class="mu">${esc(t.withheld)}</small>` : entry.value !== undefined ? `<span class="tr-v">${esc(entry.value)}</span>` : esc(t.none)}</td><td>${esc(entry.block ?? t.none)}</td><td>${entry.step !== undefined ? `${String(entry.step)}${entry.stepName ? ` <small class="mu">${esc(entry.stepName.split(' › ').at(-1) ?? '')}</small>` : ''}` : esc(t.none)}</td><td>${esc(iterationOf(entry) || t.none)}</td></tr>`,
     )
     .join('');
   const keys = [...new Set(trace.filter((entry) => entry.origin !== 'ITERATION').map((entry) => entry.key))];

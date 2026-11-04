@@ -14,6 +14,7 @@ import { flowsDirOf } from '../../src/sdk/server/platform.js';
 import { engineDefaults } from '../../src/sdk/server/project.js';
 import { startSdkServer, type RunningSdkServer } from '../../src/sdk/server/server.js';
 import { startLoopApp, type LoopApp } from '../fixtures/loop-app.js';
+import { keepTraceValues } from '../fixtures/trace-values.js';
 
 /**
  * LES BOUCLES, RÉELLEMENT : REPEAT, FOR_EACH (attente, génération et capture dans le corps), WHILE (arrêt
@@ -67,6 +68,8 @@ beforeAll(async () => {
     ...engineDefaults(),
     project: { name: 'Boucles', targetUrl: `${app.url}/`, framework: 'other' },
   });
+  // Les valeurs de la trace des données sont vérifiées ici : le projet les garde (défaut : non).
+  await keepTraceValues(path.join(workspace, project.id));
   environment = await client.environments.create(project.id, {
     name: 'Recette',
     kind: 'TEST',

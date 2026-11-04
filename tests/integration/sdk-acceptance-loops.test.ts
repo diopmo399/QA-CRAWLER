@@ -15,6 +15,7 @@ import { flowsDirOf } from '../../src/sdk/server/platform.js';
 import { engineDefaults } from '../../src/sdk/server/project.js';
 import { startSdkServer, type RunningSdkServer } from '../../src/sdk/server/server.js';
 import { startLoopApp, type LoopApp } from '../fixtures/loop-app.js';
+import { keepTraceValues } from '../fixtures/trace-values.js';
 
 /**
  * LE SCÉNARIO D'ACCEPTATION, RÉELLEMENT (moteur Playwright, application de test) :
@@ -190,6 +191,8 @@ beforeAll(async () => {
     ...engineDefaults(),
     project: { name: 'Requests', targetUrl: `${app.url}/`, framework: 'other' },
   });
+  // Les valeurs de la trace des données sont vérifiées ici : le projet les garde (défaut : non).
+  await keepTraceValues(path.join(workspace, project.id));
   const flows = await flowsDirOf(path.join(workspace, project.id));
   for (const [folder, block] of Object.entries(BLOCKS)) {
     await mkdir(path.join(flows, folder), { recursive: true });

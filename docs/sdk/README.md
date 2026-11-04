@@ -541,6 +541,9 @@ capturée (`CAPTURED`), variable d'itération (`ITERATION`) ou lecture (`USED`).
 
 - **Contenu** : la clé, la valeur, l'étape, le bloc (d'après « Bloc › étape ») et les itérations en cours.
 - **Masquage** : une clé sensible n'a jamais de valeur (`masked: true`).
+- **Rétention** : les autres valeurs ne sont gardées que si la mission le permet (`testData.traceValues: true`
+  dans la section `mission` du fichier projet). Par défaut, l'entrée est gardée sans sa valeur
+  (`withheld: true`) et les variables des itérations n'ont que leur numéro (`<as>.index`).
 
 **Sorties ajoutées** : `library.addOutput(projectId, name, { key, source, … })` insère une étape `capture`
 dans un bloc seul dans son fichier, après l'étape `after` (par défaut : à la fin).
