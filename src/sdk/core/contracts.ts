@@ -1628,8 +1628,18 @@ export interface LibraryBlockDetails {
 }
 
 export type LibraryAddInput =
-  | { from: 'scenario'; scenario: string; name: string; description?: string }
+  | { from: 'scenario'; scenario: string; name: string; description?: string; contract?: DeclaredContract }
   | { from: 'recording'; recording: string; groupId: string; name: string; description?: string };
+
+/** La vérification, sans rien écrire, d'un scénario qui deviendrait un bloc (assistant « Ajouter un bloc »). */
+export interface LibraryBlockCheck {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  steps: number;
+  version: number;
+  contract?: BlockContract;
+}
 
 /** Ce qu'un scénario deviendrait en bloc, avant de l'ajouter (aucune valeur de donnée). */
 export interface LibrarySourcePreview {

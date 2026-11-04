@@ -1,3 +1,4 @@
+import { WIZARD_CSS } from './dashboard-library-wizard.js';
 import { INCIDENT_ATTACHMENTS_CSS } from './incident-attachments.js';
 import { JOURNEY_CSS } from './dashboard-journey.js';
 import { INCIDENT_CODE_CSS } from './incident-code.js';
@@ -701,7 +702,7 @@ form.col[data-action^="lib-"]{display:flex;flex-direction:column;gap:12px}
 .lib-layouts{align-self:flex-end;margin-bottom:2px}
 /* Le catalogue, puis le compositeur visuel (palette, scène, propriétés : dashboard-journey). */
 .lib-ios-col{flex-direction:column;gap:6px}
-.lib-catalog .lib-cards.grid{max-height:520px;overflow:auto;padding-right:4px}
+.lib-tabpanel .lib-catalog .lib-cards.grid{max-height:calc(100vh - 300px);overflow:auto;padding-right:4px}
 /* La fiche d'un bloc (panneau à onglets). */
 .lib-fiche{width:min(640px,100vw)}
 .lib-fiche-m{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}
@@ -1207,6 +1208,7 @@ li.info .ed-sev{color:var(--qa-color-primary)}
 @media (max-height:559px),(max-width:599px){.dash:has(.ws-root){height:auto}}
 /* L'espace d'investigation : primitives partagées, structure, graphe, chronologie, traçabilité frontend, code, diagnostic, coquille. */
 ${JOURNEY_CSS}
+${WIZARD_CSS}
 ${INCIDENT_PARTS_CSS}
 ${INCIDENT_UX_CSS}
 ${INCIDENT_GRAPH_CSS}

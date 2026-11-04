@@ -1,6 +1,8 @@
 import { QaCrawlerError, type QaCrawlerClient } from '../core/client.js';
 import {
+  distanceToPoints,
   edgePath,
+  edgePoints,
   NODE_SIZE,
   portOf,
   type Journey,
@@ -15,6 +17,7 @@ import {
   connect,
   duplicateNode,
   emptyJourneyUi,
+  insertOnEdge,
   journeyText,
   logicKey,
   moveBlock,
@@ -85,6 +88,7 @@ export class JourneyController {
   private drag: Drag | undefined;
   private carried: Carried | undefined;
   private checkTimer: ReturnType<typeof setTimeout> | undefined;
+  private toastTimer?: ReturnType<typeof setTimeout>;
   private checkSequence = 0;
   /** Le paramètre « Relier à » choisi dans le panneau (cible, branche). */
   private connectTo = '';
@@ -210,15 +214,60 @@ export class JourneyController {
 
   // ── Actions ────────────────────────────────────────────────────────────────────────────────
 
-  /** Ajoute un bloc de la bibliothèque au parcours (bouton d'une carte, de la fiche ou de la palette). */
-  addBlockNamed(name: string): void {
+  /** L'outil « relier » : un premier clic choisit le départ, le second relie (branche libre d'une condition). */
+  private connectClick(id: string): void {
+    const ui = this.ui;
+    if (!ui.connectFrom || ui.connectFrom === id) {
+      ui.connectFrom = ui.connectFrom === id ? undefined : id;
+      this.host.paint();
+      return;
+    }
+    const from = ui.journey.graph.nodes.find((node) => node.id === ui.connectFrom);
+    const taken = ui.journey.graph.edges
+      .filter((edge) => edge.from === ui.connectFrom)
+      .map((edge) => edge.branch);
+    const branch = from?.kind === 'CONDITION' ? (taken.includes('YES') ? 'NO' : 'YES') : undefined;
+    const refused = connect(ui, ui.connectFrom, id, branch);
+    ui.connectFrom = undefined;
+    if (refused) {
+      ui.error = refused;
+      this.host.paint();
+      return;
+    }
+    this.changed();
+  }
+
+  /**
+   * Ajoute un bloc de la bibliothèque au parcours (bouton d'une carte, de la fiche, de la palette ou outil du
+   * diagramme) : le bloc ajouté est choisi, ses propriétés s'ouvrent, une confirmation discrète le dit.
+   */
+  addBlockNamed(name: string, at?: { x: number; y: number }): void {
     const block = this.host.state.lib.blocks?.find((entry) => entry.name === name);
     if (!block || !this.publish) return;
-    const id = addBlock(this.ui, block);
+    const lib = this.host.state.lib;
+    lib.tab = 'composer';
+    const id = addBlock(this.ui, block, at ?? {});
+    this.added(block.name);
     this.changed();
     this.focus(
       `[data-jn-node="${CSS.escape(id)}"] [data-action="jn-select"], .jn-node[data-jn-node="${CSS.escape(id)}"]`,
     );
+  }
+
+  /** Après un ajout réussi : propriétés du bloc ouvertes (onglet Paramètres), confirmation discrète. */
+  private added(name: string): void {
+    const ui = this.ui;
+    ui.picked = name;
+    ui.propsTab = 'params';
+    if (this.host.state.lib.propsOpen === false) this.host.state.lib.propsOpen = true;
+    this.host.state.lib.wide = false;
+    ui.toast = journeyText(this.host.state).toastAdded(name);
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => {
+      this.toastTimer = undefined;
+      this.ui.toast = undefined;
+      this.host.paint();
+    }, 4000);
   }
 
   click(action: string, target: HTMLElement): boolean {
@@ -239,10 +288,13 @@ export class JourneyController {
         return true;
       }
       case 'jn-select':
-        if (data.node) {
-          ui.selected = { kind: 'node', id: data.node };
-          this.host.paint();
+        if (!data.node) return true;
+        if (ui.tool === 'connect' && this.publish && ui.journey.mode === 'DIAGRAM') {
+          this.connectClick(data.node);
+          return true;
         }
+        ui.selected = { kind: 'node', id: data.node };
+        this.host.paint();
         return true;
       case 'jn-select-edge':
         if (data.edge) {
@@ -361,6 +413,96 @@ export class JourneyController {
         ui.zoom = 1;
         this.host.paint();
         return true;
+      case 'jn-tab': {
+        const tab = data.tab === 'catalog' || data.tab === 'diagnostics' ? data.tab : 'composer';
+        this.host.state.lib.tab = tab;
+        this.host.paint();
+        this.focus(`#lib-tab-${tab}`);
+        if (tab === 'composer' && ui.journey.mode === 'DIAGRAM') this.fit();
+        return true;
+      }
+      case 'jn-panel': {
+        const open = data.open === '1';
+        const lib = this.host.state.lib;
+        lib.wide = false;
+        if (data.panel === 'recent') lib.recentOpen = open;
+        else lib.propsOpen = open;
+        this.host.paint();
+        return true;
+      }
+      case 'jn-wide':
+        this.host.state.lib.wide = !this.host.state.lib.wide;
+        this.host.paint();
+        if (ui.journey.mode === 'DIAGRAM') this.fit();
+        return true;
+      case 'jn-pick':
+        ui.picked = data.block;
+        this.host.paint();
+        return true;
+      case 'jn-tool':
+        ui.tool = data.tool === 'connect' ? 'connect' : 'select';
+        ui.connectFrom = undefined;
+        this.host.paint();
+        return true;
+      case 'jn-tool-block': {
+        const center = this.visibleCenter();
+        if (ui.picked)
+          this.addBlockNamed(
+            ui.picked,
+            center ? { x: center.x - NODE_SIZE.BLOCK.w / 2, y: center.y - NODE_SIZE.BLOCK.h / 2 } : undefined,
+          );
+        return true;
+      }
+      case 'jn-delete-selection':
+        if (ui.selected && this.publish) {
+          const done =
+            ui.selected.kind === 'node' ? removeNode(ui, ui.selected.id) : removeEdge(ui, ui.selected.id);
+          if (done) this.changed('[data-jn-canvas]');
+        }
+        return true;
+      case 'jn-edit':
+        if (data.node) {
+          ui.selected = { kind: 'node', id: data.node };
+          ui.propsTab = 'params';
+          this.host.state.lib.propsOpen = true;
+          this.host.state.lib.wide = false;
+          this.host.paint();
+          this.focus(
+            '.jn-props #jn-pp-params select, .jn-props #jn-pp-params input, .jn-props input[data-jn="label"], .jn-props [data-action="jn-props-tab"]',
+          );
+        }
+        return true;
+      case 'jn-props-tab':
+        ui.propsTab = data.tab === 'io' ? 'io' : data.tab === 'details' ? 'details' : 'params';
+        this.host.paint();
+        this.focus(`#jn-pt-${ui.propsTab}`);
+        return true;
+      case 'jn-insert-yes': {
+        const pending = ui.pendingInsert;
+        ui.pendingInsert = undefined;
+        if (!pending) return true;
+        const refused = insertOnEdge(ui, pending.edge, pending.node);
+        if (refused) {
+          ui.error = refused;
+          this.host.paint();
+          return true;
+        }
+        this.changed();
+        return true;
+      }
+      case 'jn-insert-no':
+        ui.pendingInsert = undefined;
+        this.host.paint();
+        return true;
+      case 'jn-toast-close':
+        ui.toast = undefined;
+        if (this.toastTimer) clearTimeout(this.toastTimer);
+        this.toastTimer = undefined;
+        this.host.paint();
+        return true;
+      case 'jn-focus-palette':
+        this.focus('.jn-palette input[data-jn="palette"]');
+        return true;
       case 'jn-group': {
         // Le repli natif de <details> suit ce clic : l'état est gardé pour les redessins.
         const group = data.group ?? '';
@@ -390,6 +532,10 @@ export class JourneyController {
           ui.journey.name = value.slice(0, 80);
           ui.dirty = true;
         }
+        return true;
+      case 'category':
+        ui.category = value;
+        this.host.paint();
         return true;
       case 'blockName':
         // Pas de redessin (comme le nom du parcours) : le clic sur « Créer le bloc » n'est pas avalé.
@@ -486,6 +632,13 @@ export class JourneyController {
       const done =
         ui.selected.kind === 'node' ? removeNode(ui, ui.selected.id) : removeEdge(ui, ui.selected.id);
       if (done) this.changed('[data-jn-stage]');
+      return true;
+    }
+    if (event.key === 'Escape' && (ui.connectFrom || ui.pendingInsert || ui.tool === 'connect')) {
+      ui.connectFrom = undefined;
+      ui.pendingInsert = undefined;
+      ui.tool = 'select';
+      this.host.paint();
       return true;
     }
     if (event.key === 'Escape' && ui.selected) {
@@ -678,7 +831,28 @@ export class JourneyController {
     const target = event.target as Element;
     for (const element of this.host.root.querySelectorAll('.jn-gap.over')) element.classList.remove('over');
     target.closest('.jn-gap')?.classList.add('over');
-    target.closest('[data-jn-canvas]')?.classList.add('drop');
+    const canvas = target.closest<HTMLElement>('[data-jn-canvas]');
+    canvas?.classList.add('drop');
+    for (const element of this.host.root.querySelectorAll('.jn-edge.drop')) element.classList.remove('drop');
+    if (canvas && this.carried?.kind === 'block') {
+      const edge = this.edgeNear(this.worldPoint(canvas, event.clientX, event.clientY));
+      if (edge) this.host.root.querySelector(`[data-jn-edge="${CSS.escape(edge)}"]`)?.classList.add('drop');
+    }
+  }
+
+  /** La connexion sous un point du diagramme (à quelques pixels près), pour y déposer un bloc. */
+  private edgeNear(point: { x: number; y: number }): string | undefined {
+    const graph = this.ui.journey.graph;
+    let best: { id: string; distance: number } | undefined;
+    for (const edge of graph.edges) {
+      const from = graph.nodes.find((node) => node.id === edge.from);
+      const to = graph.nodes.find((node) => node.id === edge.to);
+      if (!from || !to) continue;
+      const distance = distanceToPoints(edgePoints(from, to, edge.branch), point);
+      if (distance <= 14 / this.ui.zoom && (!best || distance < best.distance))
+        best = { id: edge.id, distance };
+    }
+    return best?.id;
   }
 
   private drop(event: DragEvent): void {
@@ -692,8 +866,17 @@ export class JourneyController {
       const point = this.worldPoint(zone.canvas, event.clientX, event.clientY);
       if (carried.kind === 'block') {
         const block = blocks.find((entry) => entry.name === carried.name);
-        if (block)
-          addBlock(ui, block, { x: point.x - NODE_SIZE.BLOCK.w / 2, y: point.y - NODE_SIZE.BLOCK.h / 2 });
+        if (block) {
+          // Déposé sur une connexion : le bloc est posé, et son insertion entre les deux nœuds est proposée.
+          const edge = this.edgeNear(point);
+          const id = addBlock(ui, block, {
+            x: point.x - NODE_SIZE.BLOCK.w / 2,
+            y: point.y - NODE_SIZE.BLOCK.h / 2,
+          });
+          ui.pendingInsert = edge ? { edge, node: id } : undefined;
+          this.host.state.lib.tab = 'composer';
+          this.added(block.name);
+        }
       } else if (carried.kind === 'shape')
         addShape(
           ui,
@@ -706,7 +889,10 @@ export class JourneyController {
       const index = zone.gap ?? Number.MAX_SAFE_INTEGER;
       if (carried.kind === 'block') {
         const block = order.find((entry) => entry.name === carried.name);
-        if (block) addBlock(ui, block, { index });
+        if (block) {
+          addBlock(ui, block, { index });
+          this.added(block.name);
+        }
       } else if (carried.kind === 'node') {
         const cards = [...this.host.root.querySelectorAll<HTMLElement>('.jn-card[data-jn-node]')].map(
           (element) => element.dataset.jnNode,
@@ -723,7 +909,7 @@ export class JourneyController {
   private endCarry(): void {
     this.carried = undefined;
     for (const element of this.host.root.querySelectorAll(
-      '.jn-gap.over, .jn-card.moving, .jn-dragging, .jn-canvas.drop',
+      '.jn-gap.over, .jn-card.moving, .jn-dragging, .jn-canvas.drop, .jn-edge.drop',
     ))
       element.classList.remove('over', 'moving', 'jn-dragging', 'drop');
   }
@@ -747,7 +933,7 @@ export class JourneyController {
     if (event.button !== 0 || this.ui.journey.mode !== 'DIAGRAM') return;
     const target = event.target as Element | null;
     const canvas = target?.closest<HTMLElement>('[data-jn-canvas]');
-    if (!target || !canvas || target.closest('.jn-tools')) return;
+    if (!target || !canvas || target.closest('.jn-tools-v, .jn-float, .jn-insert, .jn-toast')) return;
     const ui = this.ui;
     const port = target.closest<HTMLElement>('[data-jn-port]');
     if (port && this.publish) {

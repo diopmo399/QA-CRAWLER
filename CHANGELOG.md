@@ -32,6 +32,27 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Fenêtre « Ajouter un bloc »** : une grande fenêtre centrée (la page reste visible, le parcours en cours
+  n'est pas touché) avec un assistant en quatre étapes — Informations (nom vérifié avant l'envoi,
+  description, catégorie déduite de l'origine, version initiale v1, origine : un scénario ou un groupe
+  d'étapes d'un enregistrement avec les étapes retenues), Entrées / Sorties (contrat déduit des étapes, ou
+  déclaré explicitement), Paramètres (les entrées, chacune obligatoire ou facultative), Confirmation
+  (récapitulatif et vérifications réelles du serveur). « Créer le bloc » n'est possible qu'après une
+  vérification réussie ; un échec garde la saisie ; fermer après une saisie demande confirmation. Le type
+  de bloc n'est pas un choix : les conditions et jonctions sont des éléments du diagramme.
+- **`library.check`** (`POST /library/check`) : vérifie, sans rien écrire, ce qu'un scénario deviendrait en
+  bloc (étapes exécutables, schéma, blocs rejoués existants, nom libre, contrat déduit ou déclaré).
+  `library.add` accepte un contrat déclaré, refusé (422, rien n'est écrit) s'il ne tient pas.
+- **Bibliothèque mise en page comme la maquette** : blocs récemment ouverts à gauche (repliables), onglets
+  « Catalogue de blocs » / « Compositeur de parcours » / « Diagnostics », panneau droit « Propriétés »
+  (onglets Paramètres, Entrées/Sorties, Détails) et « Validation du parcours » tirée de la vraie
+  vérification (jamais « valide » sans elle), actions Enregistrer / Vérifier / Créer en tête. Diagramme :
+  connexions orthogonales qui suivent les nœuds, conditions en losange, étiquettes Oui / Non, début et
+  fin en capsules, barre d'outils (sélection, bloc choisi, condition, jonction, fin, relier par clics,
+  supprimer). Ajout d'un bloc : choisi dans le catalogue (sélection par catégorie réelle), déposé à un
+  endroit sans connexion implicite, ou sur une connexion avec insertion proposée ; le bloc ajouté est
+  sélectionné (barre d'actions Modifier / Dupliquer / Supprimer), ses propriétés s'ouvrent et une
+  confirmation discrète s'affiche. Vérifié à 1366 × 768, 1440 × 900 et 1920 × 1080.
 - **Compositeur visuel de parcours** dans la Bibliothèque : le même parcours se construit en **mode
   linéaire** (cartes glissées depuis le catalogue, insertion entre deux cartes, réordonnancement,
   duplication, retrait) ou en **mode libre** (diagramme : début, blocs, conditions Oui/Non, jonctions,

@@ -22,6 +22,7 @@ import {
   acceptBlocks,
   addGroupToLibrary,
   addScenarioToLibrary,
+  checkScenarioBlock,
   blockDetails,
   checkCompositionOf,
   compareWithSource,
@@ -2391,6 +2392,22 @@ async function handleLibrary(
     json(await compositionDrift(project.dir));
     return;
   }
+  if (item === 'check' && action === undefined && method === 'POST') {
+    // Ce qu'un scénario deviendrait en bloc, vérifié sans rien écrire (assistant « Ajouter un bloc »).
+    const body = await readJson(request);
+    const scenario = textOf(body.scenario, 120);
+    if (!scenario) throw new HttpError(400, 'BAD_REQUEST', 'scenario is required');
+    json(
+      await libraryCall(() =>
+        checkScenarioBlock(project.dir, {
+          scenario,
+          name: body.name,
+          ...(body.contract === undefined ? {} : { contract: body.contract }),
+        }),
+      ),
+    );
+    return;
+  }
   if (item !== undefined && action === undefined && method === 'GET') {
     json(await libraryCall(() => blockDetails(project.dir, decodeURIComponent(item))));
     return;
@@ -2416,7 +2433,12 @@ async function handleLibrary(
       if (!scenario) throw new HttpError(400, 'BAD_REQUEST', 'scenario is required');
       json(
         await libraryCall(() =>
-          addScenarioToLibrary(project.dir, { scenario, name, ...(description ? { description } : {}) }),
+          addScenarioToLibrary(project.dir, {
+            scenario,
+            name,
+            ...(description ? { description } : {}),
+            ...(body.contract === undefined ? {} : { contract: body.contract }),
+          }),
         ),
         201,
       );

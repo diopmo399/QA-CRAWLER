@@ -1,13 +1,14 @@
 import type { LibraryBlockView } from '../core/contracts.js';
 import {
   chain,
-  edgePath,
+  edgePoints,
   emptyJourney,
   freeId,
   linearOrder,
   NODE_SIZE,
+  journeyStructure,
   pathLetter,
-  portOf,
+  pointsPath,
   type Journey,
   type JourneyBranch,
   type JourneyCheck,
@@ -67,9 +68,25 @@ export interface JourneyUi {
   /** Le nom du bloc à créer depuis le parcours (absent : formulaire fermé). */
   blockName?: string;
   converting?: boolean;
+  /** Le bloc choisi dans le catalogue (surligné ; l'outil « bloc » du diagramme l'ajoute). */
+  picked?: string;
+  /** La catégorie affichée dans le catalogue (une origine réelle des blocs ; vide : toutes). */
+  category: string;
+  /** L'outil du diagramme : sélectionner/déplacer, ou relier deux nœuds par clics. */
+  tool: 'select' | 'connect';
+  connectFrom?: string;
+  /** L'onglet du panneau de propriétés d'un bloc. */
+  propsTab: 'params' | 'io' | 'details';
+  /** La confirmation discrète d'un ajout réussi (s'efface seule). */
+  toast?: string;
+  /** Un bloc déposé sur une connexion : proposer de l'insérer entre ses deux nœuds. */
+  pendingInsert?: { edge: string; node: string };
 }
 
 export const emptyJourneyUi = (): JourneyUi => ({
+  category: '',
+  tool: 'select',
+  propsTab: 'params',
   journey: emptyJourney(''),
   dirty: false,
   undo: [],
@@ -168,8 +185,10 @@ export function addBlock(
     node.x = Math.round(at.x ?? -NODE_SIZE.BLOCK.w / 2);
     node.y = Math.round(at.y ?? last + 124);
     graph.nodes.push(node);
-    // Le nœud choisi n'a pas encore de suite : le nouveau bloc s'y rattache.
-    const selected = ui.selected?.kind === 'node' ? nodeOf(graph, ui.selected.id) : undefined;
+    // Ajouté par un clic (sans position) après un nœud sans suite : le nouveau bloc s'y rattache. Un bloc
+    // déposé à un endroit n'est jamais relié d'office (aucune connexion ambiguë).
+    const selected =
+      at.x === undefined && ui.selected?.kind === 'node' ? nodeOf(graph, ui.selected.id) : undefined;
     if (
       selected &&
       (selected.kind === 'START' || selected.kind === 'BLOCK' || selected.kind === 'JOIN') &&
@@ -316,6 +335,33 @@ export function removeEdge(ui: JourneyUi, id: string): boolean {
 }
 
 /** Le paramètre d'une instance pour une entrée de son contrat (undefined : l'amont ou les données). */
+/**
+ * Insère un bloc posé (sans connexion) au milieu d'une connexion : départ → bloc → arrivée. La branche
+ * d'une condition passe au premier segment. Les autres nœuds ne bougent pas. Refus expliqué sinon.
+ */
+export function insertOnEdge(ui: JourneyUi, edgeId: string, nodeId: string): string | undefined {
+  const graph = ui.journey.graph;
+  const edge = graph.edges.find((entry) => entry.id === edgeId);
+  const node = nodeOf(graph, nodeId);
+  if (!edge || !node || node.kind !== 'BLOCK') return 'connexion ou bloc introuvable';
+  if (graph.edges.some((entry) => entry.from === nodeId || entry.to === nodeId))
+    return 'ce bloc est déjà relié : retirez ses connexions d’abord';
+  remember(ui);
+  const rest = graph.edges.filter((entry) => entry.id !== edgeId);
+  const first = { id: edge.id, from: edge.from, to: nodeId, ...(edge.branch ? { branch: edge.branch } : {}) };
+  const second = {
+    id: freeId(
+      'e',
+      graph.edges.map((entry) => entry.id),
+    ),
+    from: nodeId,
+    to: edge.to,
+  };
+  graph.edges = [...rest, first, second];
+  ui.selected = { kind: 'node', id: nodeId };
+  return undefined;
+}
+
 export function setParam(ui: JourneyUi, id: string, key: string, param: JourneyParam | undefined): void {
   const node = nodeOf(ui.journey.graph, id);
   if (node?.kind !== 'BLOCK') return;
@@ -511,6 +557,58 @@ const FR = {
   nameRequired: 'Donnez un nom au parcours pour l’enregistrer.',
   saveFirst: 'Enregistrez le parcours avant de créer ses scénarios.',
   checkFirst: 'La vérification doit être à jour et sans erreur.',
+  displayMode: 'Mode d’affichage :',
+  tabCatalog: 'Catalogue de blocs',
+  tabComposer: 'Compositeur de parcours',
+  tabDiagnostics: 'Diagnostics',
+  allBlocks: 'Tous les blocs',
+  category: 'Catégorie',
+  paletteSearchShort: 'Rechercher un bloc…',
+  picked: (name: string) => `« ${name} » choisi : cliquez sur + ou glissez-le dans le parcours.`,
+  toolsLabel: 'Outils du diagramme',
+  toolSelect: 'Sélectionner et déplacer',
+  toolBlock: 'Ajouter le bloc choisi dans le catalogue',
+  toolBlockNone: 'Choisissez d’abord un bloc dans le catalogue',
+  toolConnect: 'Relier : cliquez le départ puis l’arrivée',
+  toolDelete: 'Supprimer la sélection',
+  connectPickFrom: 'Relier : cliquez le nœud de départ.',
+  connectPickTo: (name: string) =>
+    `Relier depuis « ${name} » : cliquez le nœud d’arrivée (Échap pour annuler).`,
+  propsBlock: 'Propriétés du bloc',
+  propsShape: 'Propriétés',
+  propsJourneyTitle: 'Propriétés du parcours',
+  propsEdge: 'Propriétés de la connexion',
+  tabParams: 'Paramètres',
+  tabIo: 'Entrées/Sorties',
+  tabDetails: 'Détails',
+  openSheet: 'Voir la fiche du bloc',
+  edit: 'Modifier',
+  more: 'Plus d’actions',
+  deselect: 'Désélectionner',
+  validationTitle: 'Validation du parcours',
+  validNot: 'Pas encore vérifié',
+  validItems: {
+    structure: ['Structure et connexions correctes', 'Structure ou connexions à corriger'],
+    deps: ['Dépendances satisfaites', 'Dépendances non satisfaites'],
+    conflicts: ['Aucune donnée en conflit', 'Données en conflit'],
+    versions: ['Versions compatibles', 'Versions à vérifier ou à accepter'],
+  } as Record<string, [string, string]>,
+  validIssues: (n: number) => `${String(n)} problème(s)`,
+  toastAdded: (name: string) => `Bloc « ${name} » ajouté au parcours`,
+  close: 'Fermer',
+  insertOnEdge: (block: string, from: string, to: string) => `Insérer « ${block} » entre ${from} et ${to} ?`,
+  insertYes: 'Insérer',
+  insertNo: 'Laisser sans connexion',
+  addHere: 'Ajouter un bloc ici',
+  recentShow: 'Afficher les blocs récemment ouverts',
+  recentHide: 'Masquer les blocs récemment ouverts',
+  propsShow: 'Afficher les propriétés',
+  propsHide: 'Masquer les propriétés',
+  wide: 'Agrandir le compositeur',
+  narrow: 'Rétablir les panneaux',
+  conditionsTitle: 'Conditions',
+  versionsDeps: 'Versions et dépendances',
+  noCondition: 'Aucune condition.',
   outputsTitle: 'Sorties du parcours',
   outputsGuaranteed: 'Produites sur tous les chemins',
   outputsPartial: 'Seulement sur certains chemins',
@@ -653,6 +751,57 @@ const EN: Text = {
   nameRequired: 'Name the journey to save it.',
   saveFirst: 'Save the journey before creating its scenarios.',
   checkFirst: 'The check must be up to date and without error.',
+  displayMode: 'Display mode:',
+  tabCatalog: 'Block catalogue',
+  tabComposer: 'Journey composer',
+  tabDiagnostics: 'Diagnostics',
+  allBlocks: 'All blocks',
+  category: 'Category',
+  paletteSearchShort: 'Search a block…',
+  picked: (name: string) => `“${name}” picked: click + or drag it into the journey.`,
+  toolsLabel: 'Diagram tools',
+  toolSelect: 'Select and move',
+  toolBlock: 'Add the block picked in the catalogue',
+  toolBlockNone: 'Pick a block in the catalogue first',
+  toolConnect: 'Connect: click the start, then the end',
+  toolDelete: 'Delete the selection',
+  connectPickFrom: 'Connect: click the start node.',
+  connectPickTo: (name: string) => `Connect from “${name}”: click the end node (Esc to cancel).`,
+  propsBlock: 'Block properties',
+  propsShape: 'Properties',
+  propsJourneyTitle: 'Journey properties',
+  propsEdge: 'Connection properties',
+  tabParams: 'Parameters',
+  tabIo: 'Inputs/Outputs',
+  tabDetails: 'Details',
+  openSheet: 'Open the block sheet',
+  edit: 'Edit',
+  more: 'More actions',
+  deselect: 'Deselect',
+  validationTitle: 'Journey validation',
+  validNot: 'Not checked yet',
+  validItems: {
+    structure: ['Structure and connections correct', 'Structure or connections to fix'],
+    deps: ['Dependencies satisfied', 'Dependencies not satisfied'],
+    conflicts: ['No conflicting data', 'Conflicting data'],
+    versions: ['Compatible versions', 'Versions to check or accept'],
+  },
+  validIssues: (n: number) => `${String(n)} issue(s)`,
+  toastAdded: (name: string) => `Block “${name}” added to the journey`,
+  close: 'Close',
+  insertOnEdge: (block: string, from: string, to: string) => `Insert “${block}” between ${from} and ${to}?`,
+  insertYes: 'Insert',
+  insertNo: 'Leave unconnected',
+  addHere: 'Add a block here',
+  recentShow: 'Show recently opened blocks',
+  recentHide: 'Hide recently opened blocks',
+  propsShow: 'Show properties',
+  propsHide: 'Hide properties',
+  wide: 'Enlarge the composer',
+  narrow: 'Restore the panels',
+  conditionsTitle: 'Conditions',
+  versionsDeps: 'Versions and dependencies',
+  noCondition: 'No condition.',
   outputsTitle: 'Journey outputs',
   outputsGuaranteed: 'Produced on every path',
   outputsPartial: 'Only on some paths',
@@ -706,12 +855,11 @@ function statusChips(state: DashboardState): string {
   ].join('')}</ul>`;
 }
 
-function toolbar(state: DashboardState, publish: boolean): string {
+/** L'en-tête du parcours dans le compositeur : son nom (titre modifiable), les parcours enregistrés, son état. */
+function journeyHead(state: DashboardState, publish: boolean): string {
   const t = journeyText(state);
   const ui = state.lib.journey;
   const journey = ui.journey;
-  const check = freshCheck(ui);
-  const busy = Boolean(ui.saving || ui.publishing || ui.checking);
   const list = ui.list ?? [];
   const opener =
     list.length > 0
@@ -722,28 +870,55 @@ function toolbar(state: DashboardState, publish: boolean): string {
           )
           .join('')}</select></label>`
       : '';
-  const modes = `<span class="ed-seg jn-modes" role="radiogroup" aria-label="${esc(t.modesLabel)}">${(
-    ['LINEAR', 'DIAGRAM'] as const
-  )
-    .map(
-      (mode) =>
-        `<button type="button" role="radio" id="jn-mode-${mode}" data-action="jn-mode" data-mode="${mode}" aria-checked="${String(journey.mode === mode)}">${icon(mode === 'LINEAR' ? 'menu' : 'explorations')}<span>${esc(t.modes[mode])}</span></button>`,
-    )
-    .join('')}</span>`;
-  const publishLabel =
-    check?.publishable === 'PER_PATH' ? t.publishPaths(check.paths.length) : t.publishSingle;
-  const canPublish = publish && !busy && check?.ok === true && !ui.dirty && ui.savedName !== undefined;
-  const actions = publish
-    ? `<div class="jn-acts"><button type="button" class="btn small ghost icon-only" data-action="jn-undo" aria-label="${esc(t.undo)}" title="${esc(t.undo)}"${ui.undo.length === 0 ? ' disabled' : ''}>${icon('undo')}</button><button type="button" class="btn small ghost icon-only jn-redo" data-action="jn-redo" aria-label="${esc(t.redo)}" title="${esc(t.redo)}"${ui.redo.length === 0 ? ' disabled' : ''}>${icon('undo')}</button><button type="button" class="btn" data-action="jn-check"${busy ? ' disabled' : ''} aria-busy="${String(Boolean(ui.checking))}">${icon('check')}<span>${esc(ui.checking ? t.checking : t.check)}</span></button><button type="button" class="btn" data-action="jn-save"${busy ? ' disabled' : ''} aria-busy="${String(Boolean(ui.saving))}">${icon('save')}<span>${esc(ui.saving ? t.saving : t.save)}</span></button><button type="button" class="btn primary" data-action="jn-publish"${canPublish ? '' : ' disabled'} aria-busy="${String(Boolean(ui.publishing))}" title="${esc(canPublish ? publishLabel : ui.dirty || !ui.savedName ? t.saveFirst : t.checkFirst)}">${icon('play')}<span>${esc(ui.publishing ? t.publishing : publishLabel)}</span></button></div>`
-    : '';
   const confirm = ui.confirmDiscard
     ? `<div class="jn-confirm" role="group"><p>${esc(ui.confirmDiscard === '\u0000new' ? t.discardNew : t.discard(ui.confirmDiscard))}</p><button type="button" class="btn small primary" data-action="jn-discard-yes">${esc(t.confirm)}</button><button type="button" class="btn small ghost" data-action="jn-discard-no">${esc(t.cancel)}</button></div>`
     : ui.confirmPerPath
       ? `<div class="jn-confirm warn" role="group"><p>${esc(t.perPathConfirm)}</p><button type="button" class="btn small primary" data-action="jn-publish-paths">${esc(t.perPathYes)}</button><button type="button" class="btn small ghost" data-action="jn-publish-cancel">${esc(t.cancel)}</button></div>`
       : '';
-  return `<div class="jn-top"><div class="jn-head"><h2 id="lib-composer-t">${esc(t.title)}</h2>${statusChips(state)}</div>
-<div class="jn-bar"><label class="field jn-name"><span>${esc(t.name)}</span><input data-jn="name" value="${esc(journey.name)}" maxlength="80" autocomplete="off"${publish ? '' : ' disabled'}></label>${opener}${publish ? `<button type="button" class="btn small ghost" data-action="jn-new">${icon('plus')}<span>${esc(t.newJourney)}</span></button>` : ''}${modes}${actions}</div>
-${ui.modeMessage ? `<p class="jn-msg warn" role="alert">${icon('alert')}<span>${esc(ui.modeMessage)}</span></p>` : ''}${confirm}${ui.error ? `<div class="err" role="alert"><p>${esc(ui.error)}</p>${(ui.details ?? []).length > 1 ? `<ul class="plain tight">${(ui.details ?? []).map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : ''}</div>` : ''}${ui.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(ui.notice)}</span></p>` : ''}</div>`;
+  const messages = `${ui.modeMessage ? `<p class="jn-msg warn" role="alert">${icon('alert')}<span>${esc(ui.modeMessage)}</span></p>` : ''}${confirm}${ui.error ? `<div class="err" role="alert"><p>${esc(ui.error)}</p>${(ui.details ?? []).length > 1 ? `<ul class="plain tight">${(ui.details ?? []).map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : ''}</div>` : ''}${ui.notice ? `<p class="notice ok" role="status">${icon('check')}<span>${esc(ui.notice)}</span></p>` : ''}`;
+  return `<div class="jn-head"><span class="jn-head-ic" aria-hidden="true">${icon('cube')}</span><label class="jn-title"><span class="sr">${esc(t.name)}</span><input data-jn="name" value="${esc(journey.name)}" maxlength="80" autocomplete="off" placeholder="${esc(t.name)}" aria-label="${esc(t.name)}"${publish ? '' : ' disabled'}></label>${statusChips(state)}<span class="jn-head-r">${opener}${publish ? `<button type="button" class="btn small ghost" data-action="jn-new">${icon('plus')}<span>${esc(t.newJourney)}</span></button>` : ''}</span></div>${messages}`;
+}
+
+/** Les actions du parcours, en tête de page comme la maquette : Enregistrer, Vérifier, Créer. */
+export function journeyActions(state: DashboardState, publish: boolean): string {
+  if (!publish) return '';
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const check = freshCheck(ui);
+  const busy = Boolean(ui.saving || ui.publishing || ui.checking);
+  const publishLabel =
+    check?.publishable === 'PER_PATH' ? t.publishPaths(check.paths.length) : t.publishSingle;
+  const canPublish = !busy && check?.ok === true && !ui.dirty && ui.savedName !== undefined;
+  return `<div class="jn-acts"><button type="button" class="btn" data-action="jn-save"${busy ? ' disabled' : ''} aria-busy="${String(Boolean(ui.saving))}">${icon('save')}<span>${esc(ui.saving ? t.saving : t.save)}</span></button><button type="button" class="btn" data-action="jn-check"${busy ? ' disabled' : ''} aria-busy="${String(Boolean(ui.checking))}">${icon('check')}<span>${esc(ui.checking ? t.checking : t.check)}</span></button><button type="button" class="btn primary" data-action="jn-publish"${canPublish ? '' : ' disabled'} aria-busy="${String(Boolean(ui.publishing))}" title="${esc(canPublish ? publishLabel : ui.dirty || !ui.savedName ? t.saveFirst : t.checkFirst)}">${icon('play')}<span>${esc(ui.publishing ? t.publishing : publishLabel)}</span></button></div>`;
+}
+
+/** La barre du compositeur : mode d'affichage, annuler/rétablir, vue du diagramme, agrandir. */
+function modeBar(state: DashboardState, publish: boolean): string {
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const journey = ui.journey;
+  const modes = `<span class="jn-modes" role="radiogroup" aria-label="${esc(t.modesLabel)}">${(
+    ['LINEAR', 'DIAGRAM'] as const
+  )
+    .map(
+      (mode) =>
+        `<button type="button" role="radio" id="jn-mode-${mode}" class="btn small${journey.mode === mode ? ' primary' : ''}" data-action="jn-mode" data-mode="${mode}" aria-checked="${String(journey.mode === mode)}">${icon(mode === 'LINEAR' ? 'menu' : 'merge')}<span>${esc(t.modes[mode])}</span></button>`,
+    )
+    .join('')}</span>`;
+  const history = publish
+    ? `<span class="jn-grp"><button type="button" class="btn small ghost icon-only" data-action="jn-undo" aria-label="${esc(t.undo)}" title="${esc(t.undo)}"${ui.undo.length === 0 ? ' disabled' : ''}>${icon('undo')}</button><button type="button" class="btn small ghost icon-only jn-redo" data-action="jn-redo" aria-label="${esc(t.redo)}" title="${esc(t.redo)}"${ui.redo.length === 0 ? ' disabled' : ''}>${icon('undo')}</button></span>`
+    : '';
+  const view =
+    journey.mode === 'DIAGRAM'
+      ? `<span class="jn-grp jn-view"><button type="button" class="btn small ghost icon-only" data-action="jn-fit" aria-label="${esc(t.fit)}" title="${esc(t.fit)}">${icon('maximize')}</button><button type="button" class="btn small ghost icon-only" data-action="jn-zoom" data-step="-1" aria-label="${esc(t.zoomOut)}" title="${esc(t.zoomOut)}">−</button><button type="button" class="btn small ghost jn-zoom" data-action="jn-actual" title="${esc(t.actual)}" aria-live="polite">${String(Math.round(ui.zoom * 100))} %</button><button type="button" class="btn small ghost icon-only" data-action="jn-zoom" data-step="1" aria-label="${esc(t.zoomIn)}" title="${esc(t.zoomIn)}">+</button></span>`
+      : '';
+  const wide = state.lib.wide === true;
+  return `<div class="jn-modebar"><span class="jn-modebar-l">${esc(t.displayMode)}</span>${modes}<span class="jn-modebar-r">${history}${view}<button type="button" class="btn small ghost icon-only" data-action="jn-wide" aria-pressed="${String(wide)}" aria-label="${esc(wide ? t.narrow : t.wide)}" title="${esc(wide ? t.narrow : t.wide)}">${icon(wide ? 'minimize' : 'maximize')}</button></span></div>`;
+}
+
+/** Les catégories du catalogue : les origines réelles des blocs (jamais une liste inventée). */
+function categoryOf(t: Text, block: LibraryBlockView): string {
+  return block.origin?.journey ?? block.origin?.name ?? t.originNone;
 }
 
 function palette(state: DashboardState, publish: boolean): string {
@@ -751,19 +926,26 @@ function palette(state: DashboardState, publish: boolean): string {
   const ui = state.lib.journey;
   const blocks = state.lib.blocks ?? [];
   const query = ui.paletteQuery.trim().toLowerCase();
+  const categories = [...new Set(blocks.map((block) => categoryOf(t, block)))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const category = categories.includes(ui.category) ? ui.category : '';
   const shown = blocks.filter(
     (block) =>
-      !query ||
-      block.name.toLowerCase().includes(query) ||
-      (block.description ?? '').toLowerCase().includes(query),
+      (!category || categoryOf(t, block) === category) &&
+      (!query ||
+        block.name.toLowerCase().includes(query) ||
+        (block.description ?? '').toLowerCase().includes(query)),
   );
   const groups = new Map<string, LibraryBlockView[]>();
   for (const block of shown) {
-    const title = block.origin?.name ?? t.originNone;
+    const title = categoryOf(t, block);
     groups.set(title, [...(groups.get(title) ?? []), block]);
   }
-  const item = (block: LibraryBlockView): string =>
-    `<li class="jn-pal-item${block.state === 'VALID' ? '' : ` ${block.state === 'INVALID' ? 'ko' : 'warn'}`}" draggable="${String(publish)}" data-jn-block="${esc(block.name)}"><span class="jn-pal-ic" aria-hidden="true">${icon('library')}</span><span class="jn-pal-t"><b>${esc(block.name)}</b><small class="mu">${esc(t.version(block.version))} · ${esc(t.steps(block.steps))}</small></span>${publish ? `<button type="button" class="btn small ghost icon-only" data-action="jn-add" data-block="${esc(block.name)}" aria-label="${esc(t.addToJourney(block.name))}" title="${esc(t.addToJourney(block.name))}">${icon('plus')}</button>` : ''}</li>`;
+  const item = (block: LibraryBlockView): string => {
+    const picked = ui.picked === block.name;
+    return `<li class="jn-pal-item${picked ? ' picked' : ''}${block.state === 'VALID' ? '' : ` ${block.state === 'INVALID' ? 'ko' : 'warn'}`}" draggable="${String(publish)}" data-jn-block="${esc(block.name)}"><button type="button" class="jn-pal-pick" data-action="jn-pick" data-block="${esc(block.name)}" aria-pressed="${String(picked)}" title="${esc(`${block.name} · ${t.version(block.version)} · ${t.steps(block.steps)}`)}"><span class="jn-pal-ic" aria-hidden="true">${icon('cube')}</span><span class="jn-pal-t"><b>${esc(block.name)}</b></span><small class="mu jn-pal-v">${esc(t.version(block.version))}</small></button>${publish ? `<button type="button" class="btn small ghost icon-only" data-action="jn-add" data-block="${esc(block.name)}" aria-label="${esc(t.addToJourney(block.name))}" title="${esc(t.addToJourney(block.name))}">${icon('plus')}</button>` : ''}</li>`;
+  };
   const body =
     blocks.length === 0
       ? `<p class="mu">${esc(t.paletteNoBlocks)}</p>`
@@ -772,21 +954,15 @@ function palette(state: DashboardState, publish: boolean): string {
         : [...groups.entries()]
             .map(
               ([title, entries]) =>
-                `<details class="jn-pal-g"${ui.paletteClosed.includes(title) ? '' : ' open'}><summary data-action="jn-group" data-group="${esc(title)}">${esc(title)} <small class="mu">${String(entries.length)}</small></summary><ul class="plain jn-pal-list">${entries.map(item).join('')}</ul></details>`,
+                `<details class="jn-pal-g"${ui.paletteClosed.includes(title) ? '' : ' open'}><summary data-action="jn-group" data-group="${esc(title)}"><span>${esc(title)}</span> <small class="mu">(${String(entries.length)})</small></summary><ul class="plain jn-pal-list">${entries.map(item).join('')}</ul></details>`,
             )
             .join('');
-  const shapes =
-    ui.journey.mode === 'DIAGRAM' && publish
-      ? `<section class="jn-pal-shapes" aria-labelledby="jn-shapes-t"><h3 id="jn-shapes-t">${esc(t.shapesTitle)}</h3><div class="jn-shape-row">${(
-          ['CONDITION', 'JOIN', 'END'] as const
-        )
-          .map(
-            (kind) =>
-              `<button type="button" class="jn-shape ${kind.toLowerCase()}" draggable="true" data-jn-shape="${kind}" data-action="jn-shape" data-kind="${kind}">${esc(t.shapes[kind] ?? kind)}</button>`,
-          )
-          .join('')}</div><small class="mu">${esc(t.shapeHint)}</small></section>`
+  const filter =
+    categories.length > 1
+      ? `<label class="jn-pal-cat"><span class="sr">${esc(t.category)}</span><select data-jn="category" aria-label="${esc(t.category)}"><option value="">${esc(t.allBlocks)}</option>${categories.map((entry) => `<option value="${esc(entry)}"${entry === category ? ' selected' : ''}>${esc(entry)}</option>`).join('')}</select></label>`
       : '';
-  return `<aside class="jn-palette" aria-labelledby="jn-pal-t"><h3 id="jn-pal-t">${esc(t.paletteTitle)}</h3><label class="lib-search jn-pal-search">${icon('search')}<span class="sr">${esc(t.paletteSearch)}</span><input type="search" data-jn="palette" value="${esc(ui.paletteQuery)}" placeholder="${esc(t.paletteSearch)}" autocomplete="off"></label><small class="mu">${esc(t.dragHint)}</small>${body}${shapes}</aside>`;
+  const picked = ui.picked && blocks.some((block) => block.name === ui.picked) ? ui.picked : undefined;
+  return `<aside class="jn-palette" aria-labelledby="jn-pal-t"><h3 id="jn-pal-t">${esc(t.paletteTitle)}</h3><label class="lib-search jn-pal-search">${icon('search')}<span class="sr">${esc(t.paletteSearch)}</span><input type="search" data-jn="palette" value="${esc(ui.paletteQuery)}" placeholder="${esc(t.paletteSearchShort)}" autocomplete="off"></label>${filter}<div class="jn-pal-body">${body}</div><small class="mu jn-pal-hint">${esc(picked && publish ? t.picked(picked) : t.dragHint)}</small></aside>`;
 }
 
 function diagOf(ui: JourneyUi, id: string): { errors: string[]; warnings: string[] } {
@@ -815,14 +991,42 @@ function linearView(state: DashboardState, publish: boolean): string {
         : '';
       const last = index === order.blocks.length - 1;
       const versionMismatch = block && node.version !== undefined && node.version !== block.version;
-      return `${gap(index)}<li class="jn-card${selected ? ' sel' : ''}${tone}" data-jn-node="${esc(node.id)}" draggable="${String(publish)}"><span class="jn-grip" title="${esc(t.grip)}" aria-hidden="true">${icon('grip')}</span><span class="jn-num" aria-hidden="true">${String(index + 1)}</span><button type="button" class="jn-card-b" data-action="jn-select" data-node="${esc(node.id)}" aria-pressed="${String(selected)}"><span class="jn-card-h"><span class="jn-ic" aria-hidden="true">${icon('library')}</span><b>${esc(node.block ?? '?')}</b><small class="mu">${block ? `${esc(t.version(node.version ?? block.version))} · ${esc(t.steps(block.steps))}` : esc(t.unknownBlock)}</small>${block ? `<span class="jn-compat ${versionMismatch ? 'warn' : block.state === 'VALID' ? 'ok' : block.state === 'INVALID' ? 'ko' : 'warn'}">${esc(versionMismatch ? t.newVersion(block.version) : (t.compat[block.state] ?? block.state))}</span>` : ''}</span>${io ? `<span class="jn-ios">${io}</span>` : ''}${diag.errors.length > 0 ? `<span class="jn-err">${icon('alert')}${esc(diag.errors[0] ?? '')}${diag.errors.length > 1 ? ` (+${String(diag.errors.length - 1)})` : ''}</span>` : ''}</button>${
+      return `${gap(index)}<li class="jn-card${selected ? ' sel' : ''}${tone}" data-jn-node="${esc(node.id)}" draggable="${String(publish)}"><span class="jn-num" aria-hidden="true">${String(index + 1)}</span><div class="jn-card-box"><span class="jn-grip" title="${esc(t.grip)}" aria-hidden="true">${icon('grip')}</span><button type="button" class="jn-card-b" data-action="jn-select" data-node="${esc(node.id)}" aria-pressed="${String(selected)}"><span class="jn-card-h"><span class="jn-ic" aria-hidden="true">${icon('cube')}</span><span class="jn-card-t"><b>${esc(node.block ?? '?')}</b><small class="mu">${block ? `${esc(t.version(node.version ?? block.version))} · ${esc(t.steps(block.steps))}` : esc(t.unknownBlock)}</small></span>${block ? `<span class="jn-compat ${versionMismatch ? 'warn' : block.state === 'VALID' ? 'ok' : block.state === 'INVALID' ? 'ko' : 'warn'}">${esc(versionMismatch ? t.newVersion(block.version) : (t.compat[block.state] ?? block.state))}</span>` : ''}</span>${io ? `<span class="jn-ios">${io}</span>` : ''}${diag.errors.length > 0 ? `<span class="jn-err">${icon('alert')}${esc(diag.errors[0] ?? '')}${diag.errors.length > 1 ? ` (+${String(diag.errors.length - 1)})` : ''}</span>` : ''}</button>${
         publish
           ? `<span class="jn-card-a"><button type="button" class="btn small ghost icon-only" data-action="jn-move" data-node="${esc(node.id)}" data-to="${String(index - 1)}" aria-label="${esc(`${t.moveUp} : ${node.block ?? ''}`)}" title="${esc(t.moveUp)}"${index === 0 ? ' disabled' : ''}>${icon('up')}</button><button type="button" class="btn small ghost icon-only" data-action="jn-move" data-node="${esc(node.id)}" data-to="${String(index + 1)}" aria-label="${esc(`${t.moveDown} : ${node.block ?? ''}`)}" title="${esc(t.moveDown)}"${last ? ' disabled' : ''}>${icon('down')}</button><button type="button" class="btn small ghost icon-only" data-action="jn-duplicate" data-node="${esc(node.id)}" aria-label="${esc(`${t.duplicate} : ${node.block ?? ''}`)}" title="${esc(t.duplicate)}">${icon('copy')}</button><button type="button" class="btn small ghost icon-only" data-action="jn-remove" data-node="${esc(node.id)}" aria-label="${esc(`${t.remove} : ${node.block ?? ''}`)}" title="${esc(t.remove)}">${icon('trash')}</button></span>`
           : ''
-      }</li>`;
+      }</div></li>`;
     })
     .join('');
-  return `<ol class="plain jn-line" aria-label="${esc(t.modes.LINEAR)}"><li class="jn-term start">${icon('play')}<span>${esc(t.start)}</span></li>${order.blocks.length === 0 ? `${gap(0)}<li class="jn-empty mu">${esc(t.linearEmpty)}</li>` : `${cards}${gap(order.blocks.length)}`}<li class="jn-term end">${icon('stop')}<span>${esc(t.end)}</span></li></ol>`;
+  const addHere = publish
+    ? `<li class="jn-add-here"><button type="button" class="btn jn-add-here-b" data-action="jn-focus-palette">${icon('plus')}<span>${esc(t.addHere)}</span></button></li>`
+    : '';
+  return `<ol class="plain jn-line" aria-label="${esc(t.modes.LINEAR)}"><li class="jn-term start">${icon('play')}<span>${esc(t.start)}</span></li>${order.blocks.length === 0 ? `${gap(0)}<li class="jn-empty mu">${esc(t.linearEmpty)}</li>` : `${cards}${gap(order.blocks.length)}`}${addHere}<li class="jn-term end">${icon('stop')}<span>${esc(t.end)}</span></li></ol>`;
+}
+
+/** La barre d'actions d'un nœud choisi dans le diagramme : Modifier, Dupliquer, Supprimer, plus. */
+function floatingBar(state: DashboardState, node: JourneyNode): string {
+  const t = journeyText(state);
+  const block = node.kind === 'BLOCK' ? blockOf(state, node.block) : undefined;
+  const name = node.kind === 'BLOCK' ? (node.block ?? '') : nodeLabel(t, node);
+  const newer =
+    block && node.version !== undefined && node.version !== block.version ? block.version : undefined;
+  const more = `<details class="jn-more"><summary class="btn small ghost icon-only" aria-label="${esc(t.more)}" title="${esc(t.more)}">${icon('more')}</summary><div class="jn-more-m" role="menu">${node.kind === 'BLOCK' && node.block ? `<button type="button" role="menuitem" data-action="lib-open" data-block="${esc(node.block)}">${icon('library')}<span>${esc(t.openSheet)}</span></button>` : ''}${newer !== undefined ? `<button type="button" role="menuitem" data-action="jn-accept-version" data-node="${esc(node.id)}" data-version="${String(newer)}">${icon('refresh')}<span>${esc(t.newVersion(newer))}</span></button>` : ''}<button type="button" role="menuitem" data-action="jn-deselect">${icon('close')}<span>${esc(t.deselect)}</span></button></div></details>`;
+  return `<div class="jn-float" role="toolbar" aria-label="${esc(name)}"><button type="button" class="btn small ghost icon-only" data-action="jn-edit" data-node="${esc(node.id)}" aria-label="${esc(`${t.edit} : ${name}`)}" title="${esc(t.edit)}">${icon('edit')}</button>${node.kind === 'BLOCK' ? `<button type="button" class="btn small ghost icon-only" data-action="jn-duplicate" data-node="${esc(node.id)}" aria-label="${esc(`${t.duplicate} : ${name}`)}" title="${esc(t.duplicate)}">${icon('copy')}</button>` : ''}${node.kind === 'START' ? '' : `<button type="button" class="btn small ghost icon-only danger" data-action="jn-remove" data-node="${esc(node.id)}" aria-label="${esc(`${t.remove} : ${name}`)}" title="${esc(t.remove)}">${icon('trash')}</button>`}${more}</div>`;
+}
+
+function nodeLabel(t: Text, node: JourneyNode): string {
+  return node.kind === 'BLOCK'
+    ? (node.block ?? '?')
+    : node.kind === 'CONDITION'
+      ? node.label?.trim()
+        ? node.label
+        : t.conditionEmpty
+      : node.kind === 'START'
+        ? t.start
+        : node.kind === 'END'
+          ? t.end
+          : t.join;
 }
 
 function nodeHtml(state: DashboardState, node: JourneyNode, publish: boolean): string {
@@ -839,18 +1043,22 @@ function nodeHtml(state: DashboardState, node: JourneyNode, publish: boolean): s
       : node.kind === 'CONDITION'
         ? `<span class="jn-port yes" data-jn-port="${esc(node.id)}" data-branch="YES" title="${esc(t.yes)}"></span><span class="jn-port no" data-jn-port="${esc(node.id)}" data-branch="NO" title="${esc(t.no)}"></span>`
         : `<span class="jn-port" data-jn-port="${esc(node.id)}" title="${esc(t.connectTo)}"></span>`;
+  const entry = node.kind === 'START' ? '' : '<span class="jn-in" aria-hidden="true"></span>';
   const block = blockOf(state, node.block);
   const inner =
     node.kind === 'BLOCK'
-      ? `<span class="jn-n-h"><span class="jn-ic" aria-hidden="true">${icon('library')}</span><b>${esc(node.block ?? '?')}</b></span><small class="mu">${block ? `${esc(t.version(node.version ?? block.version))} · ${esc(t.steps(block.steps))}` : esc(t.unknownBlock)}</small>`
+      ? `<span class="jn-ic" aria-hidden="true">${icon('cube')}</span><span class="jn-n-t"><b>${esc(node.block ?? '?')}</b><small class="mu">${block ? esc(t.version(node.version ?? block.version)) : esc(t.unknownBlock)}</small></span>`
       : node.kind === 'CONDITION'
-        ? `<span class="jn-n-h"><b>${esc(node.label?.trim() ? node.label : t.conditionEmpty)}</b></span><small class="jn-yn"><span>${esc(t.yes)}</span><span>${esc(t.no)}</span></small>`
-        : `<b>${esc(node.kind === 'START' ? t.start : node.kind === 'END' ? t.end : t.join)}</b>`;
+        ? `<svg class="jn-dia" viewBox="0 0 ${String(size.w)} ${String(size.h)}" preserveAspectRatio="none" aria-hidden="true"><polygon points="${String(size.w / 2)},2 ${String(size.w - 2)},${String(size.h / 2)} ${String(size.w / 2)},${String(size.h - 2)} 2,${String(size.h / 2)}"></polygon></svg><span class="jn-n-q" aria-hidden="true">?</span><b class="jn-n-l">${esc(nodeLabel(t, node))}</b>`
+        : `${icon(node.kind === 'START' ? 'play' : node.kind === 'END' ? 'stop' : 'merge')}<b>${esc(nodeLabel(t, node))}</b>`;
   const badge =
     diag.errors.length > 0
-      ? `<span class="jn-badge ko" title="${esc(diag.errors.join(' · '))}">${String(diag.errors.length)}</span>`
-      : '';
-  return `<div class="jn-node ${node.kind.toLowerCase()}${selected ? ' sel' : ''}${tone}" data-jn-node="${esc(node.id)}" style="${style}" role="button" tabindex="0" data-action="jn-select" data-node="${esc(node.id)}" aria-pressed="${String(selected)}" aria-label="${esc(node.kind === 'BLOCK' ? (node.block ?? '') : node.kind === 'CONDITION' ? (node.label ?? t.shapes.CONDITION ?? '') : node.kind === 'START' ? t.start : node.kind === 'END' ? t.end : t.join)}">${inner}${badge}${ports}</div>`;
+      ? `<span class="jn-badge ko" title="${esc(diag.errors.join(' · '))}">${String(diag.errors.length)}<span class="sr">${esc(diag.errors.join(' · '))}</span></span>`
+      : diag.warnings.length > 0
+        ? `<span class="jn-badge warn" title="${esc(diag.warnings.join(' · '))}">!<span class="sr">${esc(diag.warnings.join(' · '))}</span></span>`
+        : '';
+  const linking = ui.tool === 'connect' && ui.connectFrom === node.id ? ' link-from' : '';
+  return `<div class="jn-node ${node.kind.toLowerCase()}${selected ? ' sel' : ''}${tone}${linking}" data-jn-node="${esc(node.id)}" style="${style}" role="button" tabindex="0" data-action="jn-select" data-node="${esc(node.id)}" aria-pressed="${String(selected)}" title="${esc(node.kind === 'BLOCK' && block ? `${node.block ?? ''} · ${t.steps(block.steps)}` : nodeLabel(t, node))}" aria-label="${esc(nodeLabel(t, node))}">${inner}${badge}${entry}${ports}${selected && publish ? floatingBar(state, node) : ''}</div>`;
 }
 
 /** Les bornes du diagramme (pour dimensionner le calque des connexions et ajuster la vue). */
@@ -871,15 +1079,47 @@ function edgeHtml(state: DashboardState, edge: JourneyEdge): string {
   const from = graph.nodes.find((node) => node.id === edge.from);
   const to = graph.nodes.find((node) => node.id === edge.to);
   if (!from || !to) return '';
-  const d = edgePath(from, to, edge.branch);
+  const points = edgePoints(from, to, edge.branch);
+  const d = pointsPath(points);
   const selected = ui.selected?.kind === 'edge' && ui.selected.id === edge.id;
   const errors = freshCheck(ui)?.edges[edge.id] ?? [];
   const tone = errors.length > 0 ? ' ko' : edge.branch === 'YES' ? ' yes' : edge.branch === 'NO' ? ' no' : '';
-  const port = portOf(from, edge.branch);
+  // L'étiquette Oui / Non : sur le premier coude, là où la branche quitte la condition.
+  const at = points[1] ?? points[0] ?? { x: 0, y: 0 };
   const label = edge.branch
-    ? `<text class="jn-e-l${tone}" x="${String(port.x + (edge.branch === 'NO' ? 8 : -8))}" y="${String(port.y + 16)}" text-anchor="${edge.branch === 'NO' ? 'start' : 'end'}">${esc(edge.branch === 'YES' ? t.yes : t.no)}</text>`
+    ? `<g class="jn-pill ${edge.branch === 'YES' ? 'yes' : 'no'}"><rect x="${String(at.x - 17)}" y="${String(at.y + 8)}" width="34" height="18" rx="4"></rect><text x="${String(at.x)}" y="${String(at.y + 21)}" text-anchor="middle">${esc(edge.branch === 'YES' ? t.yes : t.no)}</text></g>`
     : '';
-  return `<g class="jn-edge${selected ? ' sel' : ''}${tone}" data-jn-edge="${esc(edge.id)}"><path class="jn-e" d="${d}" marker-end="url(#jn-arrow)"></path><path class="jn-hit" d="${d}" data-action="jn-select-edge" data-edge="${esc(edge.id)}"><title>${esc(errors.join(' · ') || t.edgeTitle)}</title></path>${label}</g>`;
+  const pending = ui.pendingInsert?.edge === edge.id ? ' drop' : '';
+  return `<g class="jn-edge${selected ? ' sel' : ''}${tone}${pending}" data-jn-edge="${esc(edge.id)}"><path class="jn-e" d="${d}" marker-end="url(#jn-arrow)"></path><path class="jn-hit" d="${d}" data-action="jn-select-edge" data-edge="${esc(edge.id)}"><title>${esc(errors.join(' · ') || t.edgeTitle)}</title></path>${label}</g>`;
+}
+
+/** La barre d'outils verticale du diagramme : chaque outil agit réellement sur le parcours. */
+function canvasTools(state: DashboardState, publish: boolean): string {
+  if (!publish) return '';
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const picked =
+    ui.picked && (state.lib.blocks ?? []).some((block) => block.name === ui.picked) ? ui.picked : undefined;
+  const selected = ui.selected;
+  const deletable =
+    selected?.kind === 'edge' ||
+    (selected?.kind === 'node' &&
+      ui.journey.graph.nodes.some((node) => node.id === selected.id && node.kind !== 'START'));
+  const tool = (attrs: string, label: string, ico: string, pressed?: boolean, disabled = false): string =>
+    `<button type="button" class="jn-tool" ${attrs} aria-label="${esc(label)}" title="${esc(label)}"${pressed === undefined ? '' : ` aria-pressed="${String(pressed)}"`}${disabled ? ' disabled' : ''}>${icon(ico)}</button>`;
+  return `<div class="jn-tools-v" role="toolbar" aria-label="${esc(t.toolsLabel)}" aria-orientation="vertical">${tool('data-action="jn-tool" data-tool="select"', t.toolSelect, 'pointer', ui.tool === 'select')}${tool('data-action="jn-tool-block"', picked ? `${t.toolBlock} : ${picked}` : t.toolBlockNone, 'cube', undefined, !picked)}${(
+    ['CONDITION', 'JOIN', 'END'] as const
+  )
+    .map((kind) =>
+      tool(
+        `data-action="jn-shape" data-kind="${kind}" data-jn-shape="${kind}" draggable="true"`,
+        t.shapes[kind] ?? kind,
+        kind === 'CONDITION' ? 'diamond' : kind === 'JOIN' ? 'merge' : 'stop',
+      ),
+    )
+    .join(
+      '',
+    )}${tool('data-action="jn-tool" data-tool="connect"', t.toolConnect, 'link', ui.tool === 'connect')}${tool('data-action="jn-delete-selection" class="danger"', t.toolDelete, 'trash', undefined, !deletable)}</div>`;
 }
 
 function diagramView(state: DashboardState, publish: boolean): string {
@@ -889,7 +1129,20 @@ function diagramView(state: DashboardState, publish: boolean): string {
   const box = bounds(graph);
   const pad = 400;
   const svg = `<svg class="jn-edges" style="left:${String(box.minX - pad)}px;top:${String(box.minY - pad)}px" width="${String(box.maxX - box.minX + pad * 2)}" height="${String(box.maxY - box.minY + pad * 2)}" viewBox="${String(box.minX - pad)} ${String(box.minY - pad)} ${String(box.maxX - box.minX + pad * 2)} ${String(box.maxY - box.minY + pad * 2)}" aria-hidden="false"><defs><marker id="jn-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"></path></marker></defs>${graph.edges.map((edge) => edgeHtml(state, edge)).join('')}<path class="jn-temp" d=""></path></svg>`;
-  return `<div class="jn-canvas" data-jn-canvas tabindex="0" role="application" aria-label="${esc(t.canvasLabel)}" aria-describedby="jn-canvas-h"><div class="jn-tools"><button type="button" class="btn small ghost icon-only" data-action="jn-zoom" data-step="-1" aria-label="${esc(t.zoomOut)}" title="${esc(t.zoomOut)}">−</button><span class="jn-zoom" aria-live="polite">${String(Math.round(ui.zoom * 100))} %</span><button type="button" class="btn small ghost icon-only" data-action="jn-zoom" data-step="1" aria-label="${esc(t.zoomIn)}" title="${esc(t.zoomIn)}">+</button><button type="button" class="btn small ghost" data-action="jn-fit">${icon('maximize')}<span>${esc(t.fit)}</span></button><button type="button" class="btn small ghost" data-action="jn-actual">${esc(t.actual)}</button></div><div class="jn-world" style="transform:translate(${String(ui.panX)}px,${String(ui.panY)}px) scale(${String(ui.zoom)})">${svg}${graph.nodes.map((node) => nodeHtml(state, node, publish)).join('')}</div><small id="jn-canvas-h" class="jn-hint mu">${esc(t.canvasHint)}</small></div>`;
+  const from = ui.connectFrom ? graph.nodes.find((node) => node.id === ui.connectFrom) : undefined;
+  const hint =
+    ui.tool === 'connect' ? (from ? t.connectPickTo(nodeLabel(t, from)) : t.connectPickFrom) : t.canvasHint;
+  const pending = ui.pendingInsert;
+  const edge = pending ? graph.edges.find((entry) => entry.id === pending.edge) : undefined;
+  const ends = edge
+    ? [graph.nodes.find((node) => node.id === edge.from), graph.nodes.find((node) => node.id === edge.to)]
+    : [];
+  const placed = pending ? graph.nodes.find((node) => node.id === pending.node) : undefined;
+  const insert =
+    pending && edge && placed && ends[0] && ends[1]
+      ? `<div class="jn-insert" role="group"><p>${esc(t.insertOnEdge(placed.block ?? '', nodeLabel(t, ends[0]), nodeLabel(t, ends[1])))}</p><button type="button" class="btn small primary" data-action="jn-insert-yes">${esc(t.insertYes)}</button><button type="button" class="btn small ghost" data-action="jn-insert-no">${esc(t.insertNo)}</button></div>`
+      : '';
+  return `<div class="jn-canvas${ui.tool === 'connect' ? ' connecting' : ''}" data-jn-canvas tabindex="0" role="application" aria-label="${esc(t.canvasLabel)}" aria-describedby="jn-canvas-h">${canvasTools(state, publish)}<div class="jn-world" style="transform:translate(${String(ui.panX)}px,${String(ui.panY)}px) scale(${String(ui.zoom)})">${svg}${graph.nodes.map((node) => nodeHtml(state, node, publish)).join('')}</div>${insert}<small id="jn-canvas-h" class="jn-hint mu" aria-live="polite">${esc(hint)}</small></div>`;
 }
 
 function chips(items: readonly string[], none: string, tone = ''): string {
@@ -973,37 +1226,83 @@ function blockProps(state: DashboardState, node: JourneyNode, publish: boolean):
           : (ui.journey.graph.nodes.find((entry) => entry.id === item.from)?.block ?? item.from);
     return t.ioFrom(item.key, from);
   });
-  const versionMismatch = block && node.version !== undefined && node.version !== block.version;
-  const io = `<section class="jn-sec" aria-labelledby="jn-io-t"><h4 id="jn-io-t">${esc(t.io)}</h4><dl class="jn-dl"><dt>${esc(t.ioRequired)}</dt><dd>${chips(
+  const newer =
+    block && node.version !== undefined && node.version !== block.version ? block.version : undefined;
+  const io = `<dl class="jn-dl"><dt>${esc(t.ioRequired)}</dt><dd>${chips(
     inputs.filter((input) => input.required).map((input) => input.key),
     t.none,
-  )}</dd><dt>${esc(t.ioProduced)}</dt><dd>${chips(block?.contract.outputs.map((output) => output.key) ?? [], t.none)}</dd><dt>${esc(t.ioAvailable)}</dt><dd>${check ? chips(available, t.none) : `<small class="mu">${esc(t.notChecked)}</small>`}</dd><dt>${esc(t.ioMissing)}</dt><dd>${check ? chips([...new Set((diag?.missing ?? []).map((item) => `${item.key}${check.paths.length > 1 ? ` (${pathLetter(item.path - 1)})` : ''}`))], t.none, 'ko') : `<small class="mu">${esc(t.notChecked)}</small>`}</dd><dt>${esc(t.ioMapped)}</dt><dd>${[...mapped, ...satisfied].length > 0 ? `<ul class="plain tight">${[...mapped, ...satisfied].map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : `<small class="mu">${esc(t.none)}</small>`}</dd></dl></section>`;
-  const versions = `<section class="jn-sec" aria-labelledby="jn-ver-t"><h4 id="jn-ver-t">${esc(t.versions)}</h4><dl class="jn-dl"><dt>${esc(t.versionUsed)}</dt><dd>${esc(node.version !== undefined ? t.version(node.version) : '—')}</dd><dt>${esc(t.versionCurrent)}</dt><dd>${block ? `${esc(t.version(block.version))} <span class="jn-compat ${block.state === 'VALID' ? 'ok' : block.state === 'INVALID' ? 'ko' : 'warn'}">${esc(t.compat[block.state] ?? block.state)}</span>` : esc(t.unknownBlock)}</dd><dt>${esc(t.fingerprint)}</dt><dd><code>${esc(block?.hash.slice(0, 12) ?? '—')}</code></dd></dl>${versionMismatch && publish ? `<button type="button" class="btn small primary" data-action="jn-accept-version" data-node="${esc(node.id)}" data-version="${String(block.version)}">${esc(t.newVersion(block.version))}</button>` : ''}<small class="mu">${esc(t.versionNote)}</small></section>`;
+  )}</dd><dt>${esc(t.ioProduced)}</dt><dd>${chips(block?.contract.outputs.map((output) => output.key) ?? [], t.none)}</dd><dt>${esc(t.ioAvailable)}</dt><dd>${check ? chips(available, t.none) : `<small class="mu">${esc(t.notChecked)}</small>`}</dd><dt>${esc(t.ioMissing)}</dt><dd>${check ? chips([...new Set((diag?.missing ?? []).map((item) => `${item.key}${check.paths.length > 1 ? ` (${pathLetter(item.path - 1)})` : ''}`))], t.none, 'ko') : `<small class="mu">${esc(t.notChecked)}</small>`}</dd><dt>${esc(t.ioMapped)}</dt><dd>${[...mapped, ...satisfied].length > 0 ? `<ul class="plain tight">${[...mapped, ...satisfied].map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : `<small class="mu">${esc(t.none)}</small>`}</dd></dl>`;
+  const versions = `<section class="jn-sec" aria-labelledby="jn-ver-t"><h4 id="jn-ver-t">${esc(t.versions)}</h4><dl class="jn-dl"><dt>${esc(t.versionUsed)}</dt><dd>${esc(node.version !== undefined ? t.version(node.version) : '—')}</dd><dt>${esc(t.versionCurrent)}</dt><dd>${block ? `${esc(t.version(block.version))} <span class="jn-compat ${block.state === 'VALID' ? 'ok' : block.state === 'INVALID' ? 'ko' : 'warn'}">${esc(t.compat[block.state] ?? block.state)}</span>` : esc(t.unknownBlock)}</dd><dt>${esc(t.fingerprint)}</dt><dd><code>${esc(block?.hash.slice(0, 12) ?? '—')}</code></dd></dl><small class="mu">${esc(t.versionNote)}</small></section>`;
   const actions = publish
     ? `<div class="form-acts start"><button type="button" class="btn small" data-action="jn-duplicate" data-node="${esc(node.id)}">${icon('copy')}<span>${esc(t.duplicate)}</span></button><button type="button" class="btn small ghost" data-action="jn-remove" data-node="${esc(node.id)}">${icon('trash')}<span>${esc(t.remove)}</span></button></div>`
     : '';
-  return `<div class="jn-props-h"><span class="jn-ic" aria-hidden="true">${icon('library')}</span><div><h3 id="jn-props-t">${esc(node.block ?? '?')}</h3>${block?.description ? `<p class="mu">${esc(block.description)}</p>` : ''}</div></div><section class="jn-sec" aria-labelledby="jn-par-t"><h4 id="jn-par-t">${esc(t.params)}</h4>${paramRows}</section>${io}${versions}<section class="jn-sec" aria-labelledby="jn-dg-t"><h4 id="jn-dg-t">${esc(t.diagnostics)}</h4>${diagList(t, diag, check !== undefined)}</section>${ui.journey.mode === 'DIAGRAM' ? connectForm(state, node, publish) : ''}${actions}`;
+  const tabs = (['params', 'io', 'details'] as const)
+    .map(
+      (tab) =>
+        `<button type="button" role="tab" id="jn-pt-${tab}" class="jn-ptab" data-action="jn-props-tab" data-tab="${tab}" aria-selected="${String(ui.propsTab === tab)}" aria-controls="jn-pp-${tab}"${ui.propsTab === tab ? '' : ' tabindex="-1"'}>${esc(tab === 'params' ? t.tabParams : tab === 'io' ? t.tabIo : t.tabDetails)}</button>`,
+    )
+    .join('');
+  const panel = (tab: 'params' | 'io' | 'details', body: string): string =>
+    `<div class="jn-ppanel" role="tabpanel" id="jn-pp-${tab}" aria-labelledby="jn-pt-${tab}"${ui.propsTab === tab ? '' : ' hidden'}>${body}</div>`;
+  return `<div class="jn-props-h"><span class="jn-ic" aria-hidden="true">${icon('cube')}</span><div class="jn-props-n"><h3 id="jn-props-t">${esc(node.block ?? '?')}</h3>${block?.description ? `<p class="mu">${esc(block.description)}</p>` : ''}</div><span class="jn-ver">${esc(node.version !== undefined ? t.version(node.version) : '—')}</span>${node.block && blockOf(state, node.block) ? `<button type="button" class="btn small ghost icon-only" data-action="lib-open" data-block="${esc(node.block)}" aria-label="${esc(t.openSheet)}" title="${esc(t.openSheet)}">${icon('edit')}</button>` : ''}</div>${newer !== undefined && publish ? `<button type="button" class="btn small primary jn-accept" data-action="jn-accept-version" data-node="${esc(node.id)}" data-version="${String(newer)}">${esc(t.newVersion(newer))}</button>` : ''}<div class="jn-ptabs" role="tablist" aria-label="${esc(t.propsBlock)}">${tabs}</div>${panel('params', paramRows)}${panel('io', io)}${panel('details', `${versions}<section class="jn-sec" aria-labelledby="jn-dg-t"><h4 id="jn-dg-t">${esc(t.diagnostics)}</h4>${diagList(t, diag, check !== undefined)}</section>${ui.journey.mode === 'DIAGRAM' ? connectForm(state, node, publish) : ''}${actions}`)}`;
 }
 
+/** Le parcours lui-même (rien n'est choisi) : description, sorties, conditions, versions, réutilisation. */
 function journeyProps(state: DashboardState, publish: boolean): string {
   const t = journeyText(state);
   const ui = state.lib.journey;
   const journey = ui.journey;
   const check = freshCheck(ui);
-  const summary = check
-    ? `<p class="mu">${esc(t.paths(check.paths.length))}${check.linear ? ` · ${esc(t.linearYes)}` : ''}</p><ul class="plain jn-paths">${check.paths
-        .map(
-          (entry) =>
-            `<li class="${entry.check.ok ? 'ok' : 'ko'}"><b>${esc(t.pathLabel(pathLetter(entry.index)))}</b> <span class="jn-chip ${entry.check.ok ? 'ok' : 'ko'}">${esc(entry.check.ok ? t.pathOk : t.pathKo)}</span>${entry.choices.length > 0 ? `<small class="mu block">${esc(entry.choices.map((choice) => `${choice.label} = ${choice.branch === 'YES' ? t.yes : t.no}`).join(' · '))}</small>` : ''}<small class="mu block">${esc(entry.check.order.map((item) => item.block).join(' → ') || '—')}</small></li>`,
-        )
-        .join(
-          '',
-        )}</ul><p class="mu">${esc(check.publishable === 'PER_PATH' ? t.publishInfoPaths : t.publishInfoSingle)}</p>`
-    : `<p class="mu">${esc(ui.checking ? t.checking : t.notChecked)}</p>`;
-  const global = check
-    ? `${check.errors.length > 0 ? `<ul class="plain jn-diag">${check.errors.map((item) => `<li class="ko">${icon('alert')}<span>${esc(item)}</span></li>`).join('')}</ul>` : ''}${check.warnings.length > 0 ? `<ul class="plain jn-diag">${check.warnings.map((item) => `<li class="warn">${icon('info')}<span>${esc(item)}</span></li>`).join('')}</ul>` : ''}`
-    : '';
-  return `<div class="jn-props-h"><span class="jn-ic" aria-hidden="true">${icon('explorations')}</span><div><h3 id="jn-props-t">${esc(t.propsJourney)}</h3><p class="mu">${esc(t.propsNone)}</p></div></div><label class="field"><span>${esc(t.description)}</span><textarea data-jn="description" rows="2" maxlength="500"${publish ? '' : ' disabled'}>${esc(journey.description ?? '')}</textarea></label>${journey.published && journey.published.length > 0 ? `<p class="mu">${esc(t.published(journey.published.join(', ')))}</p>` : ''}<section class="jn-sec" aria-labelledby="jn-chk-t"><h4 id="jn-chk-t">${esc(t.checkTitle)}</h4>${summary}${global}</section>${outputsSection(state, check)}${publish ? toBlockSection(state, check) : ''}`;
+  const conditions = journey.graph.nodes.filter((node) => node.kind === 'CONDITION');
+  const blocks = journey.graph.nodes.filter((node) => node.kind === 'BLOCK');
+  const outputsCount = check ? check.outputs.guaranteed.length + check.outputs.partial.length : undefined;
+  const acc = (title: string, count: number | undefined, body: string, open = false): string =>
+    `<details class="jn-acc"${open ? ' open' : ''}><summary>${esc(title)}${count === undefined ? '' : ` <small class="mu">(${String(count)})</small>`}</summary><div class="jn-acc-b">${body}</div></details>`;
+  const versions =
+    blocks.length === 0
+      ? `<p class="mu">${esc(t.none)}</p>`
+      : `<ul class="plain tight jn-vers">${blocks
+          .map((node) => {
+            const block = blockOf(state, node.block);
+            const ok = block !== undefined && node.version === block.version && block.state === 'VALID';
+            return `<li class="${ok ? 'ok' : 'warn'}">${icon(ok ? 'check' : 'alert')}<span>${esc(node.block ?? '?')} · ${esc(node.version !== undefined ? t.version(node.version) : '—')}${block && node.version !== block.version ? ` → ${esc(t.version(block.version))}` : ''}</span></li>`;
+          })
+          .join('')}</ul>`;
+  return `<div class="jn-props-h"><span class="jn-ic" aria-hidden="true">${icon('merge')}</span><div class="jn-props-n"><h3 id="jn-props-t">${esc(t.propsJourney)}</h3><p class="mu">${esc(t.propsNone)}</p></div></div><label class="field"><span>${esc(t.description)}</span><textarea data-jn="description" rows="2" maxlength="500"${publish ? '' : ' disabled'}>${esc(journey.description ?? '')}</textarea></label>${journey.published && journey.published.length > 0 ? `<p class="mu">${esc(t.published(journey.published.join(', ')))}</p>` : ''}${acc(t.outputsTitle, outputsCount, outputsSection(state, check), true)}${acc(
+    t.conditionsTitle,
+    conditions.length,
+    conditions.length === 0
+      ? `<p class="mu">${esc(t.noCondition)}</p>`
+      : `<ul class="plain tight">${conditions.map((node) => `<li><button type="button" class="link" data-action="jn-select" data-node="${esc(node.id)}">${esc(nodeLabel(t, node))}</button></li>`).join('')}</ul>`,
+  )}${acc(t.versionsDeps, blocks.length, versions)}${publish ? toBlockSection(state, check) : ''}`;
+}
+
+/** L'onglet Diagnostics : la vérification complète, chemin par chemin, et les problèmes de chaque nœud. */
+export function journeyDiagnostics(state: DashboardState): string {
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const check = freshCheck(ui);
+  const graph = ui.journey.graph;
+  if (!check)
+    return `<section class="jn-diagtab" aria-labelledby="jn-chk-t"><h3 id="jn-chk-t">${esc(t.checkTitle)}</h3><p class="mu">${esc(ui.checking ? t.checking : t.notChecked)}</p></section>`;
+  const paths = `<p class="mu">${esc(t.paths(check.paths.length))}${check.linear ? ` · ${esc(t.linearYes)}` : ''}</p><ul class="plain jn-paths">${check.paths
+    .map(
+      (entry) =>
+        `<li class="${entry.check.ok ? 'ok' : 'ko'}"><b>${esc(t.pathLabel(pathLetter(entry.index)))}</b> <span class="jn-chip ${entry.check.ok ? 'ok' : 'ko'}">${esc(entry.check.ok ? t.pathOk : t.pathKo)}</span>${entry.choices.length > 0 ? `<small class="mu block">${esc(entry.choices.map((choice) => `${choice.label} = ${choice.branch === 'YES' ? t.yes : t.no}`).join(' · '))}</small>` : ''}<small class="mu block">${esc(entry.check.order.map((item) => item.block).join(' → ') || '—')}</small></li>`,
+    )
+    .join(
+      '',
+    )}</ul><p class="mu">${esc(check.publishable === 'PER_PATH' ? t.publishInfoPaths : t.publishInfoSingle)}</p>`;
+  const global = `${check.errors.length > 0 ? `<ul class="plain jn-diag">${check.errors.map((item) => `<li class="ko">${icon('alert')}<span>${esc(item)}</span></li>`).join('')}</ul>` : ''}${check.warnings.length > 0 ? `<ul class="plain jn-diag">${check.warnings.map((item) => `<li class="warn">${icon('info')}<span>${esc(item)}</span></li>`).join('')}</ul>` : ''}`;
+  const perNode = graph.nodes
+    .map((node) => ({ node, diag: check.nodes[node.id] }))
+    .filter(({ diag }) => diag && (diag.errors.length > 0 || diag.warnings.length > 0))
+    .map(
+      ({ node, diag }) =>
+        `<li><button type="button" class="link" data-action="jn-select" data-node="${esc(node.id)}">${esc(nodeLabel(t, node))}</button>${diagList(t, diag, true)}</li>`,
+    )
+    .join('');
+  return `<section class="jn-diagtab" aria-labelledby="jn-chk-t"><h3 id="jn-chk-t">${esc(t.checkTitle)}</h3>${paths}${global}${perNode ? `<ul class="plain jn-pernode">${perNode}</ul>` : ''}</section>`;
 }
 
 /** Les sorties du parcours : garanties (tous les chemins) et partielles (certains chemins, nommés). */
@@ -1092,7 +1391,40 @@ function edgeProps(state: DashboardState, edge: JourneyEdge, publish: boolean): 
   return `<div class="jn-props-h"><span class="jn-ic" aria-hidden="true">${icon('right')}</span><div><h3 id="jn-props-t">${esc(t.edgeTitle)}</h3><p class="mu">${esc(name(from))} → ${esc(name(to))}</p></div></div>${from?.kind === 'CONDITION' ? `<label class="field"><span>${esc(t.branch)}</span><select data-jn="edge.branch"${publish ? '' : ' disabled'}><option value="YES"${edge.branch === 'YES' ? ' selected' : ''}>${esc(t.yes)}</option><option value="NO"${edge.branch === 'NO' ? ' selected' : ''}>${esc(t.no)}</option></select></label>` : ''}<section class="jn-sec" aria-labelledby="jn-dg-t"><h4 id="jn-dg-t">${esc(t.diagnostics)}</h4>${diagList(t, { errors, warnings: [] }, freshCheck(ui) !== undefined)}</section>${publish ? `<div class="form-acts start"><button type="button" class="btn small ghost" data-action="jn-edge-remove" data-edge="${esc(edge.id)}">${icon('trash')}<span>${esc(t.edgeRemove)}</span></button></div>` : ''}`;
 }
 
-function properties(state: DashboardState, publish: boolean): string {
+/** Le résultat de la vérification, en quatre points tirés de la vraie vérification (jamais présumés). */
+function validationCard(state: DashboardState): string {
+  const t = journeyText(state);
+  const ui = state.lib.journey;
+  const check = freshCheck(ui);
+  const title = `<h3 id="jn-val-t">${esc(t.validationTitle)}</h3>`;
+  if (!check)
+    return `<section class="jn-valid" aria-labelledby="jn-val-t">${title}<p class="jn-val-state ${ui.checking ? 'live' : ''}" role="status">${ui.checking ? '<span class="spin" aria-hidden="true"></span>' : icon('info')}<span>${esc(ui.checking ? t.checking : ui.check ? t.status.stale : t.validNot)}</span></p></section>`;
+  const graph = ui.journey.graph;
+  const structure = journeyStructure(graph);
+  const counts = {
+    structure:
+      structure.errors.length +
+      Object.values(structure.nodes).reduce((sum, list) => sum + list.length, 0) +
+      Object.values(structure.edges).reduce((sum, list) => sum + list.length, 0),
+    deps: Object.values(check.nodes).reduce((sum, diag) => sum + diag.missing.length, 0),
+    conflicts: check.paths.reduce((sum, path) => sum + path.check.conflicts.length, 0),
+    versions: graph.nodes.filter((node) => {
+      if (node.kind !== 'BLOCK') return false;
+      const block = blockOf(state, node.block);
+      return !block || node.version !== block.version || block.state !== 'VALID';
+    }).length,
+  };
+  const items = (Object.keys(counts) as (keyof typeof counts)[])
+    .map((key) => {
+      const count = counts[key];
+      return `<li class="${count === 0 ? 'ok' : 'ko'}">${icon(count === 0 ? 'check' : 'alert')}<span>${esc(t.validItems[key]?.[count === 0 ? 0 : 1] ?? key)}${count === 0 ? '' : ` <small>· ${esc(t.validIssues(count))}</small>`}</span></li>`;
+    })
+    .join('');
+  return `<section class="jn-valid" aria-labelledby="jn-val-t">${title}<p class="jn-val-state ${check.ok ? 'ok' : 'ko'}" role="status">${icon(check.ok ? 'check' : 'alert')}<span>${esc(check.ok ? t.status.valid : t.status.invalid)}</span></p><ul class="plain jn-val-list">${items}</ul></section>`;
+}
+
+/** Le panneau droit : les propriétés de la sélection (ou du parcours), puis la validation du parcours. */
+export function journeySide(state: DashboardState, publish: boolean): string {
   const t = journeyText(state);
   const ui = state.lib.journey;
   const selected = ui.selected;
@@ -1106,36 +1438,80 @@ function properties(state: DashboardState, publish: boolean): string {
     : edge
       ? edgeProps(state, edge, publish)
       : journeyProps(state, publish);
-  return `<aside class="jn-props" aria-labelledby="jn-props-t" aria-live="polite"><p class="jn-props-k">${esc(t.propsTitle)}</p>${body}${selected ? `<button type="button" class="btn small ghost jn-back" data-action="jn-deselect">${icon('back')}<span>${esc(t.propsJourney)}</span></button>` : ''}</aside>`;
+  const kicker = node
+    ? node.kind === 'BLOCK'
+      ? t.propsBlock
+      : t.propsShape
+    : edge
+      ? t.propsEdge
+      : t.propsJourneyTitle;
+  return `<aside class="jn-side" aria-label="${esc(kicker)}"><section class="jn-props" aria-labelledby="jn-props-t" aria-live="polite"><div class="jn-props-top"><p class="jn-props-k">${esc(kicker)}</p><button type="button" class="btn small ghost icon-only" data-action="jn-panel" data-panel="props" data-open="0" aria-label="${esc(t.propsHide)}" title="${esc(t.propsHide)}">${icon('close')}</button></div>${body}${selected ? `<button type="button" class="btn small ghost jn-back" data-action="jn-deselect">${icon('back')}<span>${esc(t.propsJourney)}</span></button>` : ''}</section>${validationCard(state)}</aside>`;
 }
 
-/** Le compositeur : barre, palette, scène (linéaire ou diagramme), propriétés et diagnostics. */
-export function journeyWorkspace(state: DashboardState, publish: boolean): string {
+/** L'onglet Compositeur : en-tête du parcours, barre des modes, catalogue compact et scène. */
+export function journeyComposer(state: DashboardState, publish: boolean): string {
   const t = journeyText(state);
   const ui = state.lib.journey;
   const stage = ui.journey.mode === 'LINEAR' ? linearView(state, publish) : diagramView(state, publish);
-  return `<section class="card jn" id="lib-composer" aria-labelledby="lib-composer-t" data-mode="${ui.journey.mode}">${toolbar(state, publish)}<p class="mu jn-intro">${esc(t.intro)}</p><div class="jn-body">${palette(state, publish)}<div class="jn-stage" data-jn-stage>${stage}</div>${properties(state, publish)}</div></section>`;
+  const toast = ui.toast
+    ? `<div class="jn-toast" role="status">${icon('check')}<span>${esc(ui.toast)}</span><button type="button" class="btn small ghost icon-only" data-action="jn-toast-close" aria-label="${esc(t.close)}" title="${esc(t.close)}">${icon('close')}</button></div>`
+    : '';
+  return `<div class="jn-composer" data-mode="${ui.journey.mode}">${journeyHead(state, publish)}${modeBar(state, publish)}<div class="jn-body">${palette(state, publish)}<div class="jn-stage${ui.toast ? ' has-toast' : ''}" data-jn-stage>${stage}${toast}</div></div></div>`;
 }
 
 // ── Styles ───────────────────────────────────────────────────────────────────────────────────
 
 export const JOURNEY_CSS = `
-.jn{display:flex;flex-direction:column;gap:12px;min-width:0}
-.jn-top{display:flex;flex-direction:column;gap:10px}
-.jn-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px;justify-content:space-between}
-.jn-head h2{margin:0}
-.jn-chips{display:flex;flex-wrap:wrap;gap:6px}
+.jn{--jn-sel:#2F6FED;--jn-sel-soft:color-mix(in srgb,#2F6FED 14%,transparent);--jn-node-bg:color-mix(in srgb,var(--qa-color-primary) 7%,var(--qa-color-surface));--jn-node-bd:color-mix(in srgb,var(--qa-color-primary) 55%,var(--qa-color-border));--jn-cond-bg:color-mix(in srgb,var(--qa-color-warning) 10%,var(--qa-color-surface));--jn-cond-bd:color-mix(in srgb,var(--qa-color-warning) 70%,var(--qa-color-border));--jn-no:#B4233A;--jn-no-bg:color-mix(in srgb,#B4233A 12%,var(--qa-color-surface));--jn-edge:color-mix(in srgb,var(--qa-color-text) 62%,var(--qa-color-surface));display:flex;flex-direction:column;gap:10px;min-width:0}
+/* Barre de tête : critères du catalogue à gauche, actions du parcours à droite. */
+.lib-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.lib-top .lib-bar{flex:1 1 640px;min-width:0;padding:6px 8px}
+.jn-acts{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}
+/* Les quatre zones : récents, onglets (catalogue / compositeur / diagnostics), propriétés. */
+.lib-shell{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:start;min-width:0}
+.lib-recent-col{width:200px;display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--qa-color-border);border-radius:12px;background:var(--qa-color-surface);max-height:calc(100vh - 230px);overflow:auto;min-width:0}
+.lib-col-h{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.lib-col-h h3{margin:0;font-size:13.5px}
+.lib-recent-col .lib-recent{display:flex;flex-wrap:wrap;gap:6px}
+.lib-recent-col .lib-cards.mini{display:flex;flex-direction:column;gap:8px}
+.lib-recent-col .lib-cards.mini .lib-card{padding:10px;font-size:12.5px}
+.lib-rail{display:none;width:34px;padding:8px 0;justify-content:center;align-items:flex-start;border:1px solid var(--qa-color-border);border-radius:12px;background:var(--qa-color-surface);align-self:stretch}
+.lib-shell.recent-closed .lib-recent-col{display:none}
+.lib-shell.recent-closed .lib-rail.recent{display:flex}
+.lib-shell.props-closed .lib-rail.props{display:flex}
+.lib-main{min-width:0;display:flex;flex-direction:column;border:1px solid var(--qa-color-border);border-radius:12px;background:var(--qa-color-surface);overflow:hidden}
+.lib-tabs{display:flex;gap:2px;padding:0 10px;border-bottom:1px solid var(--qa-color-border);background:var(--qa-color-surface-2);overflow-x:auto}
+.lib-tab{display:inline-flex;align-items:center;gap:7px;padding:10px 14px;border:0;border-bottom:2px solid transparent;background:none;font:inherit;font-size:13.5px;font-weight:600;color:var(--qa-color-muted);cursor:pointer;white-space:nowrap}
+.lib-tab .ico{width:15px;height:15px}
+.lib-tab[aria-selected="true"]{color:var(--qa-color-primary-2);border-bottom-color:var(--qa-color-primary)}
+.lib-tab:hover{color:var(--qa-color-text)}
+.lib-tabpanel{padding:12px;min-width:0}
+.lib-tabpanel .lib-catalog .lib-cards.grid{max-height:none}
+/* Le compositeur. */
+.jn-composer{display:flex;flex-direction:column;gap:10px;min-width:0}
+.jn-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
+.jn-head-ic{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;background:var(--qa-color-primary-soft);color:var(--qa-color-primary)}
+.jn-head-ic .ico{width:17px;height:17px}
+.jn-title{flex:1 1 220px;min-width:160px;max-width:420px}
+.jn-title input{width:100%;font:inherit;font-size:17px;font-weight:700;color:var(--qa-color-text);border:1px solid transparent;border-radius:8px;padding:4px 8px;background:transparent}
+.jn-title input:hover{border-color:var(--qa-color-border)}
+.jn-title input:focus{border-color:var(--qa-color-primary);outline:none;background:var(--qa-color-surface)}
+.jn-head-r{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto;align-items:center}
+.jn-open select{min-height:32px;max-width:240px;border-radius:8px;border:1px solid var(--qa-color-border-strong);background:var(--qa-color-surface);font:inherit;font-size:13px;padding:2px 8px}
+.jn-chips{display:flex;flex-direction:row;flex-wrap:wrap;gap:6px}
 .jn-chip{display:inline-flex;align-items:center;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--qa-color-border);background:var(--qa-color-surface-2);color:var(--qa-color-muted)}
 .jn-chip.ok{color:var(--qa-color-primary-2);background:var(--qa-color-primary-soft);border-color:color-mix(in srgb,var(--qa-color-primary) 25%,var(--qa-color-border))}
 .jn-chip.warn{color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text));background:var(--qa-color-warning-soft);border-color:color-mix(in srgb,var(--qa-color-warning) 30%,var(--qa-color-border))}
 .jn-chip.ko{color:var(--qa-color-danger);background:var(--qa-color-danger-soft);border-color:color-mix(in srgb,var(--qa-color-danger) 30%,var(--qa-color-border))}
 .jn-chip.live{color:var(--qa-color-primary);background:var(--qa-color-surface)}
-.jn-bar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
-.jn-name{flex:1 1 220px;min-width:0}
-.jn-open select{min-height:var(--qa-control,36px);max-width:260px}
-.jn-modes button{display:inline-flex;align-items:center;gap:6px}
+.jn-modebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
+.jn-modebar-l{font-size:13px;font-weight:600;color:var(--qa-color-text)}
+.jn-modes{display:inline-flex;gap:8px}
+.jn-modes .btn{display:inline-flex;align-items:center;gap:6px;min-height:34px}
 .jn-modes .ico{width:15px;height:15px}
-.jn-acts{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+.jn-modebar-r{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto;align-items:center}
+.jn-grp{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface)}
+.jn-zoom{min-width:58px;font-variant-numeric:tabular-nums}
 .jn-redo .ico{transform:scaleX(-1)}
 .jn-msg{display:flex;gap:6px;align-items:flex-start;margin:0;padding:8px 10px;border-radius:8px;font-size:13px}
 .jn-msg.warn{background:var(--qa-color-warning-soft);color:color-mix(in srgb,var(--qa-color-warning) 70%,var(--qa-color-text))}
@@ -1143,108 +1519,201 @@ export const JOURNEY_CSS = `
 .jn-confirm{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface-2)}
 .jn-confirm.warn{border-color:color-mix(in srgb,var(--qa-color-warning) 35%,var(--qa-color-border));background:var(--qa-color-warning-soft)}
 .jn-confirm p{margin:0;flex:1 1 260px}
-.jn-intro{margin:0}
-.jn-body{display:grid;grid-template-columns:230px minmax(0,1fr) 320px;gap:12px;align-items:start;min-width:0}
-.jn-palette,.jn-props{border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface);padding:12px;display:flex;flex-direction:column;gap:8px;min-width:0;max-height:640px;overflow:auto}
-.jn-palette h3,.jn-props h3{margin:0;font-size:14px}
-.jn-palette .jn-pal-search{display:flex;flex:none}
-.jn-pal-g summary{cursor:pointer;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--qa-color-muted);padding:4px 0}
-.jn-pal-list{display:flex;flex-direction:column;gap:6px;margin:4px 0}
-.jn-pal-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface);cursor:grab;min-width:0}
-.jn-pal-item:hover{border-color:var(--qa-color-primary)}
-.jn-pal-item.warn{border-left:3px solid var(--qa-color-warning)}
-.jn-pal-item.ko{border-left:3px solid var(--qa-color-danger)}
+.jn-body{display:grid;grid-template-columns:200px minmax(0,1fr);gap:12px;align-items:stretch;min-width:0}
+/* Le catalogue compact. */
+.jn-palette{border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface);padding:10px;display:flex;flex-direction:column;gap:8px;min-width:0;height:var(--jn-h);overflow:hidden}
+.jn-palette h3{margin:0;font-size:13.5px}
+.jn-palette .jn-pal-search{display:flex;flex:none;height:32px}
+.jn-pal-cat select{width:100%;min-height:32px;border-radius:8px;border:1px solid var(--qa-color-border-strong);background:var(--qa-color-surface);font:inherit;font-size:13px;padding:2px 8px}
+.jn-pal-body{flex:1;overflow:auto;min-height:0;display:flex;flex-direction:column;gap:6px}
+.jn-pal-g{border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface);flex:none}
+.jn-pal-g summary{cursor:pointer;font-size:13px;font-weight:700;padding:7px 9px;list-style:none;display:flex;align-items:center;gap:6px}
+.jn-pal-g summary::-webkit-details-marker{display:none}
+.jn-pal-g summary::before{content:"";width:6px;height:6px;border-right:2px solid var(--qa-color-muted);border-bottom:2px solid var(--qa-color-muted);transform:rotate(-45deg);transition:transform .15s}
+.jn-pal-g[open] summary::before{transform:rotate(45deg)}
+.jn-pal-g summary span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.jn-pal-list{display:flex;flex-direction:column;gap:2px;padding:0 4px 6px}
+.jn-pal-item{display:flex;align-items:center;gap:2px;border:1px solid transparent;border-radius:7px;cursor:grab;min-width:0}
+.jn-pal-item:hover{background:var(--qa-color-primary-soft)}
+.jn-pal-item.picked{background:var(--qa-color-primary-soft);border-color:color-mix(in srgb,var(--qa-color-primary) 45%,var(--qa-color-border))}
+.jn-pal-item.warn .jn-pal-ic{background:var(--qa-color-warning-soft);color:var(--qa-color-warning)}
+.jn-pal-item.ko .jn-pal-ic{background:var(--qa-color-danger-soft);color:var(--qa-color-danger)}
+.jn-pal-pick{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:5px 6px;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
 .jn-pal-t{display:flex;flex-direction:column;min-width:0;flex:1}
-.jn-pal-t b{font-size:13px;overflow-wrap:anywhere}
-.jn-pal-ic,.jn-ic{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;background:var(--qa-color-primary-soft);color:var(--qa-color-primary);flex:none}
+.jn-pal-v{font-size:11px;flex:none}
+.jn-head .jn-chips{flex:none;flex-wrap:nowrap}
+.jn-stage.has-toast .jn-hint{display:none}
+.jn-pal-t b{font-size:12.5px;font-weight:600;line-height:1.25;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+.jn-pal-t small{font-size:11px}
+.jn-pal-ic,.jn-ic{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;background:var(--qa-color-primary-soft);color:var(--qa-color-primary);flex:none}
 .jn-pal-ic .ico,.jn-ic .ico{width:15px;height:15px}
 .jn-ic.condition{background:var(--qa-color-warning-soft);color:var(--qa-color-warning)}
-.jn-pal-shapes h3{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--qa-color-muted)}
-.jn-shape-row{display:flex;flex-wrap:wrap;gap:6px}
-.jn-shape{border:1px dashed var(--qa-color-border-strong);border-radius:8px;background:var(--qa-color-surface);padding:5px 10px;font:inherit;font-size:12.5px;cursor:grab;color:var(--qa-color-text)}
-.jn-shape.condition{border-color:var(--qa-color-warning);color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text));background:var(--qa-color-warning-soft)}
-.jn-stage{min-width:0;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface-2);padding:14px;min-height:420px}
-.jn-line{display:flex;flex-direction:column;align-items:stretch;gap:0;max-width:640px;margin:0 auto}
-.jn-term{align-self:center;display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:999px;font-weight:700;font-size:13px;background:var(--qa-color-primary);color:var(--qa-color-surface)}
-.jn-term.end{background:var(--qa-color-text)}
-.jn-term .ico{width:14px;height:14px}
-.jn-gap{height:22px;display:flex;align-items:center;justify-content:center;position:relative}
-.jn-gap::before{content:"";position:absolute;top:0;bottom:0;left:50%;border-left:2px solid var(--qa-color-border-strong)}
+.jn-pal-hint{font-size:11.5px}
+/* La scène. */
+.jn-composer{--jn-h:clamp(460px,calc(100vh - 330px),780px)}
+.jn-stage{position:relative;min-width:0;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface);height:var(--jn-h);overflow:auto}
+.jn-composer[data-mode="LINEAR"] .jn-stage{padding:16px}
+.jn-line{display:flex;flex-direction:column;align-items:stretch;max-width:560px;margin:0 auto;position:relative}
+.jn-term{align-self:center;display:inline-flex;align-items:center;gap:6px;padding:6px 18px;border-radius:999px;font-weight:700;font-size:13px;background:var(--qa-color-primary-soft);color:var(--qa-color-primary-2);border:1.5px solid var(--qa-color-primary)}
+.jn-term .ico{width:13px;height:13px}
+.jn-gap{height:26px;display:flex;align-items:center;justify-content:center;position:relative;margin-left:36px}
+.jn-gap::before{content:"";position:absolute;top:0;bottom:0;left:50%;border-left:1.5px solid var(--qa-color-border-strong)}
 .jn-gap span{position:relative;opacity:0;font-size:11.5px;font-weight:600;color:var(--qa-color-primary-2);background:var(--qa-color-primary-soft);border:1px dashed var(--qa-color-primary);border-radius:6px;padding:0 8px}
-.jn-dragging .jn-gap{height:34px}
 .jn-dragging .jn-gap span{opacity:.6}
 .jn-gap.over span{opacity:1}
-.jn-card{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface);min-width:0;box-shadow:0 1px 2px color-mix(in srgb,var(--qa-color-text) 6%,transparent)}
-.jn-card:hover{border-color:color-mix(in srgb,var(--qa-color-primary) 45%,var(--qa-color-border))}
-.jn-card.sel{border-color:var(--qa-color-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--qa-color-primary) 25%,transparent)}
-.jn-card.ko{border-color:var(--qa-color-danger);background:color-mix(in srgb,var(--qa-color-danger) 4%,var(--qa-color-surface))}
-.jn-card.warn{border-color:var(--qa-color-warning)}
+.jn-card{display:flex;align-items:center;gap:10px;min-width:0}
+.jn-num{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:var(--qa-color-surface);color:var(--qa-color-primary-2);border:1.5px solid var(--qa-color-primary);flex:none}
+.jn-card.sel .jn-num{background:var(--qa-color-primary-2);color:var(--qa-color-surface);border-color:var(--qa-color-primary-2)}
+.jn-card-box{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface);box-shadow:0 1px 2px color-mix(in srgb,var(--qa-color-text) 6%,transparent)}
+.jn-card:hover .jn-card-box{border-color:var(--jn-node-bd)}
+.jn-card.sel .jn-card-box{background:var(--jn-node-bg);border-color:var(--qa-color-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--qa-color-primary) 18%,transparent)}
+.jn-card.ko .jn-card-box{border-color:var(--qa-color-danger);background:color-mix(in srgb,var(--qa-color-danger) 4%,var(--qa-color-surface))}
+.jn-card.warn .jn-card-box{border-color:var(--qa-color-warning)}
 .jn-card.moving{opacity:.45}
 .jn-grip{cursor:grab;color:var(--qa-color-faint);display:grid;place-items:center}
-.jn-grip .ico{width:16px;height:16px}
-.jn-num{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:var(--qa-color-primary-soft);color:var(--qa-color-primary-2);flex:none}
+.jn-grip .ico{width:15px;height:15px}
 .jn-card-b{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;text-align:left;background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer}
-.jn-card-h{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
-.jn-card-h b{overflow-wrap:anywhere}
-.jn-compat{font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px;border:1px solid var(--qa-color-border)}
+.jn-card-h{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+.jn-card-t{display:flex;flex-direction:column;min-width:0;flex:1}
+.jn-card-t b{font-size:13.5px;overflow-wrap:anywhere}
+.jn-card-t small{font-size:11.5px}
+.jn-compat{font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;border:1px solid var(--qa-color-border)}
 .jn-compat.ok{color:var(--qa-color-primary-2);background:var(--qa-color-primary-soft)}
 .jn-compat.warn{color:color-mix(in srgb,var(--qa-color-warning) 75%,var(--qa-color-text));background:var(--qa-color-warning-soft)}
 .jn-compat.ko{color:var(--qa-color-danger);background:var(--qa-color-danger-soft)}
 .jn-ios{display:flex;flex-wrap:wrap;gap:8px}
 .jn-io{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:11.5px;color:var(--qa-color-muted)}
 .jn-io .lib-key.set{border-color:var(--qa-color-primary)}
+.jn-err{display:flex;gap:4px;align-items:center;font-size:12px;color:var(--qa-color-danger)}
+.jn-err .ico{width:13px;height:13px}
+.jn-card-a{display:flex;gap:0;flex:none;opacity:.55}
+.jn-card:hover .jn-card-a,.jn-card.sel .jn-card-a,.jn-card-a:focus-within{opacity:1}
+.jn-empty{text-align:center;padding:24px 12px;border:2px dashed var(--qa-color-border-strong);border-radius:10px;margin-left:34px}
+.jn-add-here{display:flex;justify-content:center;margin:6px 0 12px 34px}
+.jn-add-here-b{width:100%;justify-content:center;border-style:dashed;color:var(--qa-color-muted);background:var(--qa-color-surface-2)}
+/* Le diagramme. */
+.jn-canvas{position:relative;height:100%;overflow:hidden;background-color:var(--qa-color-surface);background-image:radial-gradient(color-mix(in srgb,var(--qa-color-text) 13%,transparent) 1px,transparent 1.2px);background-size:18px 18px;cursor:grab;touch-action:none}
+.jn-canvas.panning{cursor:grabbing}
+.jn-canvas.connecting,.jn-canvas.connecting .jn-node{cursor:crosshair}
+.jn-canvas.drop{outline:2px dashed var(--qa-color-primary);outline-offset:-4px}
+.jn-tools-v{position:absolute;z-index:4;top:10px;left:10px;display:flex;flex-direction:column;gap:2px;padding:4px;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface);box-shadow:0 2px 8px color-mix(in srgb,var(--qa-color-text) 8%,transparent)}
+.jn-tool{width:32px;height:32px;display:grid;place-items:center;border:0;border-radius:7px;background:none;color:var(--qa-color-text);cursor:pointer}
+.jn-tool .ico{width:17px;height:17px}
+.jn-tool:hover:not(:disabled){background:var(--qa-color-primary-soft);color:var(--qa-color-primary-2)}
+.jn-tool[aria-pressed="true"]{background:var(--qa-color-primary-soft);color:var(--qa-color-primary)}
+.jn-tool:disabled{opacity:.35;cursor:not-allowed}
+.jn-tool.danger:not(:disabled){color:var(--qa-color-danger)}
+.jn-tool[data-kind="CONDITION"]{color:var(--qa-color-warning)}
+.jn-hint{position:absolute;z-index:3;left:56px;bottom:8px;right:10px;font-size:11.5px;pointer-events:none}
+.jn-world{position:absolute;left:0;top:0;transform-origin:0 0}
+.jn-edges{position:absolute;overflow:visible;pointer-events:none}
+.jn-e{fill:none;stroke:var(--jn-edge);stroke-width:1.6}
+.jn-edge.ko .jn-e{stroke:var(--qa-color-danger);stroke-dasharray:6 4}
+.jn-edge.sel .jn-e{stroke:var(--jn-sel);stroke-width:2.6}
+.jn-edge.drop .jn-e{stroke:var(--qa-color-primary);stroke-width:3.2}
+.jn-hit{fill:none;stroke:transparent;stroke-width:14;pointer-events:stroke;cursor:pointer}
+#jn-arrow path{fill:var(--jn-edge)}
+.jn-pill rect{stroke-width:1}
+.jn-pill text{font-size:11px;font-weight:700}
+.jn-pill.yes rect{fill:var(--qa-color-primary-soft);stroke:color-mix(in srgb,var(--qa-color-primary) 40%,transparent)}
+.jn-pill.yes text{fill:var(--qa-color-primary-2)}
+.jn-pill.no rect{fill:var(--jn-no-bg);stroke:color-mix(in srgb,var(--jn-no) 35%,transparent)}
+.jn-pill.no text{fill:var(--jn-no)}
+.jn-temp{fill:none;stroke:var(--jn-sel);stroke-width:2;stroke-dasharray:5 4}
+.jn-node{position:absolute;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:8px 12px;border:1.5px solid var(--jn-node-bd);border-radius:10px;background:var(--jn-node-bg);cursor:move;user-select:none;box-shadow:0 1px 3px color-mix(in srgb,var(--qa-color-text) 7%,transparent)}
+.jn-n-t{display:flex;flex-direction:column;min-width:0}
+.jn-n-t b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.jn-n-t small{font-size:11.5px}
+.jn-node.start,.jn-node.end{justify-content:center;border-radius:999px;background:var(--qa-color-primary-soft);border-color:var(--qa-color-primary);color:var(--qa-color-primary-2);font-size:13.5px}
+.jn-node.start .ico,.jn-node.end .ico{width:13px;height:13px}
+.jn-node.join{justify-content:center;border-radius:999px;border-style:dashed;background:var(--qa-color-surface);font-size:12.5px;color:var(--qa-color-muted)}
+.jn-node.join .ico{width:14px;height:14px}
+.jn-node.condition{border:0;background:none;box-shadow:none;flex-direction:column;justify-content:center;gap:2px;text-align:center;padding:12px 28px}
+.jn-dia{position:absolute;inset:0;width:100%;height:100%;overflow:visible;z-index:-1}
+.jn-dia polygon{fill:var(--jn-cond-bg);stroke:var(--jn-cond-bd);stroke-width:1.6;vector-effect:non-scaling-stroke}
+.jn-n-q{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;background:var(--qa-color-warning);color:var(--qa-color-surface)}
+.jn-n-l{font-size:12px;line-height:1.2;max-width:100%;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.jn-node.condition.sel .jn-dia polygon{stroke:var(--jn-sel);stroke-width:2.4}
+.jn-node.condition.ko .jn-dia polygon{stroke:var(--qa-color-danger)}
+.jn-node.condition.sel,.jn-node.condition.ko{box-shadow:none;border:0}
+.jn-node.sel{border:2px solid var(--jn-sel);box-shadow:0 0 0 3px var(--jn-sel-soft),0 4px 12px color-mix(in srgb,var(--qa-color-text) 12%,transparent)}
+.jn-node.ko{border-color:var(--qa-color-danger)}
+.jn-node.warn{border-color:var(--qa-color-warning)}
+.jn-node.link-from{box-shadow:0 0 0 3px var(--jn-sel)}
+.jn-node.dragging{opacity:.85;box-shadow:0 8px 20px color-mix(in srgb,var(--qa-color-text) 18%,transparent)}
+.jn-node:focus-visible{outline:2px solid var(--jn-sel);outline-offset:2px}
+.jn-node.target{box-shadow:0 0 0 3px var(--jn-sel)}
+.jn-badge{position:absolute;top:-8px;right:-8px;min-width:18px;height:18px;border-radius:9px;color:var(--qa-color-surface);font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 4px}
+.jn-badge.ko{background:var(--qa-color-danger)}
+.jn-badge.warn{background:var(--qa-color-warning)}
+.jn-node.condition .jn-badge{top:4px;right:calc(50% - 46px)}
+.jn-port{position:absolute;bottom:-6px;left:50%;width:11px;height:11px;margin-left:-5.5px;border-radius:50%;background:var(--qa-color-surface);border:2px solid var(--jn-node-bd);cursor:crosshair}
+.jn-port.yes{left:0;bottom:auto;top:50%;margin-top:-5.5px;margin-left:-5.5px;border-color:var(--qa-color-primary)}
+.jn-port.no{left:100%;bottom:auto;top:50%;margin-top:-5.5px;margin-left:-5.5px;border-color:var(--jn-no)}
+.jn-port:hover{background:var(--jn-sel);border-color:var(--jn-sel)}
+.jn-in{position:absolute;top:-6px;left:50%;width:11px;height:11px;margin-left:-5.5px;border-radius:50%;background:var(--qa-color-surface);border:2px solid var(--jn-node-bd);opacity:0;pointer-events:none}
+.jn-node.condition .jn-in{top:-4px}
+.jn-node.sel .jn-in,.jn-node.sel .jn-port,.jn-canvas.connecting .jn-in{opacity:1;border-color:var(--jn-sel)}
+.jn-float{position:absolute;z-index:5;bottom:calc(100% + 8px);right:0;display:flex;align-items:center;gap:1px;padding:2px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface);box-shadow:0 4px 12px color-mix(in srgb,var(--qa-color-text) 14%,transparent);cursor:default}
+.jn-float .btn .ico{width:15px;height:15px}
+.jn-float .btn{color:var(--jn-sel)}
+.jn-float .btn.danger{color:var(--qa-color-danger)}
+.jn-node.condition .jn-float{right:auto;left:50%;transform:translateX(-50%)}
+.jn-more{position:relative}
+.jn-more summary{list-style:none}
+.jn-more summary::-webkit-details-marker{display:none}
+.jn-more-m{position:absolute;top:calc(100% + 4px);right:0;min-width:210px;display:flex;flex-direction:column;padding:4px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface);box-shadow:0 6px 18px color-mix(in srgb,var(--qa-color-text) 16%,transparent)}
+.jn-more-m button{display:flex;align-items:center;gap:8px;padding:7px 9px;border:0;border-radius:6px;background:none;font:inherit;font-size:13px;color:var(--qa-color-text);text-align:left;cursor:pointer}
+.jn-more-m button:hover{background:var(--qa-color-primary-soft)}
+.jn-more-m .ico{width:14px;height:14px}
+.jn-insert{position:absolute;z-index:6;top:10px;left:50%;transform:translateX(-50%);display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:calc(100% - 80px);padding:8px 10px;border:1px solid color-mix(in srgb,var(--qa-color-primary) 40%,var(--qa-color-border));border-radius:10px;background:var(--qa-color-surface);box-shadow:0 6px 18px color-mix(in srgb,var(--qa-color-text) 14%,transparent);font-size:13px}
+.jn-insert p{margin:0}
+.jn-toast{position:absolute;z-index:7;left:50%;bottom:14px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:8px 8px 8px 12px;border:1px solid color-mix(in srgb,var(--qa-color-primary) 35%,var(--qa-color-border));border-radius:10px;background:var(--qa-color-surface);box-shadow:0 6px 18px color-mix(in srgb,var(--qa-color-text) 16%,transparent);font-size:13px;font-weight:600;max-width:calc(100% - 28px)}
+.jn-toast>.ico{width:20px;height:20px;padding:3px;border-radius:50%;background:var(--qa-color-primary);color:var(--qa-color-surface);flex:none}
+.jn-composer[data-mode="LINEAR"] .jn-toast{position:sticky;bottom:6px;margin:8px auto 0;transform:none;left:auto;width:max-content}
+/* Le panneau droit : propriétés puis validation. */
+.jn-side{width:300px;display:flex;flex-direction:column;gap:12px;min-width:0;max-height:calc(100vh - 200px);overflow:auto}
+.jn-props,.jn-valid{border:1px solid var(--qa-color-border);border-radius:12px;background:var(--qa-color-surface);padding:12px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.jn-props-top{display:flex;align-items:center;justify-content:space-between}
+.jn-props-k{margin:0;font-size:14px;font-weight:700;color:var(--qa-color-text)}
+.jn-props h3,.jn-valid h3{margin:0;font-size:14px}
+.jn-props-h{display:flex;gap:8px;align-items:center;min-width:0}
+.jn-props-n{flex:1;min-width:0}
+.jn-props-n p{margin:2px 0 0;font-size:12px}
+.jn-props-h h3{font-size:13.5px;overflow-wrap:anywhere}
+.jn-ver{font-size:12px;font-weight:600;padding:2px 8px;border:1px solid var(--qa-color-border-strong);border-radius:6px;color:var(--qa-color-text)}
+.jn-accept{align-self:flex-start}
+.jn-ptabs{display:flex;border-bottom:1px solid var(--qa-color-border);gap:2px}
+.jn-ptab{flex:1;padding:7px 4px;border:0;border-bottom:2px solid transparent;background:none;font:inherit;font-size:12.5px;font-weight:600;color:var(--qa-color-muted);cursor:pointer}
+.jn-ptab[aria-selected="true"]{color:var(--qa-color-primary-2);border-bottom-color:var(--qa-color-primary)}
+.jn-ppanel{display:flex;flex-direction:column;gap:8px;padding-top:4px}
+.jn-acc{border:1px solid var(--qa-color-border);border-radius:8px}
+.jn-acc summary{cursor:pointer;padding:7px 9px;font-size:13px;font-weight:600}
+.jn-acc-b{padding:0 9px 9px;display:flex;flex-direction:column;gap:6px}
+.jn-acc-b .jn-sec{border-top:0;padding-top:0}
+.jn-acc-b .jn-sec h4{display:none}
+.jn-vers{display:flex;flex-direction:column;gap:4px;font-size:12.5px}
+.jn-vers li{display:flex;gap:6px;align-items:center}
+.jn-vers li.ok .ico{color:var(--qa-color-primary)}
+.jn-vers li.warn .ico{color:var(--qa-color-warning)}
+.jn-vers .ico{width:14px;height:14px;flex:none}
+.jn-valid{gap:10px}
+.jn-val-state{display:flex;align-items:center;gap:8px;margin:0;padding:8px 10px;border-radius:8px;font-weight:700;font-size:13px;background:var(--qa-color-surface-2);color:var(--qa-color-muted)}
+.jn-val-state .ico{width:16px;height:16px}
+.jn-val-state.ok{background:var(--qa-color-primary-soft);color:var(--qa-color-primary-2)}
+.jn-val-state.ko{background:var(--qa-color-danger-soft);color:var(--qa-color-danger)}
+.jn-val-list{display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.jn-val-list li{display:flex;gap:8px;align-items:flex-start}
+.jn-val-list .ico{width:16px;height:16px;flex:none;padding:2px;border-radius:50%;color:var(--qa-color-surface)}
+.jn-val-list li.ok .ico{background:var(--qa-color-primary)}
+.jn-val-list li.ko .ico{background:var(--qa-color-danger)}
+.jn-val-list small{color:var(--qa-color-danger)}
+.jn-sec{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--qa-color-border)}
+.jn-sec h4{margin:0;font-size:13px}
 .jn-out dd{display:flex;flex-wrap:wrap;gap:4px}
 .jn-out-partial li{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .jn-out .lib-key.warn{border-color:var(--qa-color-warning)}
 .jn-toblock{display:flex;flex-direction:column;gap:8px}
-.jn-err{display:flex;gap:4px;align-items:center;font-size:12px;color:var(--qa-color-danger)}
-.jn-err .ico{width:13px;height:13px}
-.jn-card-a{display:flex;gap:2px;flex:none}
-.jn-empty{text-align:center;padding:24px 12px;border:2px dashed var(--qa-color-border-strong);border-radius:10px}
-.jn-canvas{position:relative;height:560px;overflow:hidden;border-radius:8px;background-color:var(--qa-color-surface);background-image:radial-gradient(color-mix(in srgb,var(--qa-color-text) 14%,transparent) 1px,transparent 1px);background-size:20px 20px;cursor:grab;touch-action:none;margin:-14px}
-.jn-canvas.panning{cursor:grabbing}
-.jn-canvas.drop{outline:2px dashed var(--qa-color-primary);outline-offset:-4px}
-.jn-tools{position:absolute;z-index:3;top:8px;right:8px;display:flex;align-items:center;gap:4px;padding:4px;border:1px solid var(--qa-color-border);border-radius:8px;background:var(--qa-color-surface)}
-.jn-zoom{font-size:12px;min-width:44px;text-align:center;font-variant-numeric:tabular-nums}
-.jn-hint{position:absolute;z-index:3;left:10px;bottom:8px;right:10px;font-size:11.5px;pointer-events:none}
-.jn-world{position:absolute;left:0;top:0;transform-origin:0 0}
-.jn-edges{position:absolute;overflow:visible;pointer-events:none}
-.jn-e{fill:none;stroke:var(--qa-color-border-strong);stroke-width:2}
-.jn-edge.yes .jn-e{stroke:var(--qa-color-primary)}
-.jn-edge.no .jn-e{stroke:var(--qa-color-warning)}
-.jn-edge.ko .jn-e{stroke:var(--qa-color-danger);stroke-dasharray:6 4}
-.jn-edge.sel .jn-e{stroke-width:3.5}
-.jn-hit{fill:none;stroke:transparent;stroke-width:14;pointer-events:stroke;cursor:pointer}
-.jn-e-l{font-size:11px;font-weight:700;fill:var(--qa-color-muted)}
-.jn-e-l.yes{fill:var(--qa-color-primary-2)}
-.jn-e-l.no{fill:color-mix(in srgb,var(--qa-color-warning) 80%,var(--qa-color-text))}
-#jn-arrow path{fill:var(--qa-color-border-strong)}
-.jn-temp{fill:none;stroke:var(--qa-color-primary);stroke-width:2;stroke-dasharray:5 4}
-.jn-node{position:absolute;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;gap:3px;padding:8px 12px;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface);cursor:move;user-select:none;box-shadow:0 1px 3px color-mix(in srgb,var(--qa-color-text) 8%,transparent)}
-.jn-node.block{border-left:4px solid var(--qa-color-primary);background:color-mix(in srgb,var(--qa-color-primary) 5%,var(--qa-color-surface))}
-.jn-node.start,.jn-node.end{align-items:center;border-radius:999px;background:var(--qa-color-primary);color:var(--qa-color-surface);border-color:var(--qa-color-primary)}
-.jn-node.end{background:var(--qa-color-text);border-color:var(--qa-color-text)}
-.jn-node.condition{border:2px solid var(--qa-color-warning);background:var(--qa-color-warning-soft);border-radius:14px;align-items:center;text-align:center}
-.jn-node.join{align-items:center;border-radius:999px;border-style:dashed;background:var(--qa-color-surface-2)}
-.jn-node.sel{box-shadow:0 0 0 3px color-mix(in srgb,var(--qa-color-primary) 35%,transparent)}
-.jn-node.ko{border-color:var(--qa-color-danger)}
-.jn-node.dragging{opacity:.85;box-shadow:0 8px 20px color-mix(in srgb,var(--qa-color-text) 18%,transparent)}
-.jn-node:focus-visible{outline:2px solid var(--qa-color-primary);outline-offset:2px}
-.jn-n-h{display:flex;align-items:center;gap:6px;min-width:0}
-.jn-n-h b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.jn-yn{display:flex;justify-content:space-between;width:100%;font-weight:700;font-size:11px}
-.jn-yn span:first-child{color:var(--qa-color-primary-2)}
-.jn-badge{position:absolute;top:-8px;right:-8px;min-width:18px;height:18px;border-radius:9px;background:var(--qa-color-danger);color:var(--qa-color-surface);font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 4px}
-.jn-port{position:absolute;bottom:-7px;left:50%;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:var(--qa-color-surface);border:2px solid var(--qa-color-primary);cursor:crosshair}
-.jn-port.yes{left:22%}
-.jn-port.no{left:78%;border-color:var(--qa-color-warning)}
-.jn-port:hover{background:var(--qa-color-primary)}
-.jn-node.target{box-shadow:0 0 0 3px var(--qa-color-primary)}
-.jn-props-k{margin:0;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--qa-color-muted)}
-.jn-props-h{display:flex;gap:10px;align-items:flex-start}
-.jn-props-h p{margin:2px 0 0}
-.jn-sec{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--qa-color-border)}
-.jn-sec h4{margin:0;font-size:13px}
 .jn-params{display:flex;flex-direction:column;gap:8px}
 .jn-param{display:grid;grid-template-columns:minmax(0,1fr);gap:4px}
 .jn-param-k{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
@@ -1264,17 +1733,32 @@ export const JOURNEY_CSS = `
 .jn-outs li{display:flex;align-items:center;gap:6px}
 .jn-connect{display:flex;flex-wrap:wrap;align-items:flex-end;gap:6px}
 .jn-back{align-self:flex-start}
+.jn-diagtab{display:flex;flex-direction:column;gap:10px;max-width:900px}
+.jn-diagtab h3{margin:0;font-size:15px}
+.jn-pernode{display:flex;flex-direction:column;gap:8px}
+.jn-pernode>li{padding:8px 10px;border:1px solid var(--qa-color-border);border-radius:8px}
 .ok-t{color:var(--qa-color-primary-2);display:flex;gap:6px;align-items:center;margin:0}
 .ok-t .ico{width:14px;height:14px}
-/* Écran intermédiaire : les propriétés passent sous la scène (le diagramme garde sa largeur). */
+/* Écrans de bureau plus étroits : récents en rail, panneaux plus fins ; le canvas garde la priorité. */
 @media (max-width:1599px){
-  .jn-body{grid-template-columns:220px minmax(0,1fr)}
-  .jn-props{grid-column:1 / -1;max-height:none}
+  .lib-shell.recent-auto .lib-recent-col{display:none}
+  .lib-shell.recent-auto .lib-rail.recent{display:flex}
+  .jn-side{width:280px}
+  .jn-body{grid-template-columns:196px minmax(0,1fr)}
+  .jn-modebar-l{display:none}
+}
+@media (max-width:1180px){
+  .lib-shell{grid-template-columns:auto minmax(0,1fr)}
+  .jn-side{grid-column:1 / -1;width:auto;max-height:none;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .lib-rail.props{grid-column:1 / -1;width:auto}
 }
 @media (max-width:760px){
+  .lib-shell{grid-template-columns:minmax(0,1fr)}
+  .lib-shell .lib-rail{display:none!important}
+  .lib-recent-col{width:auto;max-height:none}
   .jn-body{grid-template-columns:minmax(0,1fr)}
-  .jn-palette{max-height:280px}
-  .jn-canvas{height:440px}
+  .jn-palette{height:280px}
+  .jn-side{grid-template-columns:minmax(0,1fr)}
   .jn-acts{margin-left:0}
 }
 `;

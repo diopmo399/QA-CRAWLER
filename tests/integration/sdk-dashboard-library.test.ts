@@ -67,37 +67,80 @@ afterAll(async () => {
   await rm(workspace, { recursive: true, force: true });
 });
 
+/** Change d'onglet dans la Bibliothèque (Catalogue de blocs, Compositeur de parcours, Diagnostics). */
+async function tab(name: 'catalog' | 'composer' | 'diagnostics'): Promise<void> {
+  const button = dashboard().locator(`[data-action="jn-tab"][data-tab="${name}"]`);
+  if ((await button.getAttribute('aria-selected')) !== 'true') await button.click();
+}
+
 describe('Dashboard — scenario library in Chromium', () => {
-  it('adds blocks from the side panel, after a preview of the source and a check of the name', async () => {
+  it('adds blocks through the « Ajouter un bloc » window: four steps, the name checked, a real check before creation', async () => {
     await dashboard().locator('.lib-blank', { hasText: 'Aucun bloc pour l’instant' }).waitFor();
     await dashboard().locator('.hd [data-action="lib-panel-open"]').click();
-    const sheet = dashboard().locator('.lib-sheet');
-    await sheet
-      .locator('.lib-preview', { hasText: '3 étape(s) · départ /items' })
+    const wizard = dashboard().locator('.wz[role="dialog"]');
+    // La source réelle est lue : ses étapes exécutables et sa page de départ.
+    await wizard.locator('.wz-status.ok', { hasText: '3 étape(s) exécutable(s) · départ /items' }).waitFor({
+      timeout: 15_000,
+    });
+    // Le focus est dans la fenêtre ; le nom est vérifié avant d'aller plus loin.
+    expect(
+      await wizard
+        .locator('[data-wz="name"]')
+        .evaluate((input) => input === (input.getRootNode() as ShadowRoot).activeElement),
+    ).toBe(true);
+    await wizard.locator('[data-wz="name"]').fill('Chercher un élément');
+    await wizard.locator('#wz-name-hint.err', { hasText: 'déjà pris' }).waitFor();
+    expect(await wizard.locator('[data-action="wz-next"]').isDisabled()).toBe(true);
+    await wizard.locator('[data-wz="name"]').fill('Bloc création');
+    await wizard.locator('[data-wz="description"]').fill('Crée un élément au titre généré');
+    // Étapes 2 et 3 : le contrat déduit, puis les paramètres (ses entrées).
+    await wizard.locator('[data-action="wz-next"]').click();
+    await wizard.locator('.wz-h', { hasText: 'Entrées et sorties' }).waitFor();
+    await wizard.locator('[data-action="wz-next"]').click();
+    await wizard.locator('.wz-h', { hasText: 'Paramètres configurables' }).waitFor();
+    // Étape 4 : récapitulatif et vérification réelle ; Précédent garde la saisie.
+    await wizard.locator('[data-action="wz-next"]').click();
+    await wizard
+      .locator('.wz-status.ok', { hasText: 'Le bloc peut être créé.' })
       .waitFor({ timeout: 15_000 });
-    expect(await sheet.locator('.lib-preview').textContent()).toContain('item.title');
-    // Le nom est vérifié avant l'envoi : déjà pris, le bouton reste inactif.
-    await sheet.locator('input[data-lib="panel.name"]').fill('Chercher un élément');
-    await sheet.locator('#lib-name-hint.err', { hasText: 'déjà pris' }).waitFor();
-    expect(await sheet.locator('button[type="submit"]').isDisabled()).toBe(true);
-    await sheet.locator('input[data-lib="panel.name"]').fill('Bloc création');
-    await sheet.locator('textarea[data-lib="panel.description"]').fill('Crée un élément au titre généré');
-    await sheet.locator('button[type="submit"]').click();
+    await wizard.locator('[data-action="wz-prev"]').click();
+    await wizard.locator('[data-action="wz-goto"][data-step="1"]').click();
+    expect(await wizard.locator('[data-wz="name"]').inputValue()).toBe('Bloc création');
+    await wizard.locator('[data-action="wz-goto"][data-step="4"]').click();
+    await wizard
+      .locator('.wz-status.ok', { hasText: 'Le bloc peut être créé.' })
+      .waitFor({ timeout: 15_000 });
+    await wizard.locator('[data-action="wz-create"]').dblclick();
     await dashboard()
-      .locator('.notice', { hasText: 'Le bloc « Bloc création » est dans la bibliothèque.' })
-      .waitFor({
-        timeout: 15_000,
-      });
-    expect(await dashboard().locator('.lib-sheet').count()).toBe(0);
-    // Le second, avec Échap pour fermer d'abord, puis rouvert sur l'autre scénario.
+      .locator('.notice', { hasText: 'Bloc créé avec succès : « Bloc création ».' })
+      .waitFor({ timeout: 15_000 });
+    expect(await dashboard().locator('.wz').count()).toBe(0);
+    expect((await client.library.list(project.id)).map((block) => block.name)).toEqual(['Bloc création']);
+    // Fermer après une saisie demande confirmation (Échap), jamais une perte silencieuse.
     await dashboard().locator('.hd [data-action="lib-panel-open"]').click();
+    await wizard.locator('[data-wz="name"]').fill('Brouillon');
     await page.keyboard.press('Escape');
-    expect(await dashboard().locator('.lib-sheet').count()).toBe(0);
+    await wizard.locator('.wz-discard', { hasText: 'Abandonner la création du bloc ?' }).waitFor();
+    await wizard.locator('[data-action="wz-discard-no"]').click();
+    expect(await wizard.locator('[data-wz="name"]').inputValue()).toBe('Brouillon');
+    await wizard.locator('[data-action="wz-cancel"]').first().click();
+    await wizard.locator('[data-action="wz-discard-yes"]').click();
+    expect(await dashboard().locator('.wz').count()).toBe(0);
+    // Le second bloc, depuis l'autre scénario.
     await dashboard().locator('.hd [data-action="lib-panel-open"]').click();
-    await dashboard().locator('select[data-lib="panel.scenario"]').selectOption('Chercher un élément');
-    await dashboard().locator('.lib-preview', { hasText: '2 étape(s)' }).waitFor({ timeout: 15_000 });
-    await dashboard().locator('input[data-lib="panel.name"]').fill('Bloc recherche');
-    await dashboard().locator('.lib-sheet button[type="submit"]').click();
+    await wizard.locator('select[data-wz="scenario"]').selectOption('Chercher un élément');
+    await wizard.locator('.wz-status.ok', { hasText: '2 étape(s)' }).waitFor({ timeout: 15_000 });
+    await wizard.locator('[data-wz="name"]').fill('Bloc recherche');
+    for (let step = 0; step < 3; step += 1) await wizard.locator('[data-action="wz-next"]').click();
+    await wizard
+      .locator('.wz-status.ok', { hasText: 'Le bloc peut être créé.' })
+      .waitFor({ timeout: 15_000 });
+    await wizard.locator('[data-action="wz-create"]').click();
+    await dashboard().locator('.notice', { hasText: 'Bloc créé avec succès : « Bloc recherche ».' }).waitFor({
+      timeout: 15_000,
+    });
+    // Les onglets de la page : le catalogue complet est dans « Catalogue de blocs ».
+    await tab('catalog');
     await dashboard().locator('.lib-card', { hasText: 'Bloc recherche' }).waitFor({ timeout: 15_000 });
     const card = dashboard().locator('.lib-card', { hasText: 'Bloc création' });
     expect(await card.locator('.lib-ver').textContent()).toBe('v1');
@@ -142,6 +185,7 @@ describe('Dashboard — scenario library in Chromium', () => {
 
   it('composes in linear mode: dragged from the palette, the missing input shown on the card, fixed by reordering', async () => {
     const composer = dashboard().locator('#lib-composer');
+    await tab('composer');
     await composer.locator('input[data-jn="name"]').fill('Créer puis chercher');
     // Glisser-déposer réel depuis la palette vers la suite vide.
     await composer
@@ -150,9 +194,16 @@ describe('Dashboard — scenario library in Chromium', () => {
     await composer
       .locator('.jn-card.ko', { hasText: 'entrée item.title manquante' })
       .waitFor({ timeout: 15_000 });
-    // Le bouton d'une carte du catalogue ajoute aussi au parcours (à la fin) : créée plus tard, toujours en défaut.
-    await dashboard().locator('.lib-card [data-action="lib-part-add"][data-block="Bloc création"]').click();
+    // « Au parcours » sur une carte du catalogue ajoute aussi (à la fin) et ramène au compositeur ; le bloc
+    // ajouté est choisi, ses propriétés s'ouvrent, une confirmation discrète le dit.
+    await tab('catalog');
+    await dashboard()
+      .locator('.lib-tabpanel .lib-card [data-action="lib-part-add"][data-block="Bloc création"]')
+      .click();
     await expect.poll(() => composer.locator('.jn-card').count()).toBe(2);
+    await composer.locator('.jn-toast', { hasText: 'Bloc « Bloc création » ajouté au parcours' }).waitFor();
+    await composer.locator('.jn-card.sel', { hasText: 'Bloc création' }).waitFor();
+    await composer.locator('.jn-props h3', { hasText: 'Bloc création' }).waitFor();
     await composer.locator('.jn-chip.ko', { hasText: 'Parcours invalide' }).waitFor({ timeout: 15_000 });
     expect(await composer.locator('[data-action="jn-publish"]').isDisabled()).toBe(true);
     // Réordonner par glisser-déposer : « Bloc création » en tête, le parcours tient.
@@ -171,8 +222,10 @@ describe('Dashboard — scenario library in Chromium', () => {
     await expect.poll(() => composer.locator('.jn-card').count()).toBe(3);
     await composer.locator('[data-action="jn-redo"]').click();
     await expect.poll(() => composer.locator('.jn-card').count()).toBe(2);
-    expect(await dashboard().locator('.lib-card').count()).toBe(2);
+    expect(await client.library.list(project.id)).toHaveLength(2);
     await composer.locator('.jn-chip.ok', { hasText: 'Parcours valide' }).waitFor({ timeout: 15_000 });
+    // La validation du parcours suit la vraie vérification.
+    await composer.locator('.jn-val-state.ok', { hasText: 'Parcours valide' }).waitFor();
   });
 
   it('saves, reloads, switches to the diagram and back without loss; a condition keeps the diagram', async () => {
@@ -242,15 +295,20 @@ describe('Dashboard — scenario library in Chromium', () => {
       'Bloc création',
       'Bloc recherche',
     ]);
-    await dashboard().locator('.lib-card', { hasText: 'Utilisé dans 1 scénario(s)' }).first().waitFor();
+    await tab('catalog');
+    await dashboard()
+      .locator('.lib-tabpanel .lib-card', { hasText: 'Utilisé dans 1 scénario(s)' })
+      .first()
+      .waitFor();
+    await tab('composer');
     // Rien n'est écrasé : la même création est refusée, la raison est dite, le parcours reste.
     await composer.locator('[data-action="jn-publish"]').click();
     await composer.locator('.err[role="alert"]', { hasText: 'already named' }).waitFor({ timeout: 15_000 });
     expect(await composer.locator('.jn-card').count()).toBe(2);
 
     // Ses sorties, puis le parcours devient un bloc du catalogue (contrat déclaré).
-    if (await composer.locator('[data-action="jn-deselect"]').count())
-      await composer.locator('[data-action="jn-deselect"]').click();
+    if (await composer.locator('.jn-props [data-action="jn-deselect"]').count())
+      await composer.locator('.jn-props [data-action="jn-deselect"]').click();
     await composer.locator('.jn-outputs', { hasText: 'Sorties du parcours' }).waitFor();
     await composer.locator('[data-action="jn-to-block"]').click();
     await composer.locator('input[data-jn="blockName"]').fill('Créer et chercher (bloc)');
@@ -258,7 +316,12 @@ describe('Dashboard — scenario library in Chromium', () => {
     await composer
       .locator('.notice', { hasText: 'Le bloc « Créer et chercher (bloc) » est dans la bibliothèque' })
       .waitFor({ timeout: 15_000 });
-    await dashboard().locator('.lib-card', { hasText: 'Créer et chercher (bloc)' }).first().waitFor();
+    await tab('catalog');
+    await dashboard()
+      .locator('.lib-tabpanel .lib-card', { hasText: 'Créer et chercher (bloc)' })
+      .first()
+      .waitFor();
+    await tab('composer');
     const created = (await client.library.list(project.id)).find(
       (block) => block.name === 'Créer et chercher (bloc)',
     );
@@ -279,12 +342,13 @@ describe('Dashboard — scenario library in Chromium', () => {
     const canvas = composer.locator('[data-jn-canvas]');
     await composer
       .locator('[data-jn-shape="CONDITION"]')
-      .dragTo(canvas, { targetPosition: await spot(canvas, 0.22, 0.2) });
+      .dragTo(canvas, { targetPosition: await spot(canvas, 0.45, 0.2) });
     await composer.locator('input[data-jn="label"]').fill('Urgent ?');
     await composer.locator('input[data-jn="label"]').press('Tab');
     const palette = composer.locator('.jn-pal-item[data-jn-block="Bloc création"]');
-    await palette.dragTo(canvas, { targetPosition: await spot(canvas, 0.2, 0.84) });
-    await palette.dragTo(canvas, { targetPosition: await spot(canvas, 0.8, 0.84) });
+    // Hors de la barre d'outils (à gauche) : un bloc déposé loin de toute connexion n'est relié à rien.
+    await palette.dragTo(canvas, { targetPosition: await spot(canvas, 0.32, 0.78) });
+    await palette.dragTo(canvas, { targetPosition: await spot(canvas, 0.8, 0.78) });
     await expect.poll(() => composer.locator('.jn-node.block').count()).toBe(2);
     await canvas.scrollIntoViewIfNeeded();
     const linkFrom = async (port: Locator, to: Locator): Promise<void> => {
@@ -338,7 +402,77 @@ describe('Dashboard — scenario library in Chromium', () => {
     );
   });
 
-  it('on a phone: nothing scrolls sideways; the composer comes under the catalog, reachable in one tap', async () => {
+  it('adds a block like the mockup: picked, dropped on a connection and inserted after confirmation, selected with its actions; connect tool, save and reload', async () => {
+    const composer = dashboard().locator('#lib-composer');
+    await tab('composer');
+    await composer.locator('[data-action="jn-new"]').click();
+    if (await composer.locator('[data-action="jn-discard-yes"]').count())
+      await composer.locator('[data-action="jn-discard-yes"]').click();
+    await composer.locator('input[data-jn="name"]').fill('Ajout au diagramme');
+    await composer.locator('#jn-mode-DIAGRAM').click();
+    const canvas = composer.locator('[data-jn-canvas]');
+    await canvas.scrollIntoViewIfNeeded();
+    // Choisir dans le catalogue : la carte est surlignée.
+    await composer.locator('[data-action="jn-pick"][data-block="Bloc création"]').click();
+    await composer.locator('.jn-pal-item.picked[data-jn-block="Bloc création"]').waitFor();
+    // Déposé sur la connexion Début → Fin : l'insertion est proposée, rien n'est relié d'office.
+    const edge = await composer.locator('.jn-edge .jn-e').first().boundingBox();
+    const box = await canvas.boundingBox();
+    if (!edge || !box) throw new Error('no edge');
+    await composer.locator('.jn-pal-item[data-jn-block="Bloc création"]').dragTo(canvas, {
+      targetPosition: { x: edge.x + edge.width / 2 - box.x, y: edge.y + edge.height / 2 - box.y },
+    });
+    await composer
+      .locator('.jn-insert', { hasText: 'Insérer « Bloc création » entre Début et Fin ?' })
+      .waitFor();
+    expect(await composer.locator('.jn-edge').count()).toBe(1);
+    await composer.locator('[data-action="jn-insert-yes"]').click();
+    await expect.poll(() => composer.locator('.jn-edge').count()).toBe(2);
+    // Le bloc ajouté est choisi : bordure, barre d'actions, propriétés tirées de son contrat, confirmation.
+    const added = composer.locator('.jn-node.block.sel');
+    await added.waitFor();
+    await added.locator('.jn-float [data-action="jn-edit"]').waitFor();
+    await composer.locator('.jn-toast', { hasText: 'Bloc « Bloc création » ajouté au parcours' }).waitFor();
+    await composer.locator('.jn-props h3', { hasText: 'Bloc création' }).waitFor();
+    await composer.locator('[data-action="jn-props-tab"][data-tab="io"]').click();
+    await composer.locator('#jn-pp-io').waitFor();
+    // Dupliquer puis supprimer depuis la barre d'actions du nœud.
+    await added.locator('.jn-float [data-action="jn-duplicate"]').click();
+    await expect.poll(() => composer.locator('.jn-node.block').count()).toBe(2);
+    await composer.locator('.jn-node.block.sel .jn-float [data-action="jn-remove"]').click();
+    await expect.poll(() => composer.locator('.jn-node.block').count()).toBe(1);
+    // L'outil « bloc » ajoute le bloc choisi au centre ; l'outil « relier » relie par deux clics.
+    await composer.locator('[data-action="jn-pick"][data-block="Bloc recherche"]').click();
+    await composer.locator('[data-action="jn-tool-block"]').click();
+    await expect.poll(() => composer.locator('.jn-node.block').count()).toBe(2);
+    await composer.locator('[data-action="jn-tool"][data-tool="connect"]').click();
+    await composer.locator('.jn-node.block', { hasText: 'Bloc création' }).click();
+    await composer.locator('.jn-node.block', { hasText: 'Bloc recherche' }).click();
+    await composer.locator('.jn-node.block', { hasText: 'Bloc recherche' }).click();
+    await composer.locator('.jn-node.end').click();
+    await composer.locator('[data-action="jn-tool"][data-tool="select"]').click();
+    await expect.poll(() => composer.locator('.jn-edge').count()).toBe(3);
+    await composer.locator('.jn-val-state.ok', { hasText: 'Parcours valide' }).waitFor({ timeout: 15_000 });
+    // Enregistré puis rouvert : nœuds, positions et connexions restaurés.
+    const positions = async (): Promise<string[]> =>
+      composer
+        .locator('.jn-node')
+        .evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).style.cssText));
+    const before = await positions();
+    await composer.locator('[data-action="jn-save"]').click();
+    await composer.locator('.jn-chip.ok', { hasText: 'Enregistré' }).waitFor({ timeout: 15_000 });
+    await composer.locator('[data-action="jn-new"]').click();
+    await composer.locator('select[data-jn="open"]').selectOption('Ajout au diagramme');
+    await expect.poll(() => composer.locator('.jn-edge').count(), { timeout: 15_000 }).toBe(3);
+    expect(await positions()).toEqual(before);
+    // Les panneaux se replient et reviennent.
+    await composer.locator('.jn-side [data-action="jn-panel"][data-panel="props"]').click();
+    await composer.locator('.lib-rail.props').waitFor();
+    await composer.locator('.lib-rail.props [data-action="jn-panel"]').click();
+    await composer.locator('.jn-side').waitFor();
+  });
+
+  it('on a phone: nothing scrolls sideways; one column, the composer reached from « Au parcours »', async () => {
     const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await phone.goto(`${server.url}/dashboard`);
     const element = phone.locator('qa-crawler-dashboard');
@@ -346,23 +480,30 @@ describe('Dashboard — scenario library in Chromium', () => {
     await element.locator('select[data-action="project-context"]').selectOption(project.id);
     await element.locator('[data-action="menu"]').click();
     await element.locator('.drawer [data-action="nav"][data-view="library"]').click();
+    // Sur un téléphone : les onglets restent atteignables ; « Au parcours » mène au compositeur.
+    await element.locator('[data-action="jn-tab"][data-tab="catalog"]').click();
     await element.locator('.lib-card').first().waitFor({ timeout: 15_000 });
-    await element.locator('[data-action="lib-part-add"][data-block="Bloc création"]').click();
-    const jump = element.locator('[data-action="lib-jump"]');
-    await jump.waitFor();
-    await jump.click();
-    const catalog = await element.locator('.lib-catalog').boundingBox();
-    const composer = await element.locator('#lib-composer').boundingBox();
-    expect((composer?.y ?? 0) >= (catalog?.y ?? 0) + (catalog?.height ?? 0)).toBe(true);
+    await element
+      .locator('.lib-tabpanel .lib-card [data-action="lib-part-add"][data-block="Bloc création"]')
+      .click();
+    await element.locator('.jn-toast').waitFor();
+    const palette = await element.locator('.jn-palette').boundingBox();
+    const stage = await element.locator('.jn-stage').boundingBox();
+    // Une seule colonne : le catalogue compact puis la scène, sans rien à faire défiler de côté.
+    expect((stage?.y ?? 0) >= (palette?.y ?? 0) + (palette?.height ?? 0) - 1).toBe(true);
     expect(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(
       true,
     );
     await element.locator('.hd [data-action="lib-panel-open"]').click();
     // Le panneau tient dans l'écran (il se redessine quand l'aperçu de la source arrive).
     await expect
-      .poll(async () => (await element.locator('.lib-sheet').boundingBox())?.width ?? -1, { timeout: 15_000 })
+      .poll(async () => (await element.locator('.wz').boundingBox())?.width ?? -1, { timeout: 15_000 })
       .toBeGreaterThan(0);
-    expect((await element.locator('.lib-sheet').boundingBox())?.width ?? 0).toBeLessThanOrEqual(390);
+    // La fenêtre « Ajouter un bloc » tient dans l'écran, en une colonne.
+    expect((await element.locator('.wz').boundingBox())?.width ?? 0).toBeLessThanOrEqual(390);
+    expect(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(
+      true,
+    );
     await phone.close();
   });
 });

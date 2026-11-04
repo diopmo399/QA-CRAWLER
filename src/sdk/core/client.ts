@@ -31,6 +31,7 @@ import type {
   CompositionDrift,
   DeclaredContract,
   LibraryAddInput,
+  LibraryBlockCheck,
   LibraryBlockView,
   LibrarySourcePreview,
   GroupCheckView,
@@ -314,6 +315,14 @@ export interface QaCrawlerClient {
     remove(projectId: string, name: string): Promise<{ removed: string }>;
     /** Ce qu'un scénario deviendrait en bloc (étapes, données sans valeur, contrat dérivé). */
     preview(projectId: string, scenario: string): Promise<LibrarySourcePreview>;
+    /**
+     * Vérifie, sans rien écrire, un scénario qui deviendrait un bloc : source, étapes, blocs rejoués, nom
+     * libre, contrat (déduit ou déclaré). La création refait les mêmes vérifications.
+     */
+    check(
+      projectId: string,
+      input: { scenario: string; name: string; contract?: DeclaredContract },
+    ): Promise<LibraryBlockCheck>;
     /** Déclare le contrat d'un bloc (null : de nouveau dérivé de son contenu). */
     declareContract(
       projectId: string,
@@ -1052,6 +1061,7 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       add: (projectId, input) => request('POST', `${project(projectId)}/library`, input),
       remove: (projectId, name) =>
         request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/remove`, {}),
+      check: (projectId, input) => request('POST', `${project(projectId)}/library/check`, input),
       preview: (projectId, scenario) =>
         request('GET', `${project(projectId)}/library/preview?scenario=${encodeURIComponent(scenario)}`),
       declareContract: (projectId, name, contract) =>

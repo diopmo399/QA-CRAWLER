@@ -136,16 +136,93 @@ const nodeName = (node: JourneyNode): string =>
 /** Le point de départ d'une connexion (le port de sortie, Oui à gauche et Non à droite d'une condition). */
 export function portOf(node: JourneyNode, branch?: JourneyBranch): { x: number; y: number } {
   const size = NODE_SIZE[node.kind];
-  const ratio = node.kind === 'CONDITION' ? (branch === 'NO' ? 0.78 : 0.22) : 0.5;
-  return { x: node.x + size.w * ratio, y: node.y + size.h };
+  // Une condition (losange) sort par ses pointes : Oui à gauche, Non à droite.
+  if (node.kind === 'CONDITION')
+    return { x: branch === 'NO' ? node.x + size.w : node.x, y: node.y + size.h / 2 };
+  return { x: node.x + size.w / 2, y: node.y + size.h };
 }
 
-/** Le tracé d'une connexion : une courbe du port de sortie au haut du nœud d'arrivée. */
-export function edgePath(from: JourneyNode, to: JourneyNode, branch?: JourneyBranch): string {
+type Point = { x: number; y: number };
+
+/**
+ * Le tracé orthogonal d'une connexion, en points : du port de sortie au haut du nœud d'arrivée. Une
+ * arrivée au-dessus du départ (retour en arrière) contourne par la droite des deux nœuds.
+ */
+export function edgePoints(from: JourneyNode, to: JourneyNode, branch?: JourneyBranch): Point[] {
   const start = portOf(from, branch);
   const end = { x: to.x + NODE_SIZE[to.kind].w / 2, y: to.y };
-  const bend = Math.max(36, Math.abs(end.y - start.y) / 2);
-  return `M${String(start.x)} ${String(start.y)} C${String(start.x)} ${String(start.y + bend)} ${String(end.x)} ${String(end.y - bend)} ${String(end.x)} ${String(end.y)}`;
+  const side = Math.max(from.x + NODE_SIZE[from.kind].w, to.x + NODE_SIZE[to.kind].w) + 32;
+  if (from.kind === 'CONDITION') {
+    const out = start.x + (branch === 'NO' ? 24 : -24);
+    if (end.y > start.y + 12)
+      return Math.abs(end.x - start.x) < 1 || (branch === 'NO' ? end.x > start.x : end.x < start.x)
+        ? [start, { x: end.x, y: start.y }, end]
+        : [start, { x: out, y: start.y }, { x: out, y: end.y - 24 }, { x: end.x, y: end.y - 24 }, end];
+    return [start, { x: out, y: start.y }, { x: out, y: end.y - 24 }, { x: end.x, y: end.y - 24 }, end];
+  }
+  if (end.y >= start.y + 24) {
+    if (Math.abs(end.x - start.x) < 1) return [start, end];
+    const mid = Math.round((start.y + end.y) / 2);
+    return [start, { x: start.x, y: mid }, { x: end.x, y: mid }, end];
+  }
+  return [
+    start,
+    { x: start.x, y: start.y + 24 },
+    { x: side, y: start.y + 24 },
+    { x: side, y: end.y - 24 },
+    { x: end.x, y: end.y - 24 },
+    end,
+  ];
+}
+
+/** Les points d'une connexion en tracé SVG, angles légèrement arrondis. */
+export function pointsPath(points: readonly Point[], radius = 8): string {
+  const [first, ...rest] = points;
+  if (!first) return '';
+  let d = `M${String(first.x)} ${String(first.y)}`;
+  for (let index = 0; index < rest.length; index += 1) {
+    const corner = rest[index] as Point;
+    const before = points[index] as Point;
+    const after = rest[index + 1];
+    if (!after) {
+      d += ` L${String(corner.x)} ${String(corner.y)}`;
+      continue;
+    }
+    const r = Math.min(
+      radius,
+      Math.hypot(corner.x - before.x, corner.y - before.y) / 2,
+      Math.hypot(after.x - corner.x, after.y - corner.y) / 2,
+    );
+    const into = (a: Point, b: Point, length: number): Point => {
+      const distance = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      return { x: b.x - ((b.x - a.x) / distance) * length, y: b.y - ((b.y - a.y) / distance) * length };
+    };
+    const p1 = into(before, corner, r);
+    const p2 = into(after, corner, r);
+    d += ` L${String(p1.x)} ${String(p1.y)} Q${String(corner.x)} ${String(corner.y)} ${String(p2.x)} ${String(p2.y)}`;
+  }
+  return d;
+}
+
+/** Le tracé d'une connexion (orthogonal, du port de sortie au haut du nœud d'arrivée). */
+export function edgePath(from: JourneyNode, to: JourneyNode, branch?: JourneyBranch): string {
+  return pointsPath(edgePoints(from, to, branch));
+}
+
+/** La distance d'un point à une connexion (pour déposer un bloc sur elle). */
+export function distanceToPoints(points: readonly Point[], point: Point): number {
+  let best = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < points.length; index += 1) {
+    const a = points[index - 1] as Point;
+    const b = points[index] as Point;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const length = dx * dx + dy * dy;
+    const t =
+      length === 0 ? 0 : Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length));
+    best = Math.min(best, Math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy)));
+  }
+  return best;
 }
 
 /** Un identifiant libre (n1, n2… / e1, e2…). */
@@ -159,15 +236,15 @@ export function freeId(prefix: 'n' | 'e', taken: Iterable<string>): string {
 
 /** La taille d'un nœud dans le diagramme (ses ports et ses connexions en dépendent). */
 export const NODE_SIZE: Readonly<Record<JourneyNodeKind, { w: number; h: number }>> = {
-  START: { w: 140, h: 44 },
-  END: { w: 140, h: 44 },
-  BLOCK: { w: 232, h: 76 },
-  CONDITION: { w: 208, h: 76 },
-  JOIN: { w: 132, h: 40 },
+  START: { w: 120, h: 40 },
+  END: { w: 120, h: 40 },
+  BLOCK: { w: 200, h: 58 },
+  CONDITION: { w: 160, h: 92 },
+  JOIN: { w: 116, h: 34 },
 };
 
 const COLUMN_X = 0;
-const ROW_GAP = 124;
+const ROW_GAP = 104;
 
 /** Un parcours vide : un début relié à une fin. */
 export function emptyJourney(name = ''): Journey {

@@ -10,6 +10,7 @@ import type {
   ComposeScenarioInput,
   CompositionCheck,
   CompositionDrift,
+  BlockContract,
   DeclaredContract,
   ExtractionInput,
   ExtractionPlan,
@@ -493,7 +494,7 @@ export async function newBlock(
 /** Un scénario devient un bloc de la bibliothèque (ses étapes et ses données sont recopiées). */
 export function addScenarioToLibrary(
   projectDir: string,
-  input: { scenario: string; name: string; description?: string },
+  input: { scenario: string; name: string; description?: string; contract?: unknown },
 ): Promise<LibraryBlockView> {
   return withLock(projectDir, async () => {
     const { root, entries } = await flowEntries(projectDir);
@@ -513,6 +514,21 @@ export function addScenarioToLibrary(
     );
     if (invalid.length > 0)
       throw new LibraryError(`"${input.scenario}" is not a valid flow: ${invalid[0] ?? ''}`, 422, invalid);
+    // Un contrat déclaré à la création : il doit tenir sur les étapes recopiées (sinon rien n'est écrit).
+    const contract =
+      input.contract === undefined || input.contract === null
+        ? undefined
+        : declaredContractOf(input.contract);
+    if (contract) {
+      const problems = contractOf({
+        name,
+        steps: stepsForContract(entries, source, steps),
+        ...(await dataOf(source)),
+        declared: contract,
+      }).problems;
+      if (problems.length > 0)
+        throw new LibraryError(`the declared contract does not hold: ${problems[0] ?? ''}`, 422, problems);
+    }
     return newBlock(
       projectDir,
       root,
@@ -525,8 +541,95 @@ export function addScenarioToLibrary(
       },
       await testDataOf(source),
       { kind: 'scenario', name: input.scenario },
+      contract ? { contract } : {},
     );
   });
+}
+
+/** Les étapes sur lesquelles se lit un contrat : dépliées quand le flow rejoue d'autres blocs (`run:`). */
+function stepsForContract(entries: readonly FlowEntry[], source: FlowEntry, steps: unknown[]): unknown[] {
+  return runsOf(source.flow).length > 0
+    ? (expandedStepsOf(
+        entries.map((entry) => entry.flow),
+        source.name,
+      ) ?? steps)
+    : steps;
+}
+
+async function dataOf(source: FlowEntry): Promise<{ data?: TestDataSet }> {
+  const data = await testDataOf(source);
+  return data ? { data } : {};
+}
+
+/**
+ * VÉRIFIER, SANS RIEN ÉCRIRE, ce qu'un scénario deviendrait en bloc : la source, ses étapes exécutables, le
+ * schéma du flow, les blocs qu'il rejoue (existants, sans récursion), le nom (libre), et le contrat (déduit,
+ * ou déclaré : il doit tenir). Les mêmes règles que la création, qui les refait.
+ */
+export async function checkScenarioBlock(
+  projectDir: string,
+  input: { scenario: string; name: unknown; contract?: unknown },
+): Promise<{
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  steps: number;
+  version: number;
+  contract?: BlockContract;
+}> {
+  const { entries } = await flowEntries(projectDir);
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const source = entries.find((entry) => entry.name === input.scenario);
+  if (!source)
+    return { ok: false, errors: [`no scenario named "${input.scenario}"`], warnings, steps: 0, version: 1 };
+  let name = '';
+  try {
+    name = freeName(entries, input.name);
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+  const steps = stepsOf(source.flow);
+  if (steps.length === 0) errors.push(`"${input.scenario}" has no executable step`);
+  const data = await testDataOf(source);
+  errors.push(
+    ...validateBlockFlow(
+      {
+        name: name || input.scenario,
+        ...(typeof source.flow.startAt === 'string' ? { startAt: source.flow.startAt } : {}),
+        steps,
+      },
+      data,
+    ),
+  );
+  for (const run of runsOf(source.flow)) {
+    if (!entries.some((entry) => entry.name === run)) errors.push(`run "${run}": no flow has this name`);
+    if (name && run === name) errors.push(`run "${run}": a block cannot replay itself`);
+  }
+  let declared: DeclaredContract | undefined;
+  try {
+    declared =
+      input.contract === undefined || input.contract === null
+        ? undefined
+        : declaredContractOf(input.contract);
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+  const { contract, problems } = contractOf({
+    name: name || input.scenario,
+    steps: stepsForContract(entries, source, steps),
+    ...(data ? { data } : {}),
+    ...(declared ? { declared } : {}),
+  });
+  errors.push(...problems);
+  return {
+    ok: errors.length === 0,
+    errors: [...new Set(errors)],
+    warnings,
+    steps: steps.length,
+    version: 1,
+    contract,
+  };
 }
 
 /** Un groupe métier d'un enregistrement devient un bloc (ses étapes, telles que dans le flow généré). */

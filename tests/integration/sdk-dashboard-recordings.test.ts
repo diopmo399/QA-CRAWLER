@@ -360,7 +360,7 @@ describe('Dashboard — recordings, in Chromium', () => {
     await dashboard().locator('h1', { hasText: 'Bibliothèque' }).waitFor({ timeout: 15_000 });
     const composer = dashboard().locator('#lib-composer');
     await composer.locator('input[data-jn="name"]').fill('Consulter deux fois');
-    const add = dashboard().locator('.lib-card [data-action="lib-part-add"][data-block="Bloc consultation"]');
+    const add = dashboard().locator('#lib-composer [data-action="jn-add"][data-block="Bloc consultation"]');
     await add.click();
     await add.click();
     await expect.poll(() => composer.locator('.jn-card').count()).toBe(2);
@@ -376,7 +376,8 @@ describe('Dashboard — recordings, in Chromium', () => {
       (entry) => entry.name === 'Consulter deux fois',
     );
     expect(composed?.uses).toEqual(['Bloc consultation', 'Bloc consultation']);
-    await dashboard().locator('.lib-card', { hasText: 'Utilisé dans 1 scénario(s)' }).waitFor();
+    await dashboard().locator('[data-action="jn-tab"][data-tab="catalog"]').click();
+    await dashboard().locator('.lib-tabpanel .lib-card', { hasText: 'Utilisé dans 1 scénario(s)' }).waitFor();
 
     // Le moteur rejoue le parcours composé : les étapes du bloc à la place de chaque `run:`.
     const started = await client.executions.start(project.id, { scenarios: ['Consulter deux fois'] });
