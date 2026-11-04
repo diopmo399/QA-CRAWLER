@@ -5,6 +5,10 @@
 export * from './contracts.js';
 export * from './lifecycle.js';
 export * from './verdicts.js';
+export * from './journey.js';
+export * from './journey-loop.js';
+export * from './journey-trace.js';
+export * from './wait.js';
 export {
   createQaCrawler,
   isCompatible,

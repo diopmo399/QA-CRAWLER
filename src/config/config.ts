@@ -2320,6 +2320,12 @@ const testDataSchema = z
      */
     include: z.array(nonEmpty).default([]),
     values: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * TRAÇABILITÉ : garder les valeurs dans la trace des données du rapport et dans les variables des
+     * itérations (true), ou seulement les événements, sans les valeurs (false, défaut : une valeur produite
+     * pendant le run ne sort pas du moteur). Les valeurs des clés sensibles ne sont jamais gardées.
+     */
+    traceValues: z.boolean().default(false),
   })
   .strict()
   .transform((data, ctx) => {

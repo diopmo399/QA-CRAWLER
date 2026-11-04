@@ -1,4 +1,11 @@
+import { WIZARD_CSS } from './dashboard-library-wizard.js';
 import { INCIDENT_ATTACHMENTS_CSS } from './incident-attachments.js';
+import { JOURNEY_CSS } from './dashboard-journey.js';
+import { CATALOG_CSS } from './dashboard-library-catalog.js';
+import { INSIGHT_CSS } from './dashboard-library-insight.js';
+import { FIELDS_CSS } from './dashboard-library-fields.js';
+import { TRACE_CSS } from './dashboard-trace.js';
+import { OUTPUT_CSS } from './dashboard-library-output.js';
 import { INCIDENT_CODE_CSS } from './incident-code.js';
 import { INCIDENT_AI_CSS } from './incident-ai.js';
 import { INCIDENT_TRIGGER_CSS } from './incident-trigger.js';
@@ -698,23 +705,9 @@ form.col[data-action^="lib-"]{display:flex;flex-direction:column;gap:12px}
 .lib-recent{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .lib-recent .chip{min-height:30px;font-size:12.5px}
 .lib-layouts{align-self:flex-end;margin-bottom:2px}
-/* Trois colonnes : le catalogue, le parcours, son contrat et ses diagnostics. */
-.lib-diag{display:flex;flex-direction:column;gap:10px;min-width:0}
-.lib-diag h2{margin:0}
+/* Le catalogue, puis le compositeur visuel (palette, scène, propriétés : dashboard-journey). */
 .lib-ios-col{flex-direction:column;gap:6px}
-@media (min-width:1100px){
-  .lib-layout{grid-template-columns:minmax(0,1fr) minmax(320px,380px)}
-  .lib-catalog{grid-row:1 / span 2}
-  .lib-composer{position:sticky;top:16px}
-  .lib-diag{grid-column:2}
-  .lib-jump{display:none}
-}
-@media (min-width:1500px){
-  .lib-layout{grid-template-columns:minmax(0,1fr) 340px 290px}
-  .lib-catalog{grid-row:auto}
-  .lib-composer,.lib-diag{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow:auto}
-  .lib-diag{grid-column:3;grid-row:1}
-}
+.lib-tabpanel .lib-catalog .lib-cards.grid{max-height:calc(100vh - 300px);overflow:auto;padding-right:4px}
 /* La fiche d'un bloc (panneau à onglets). */
 .lib-fiche{width:min(640px,100vw)}
 .lib-fiche-m{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}
@@ -1219,6 +1212,11 @@ li.info .ed-sev{color:var(--qa-color-primary)}
 @container (max-width:960px){.dash:has(.ws-root){grid-template-rows:auto minmax(0,1fr)}}
 @media (max-height:559px),(max-width:599px){.dash:has(.ws-root){height:auto}}
 /* L'espace d'investigation : primitives partagées, structure, graphe, chronologie, traçabilité frontend, code, diagnostic, coquille. */
+${JOURNEY_CSS}${CATALOG_CSS}${INSIGHT_CSS}
+${FIELDS_CSS}
+${TRACE_CSS}
+${OUTPUT_CSS}
+${WIZARD_CSS}
 ${INCIDENT_PARTS_CSS}
 ${INCIDENT_UX_CSS}
 ${INCIDENT_GRAPH_CSS}

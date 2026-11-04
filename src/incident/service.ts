@@ -327,7 +327,9 @@ export class IncidentService {
     const aiRun = this.aiLive.get(id);
     if (aiRun && incident.investigation.ai) {
       const at = incident.investigation.ai.runs.findIndex((run) => run.id === aiRun.id);
-      if (at >= 0 && incident.investigation.ai.runs[at]?.status === 'RUNNING')
+      // Le run vivant n'est montré que tant qu'il tourne : terminé, il attend que `absorbAiOutcome` ait écrit
+      // ses hypothèses, sans quoi un lecteur verrait un run fini sans ce qu'il a produit.
+      if (at >= 0 && incident.investigation.ai.runs[at]?.status === 'RUNNING' && aiRun.status === 'RUNNING')
         incident.investigation.ai.runs[at] = structuredClone(aiRun);
     }
     return incident;

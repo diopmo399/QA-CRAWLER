@@ -154,7 +154,7 @@ ${p.state === 'ARCHIVED' || !can(state, 'PUBLISH') || selected.format !== 'yaml'
     : '';
   const library =
     blocks > 0
-      ? `<p class="mu">${esc(t.lib.blocksNote(blocks))} <button class="lnk" data-action="nav" data-view="library">${esc(t.lib.openLibrary)}</button></p>`
+      ? `<p class="mu">${esc(t.lib.blocksNote(blocks))} <button class="lnk" data-action="nav" data-view="library" data-tab="catalog">${esc(t.lib.openLibrary)}</button></p>`
       : '';
   return `${header(esc(t.nav.scenarios), { sub: esc(o.scenariosSub(p.name, runnable.length, pending.length)) })}${library}<div class="split"><div class="col">${cards}<section class="card"><h2>${esc(o.recordingsTitle)}</h2>${recordings}</section></div><div class="col narrow">${detail}</div></div>`;
 }

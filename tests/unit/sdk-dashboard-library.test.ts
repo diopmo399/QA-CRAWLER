@@ -11,17 +11,28 @@ import type {
 import { ROLE_RIGHTS } from '../../src/sdk/core/contracts.js';
 import { emptyAccessUi } from '../../src/sdk/ui/dashboard-access.js';
 import { dashboardStrings } from '../../src/sdk/ui/dashboard-i18n.js';
+import { distanceToPoints, edgePoints, journeyOfParts } from '../../src/sdk/core/journey.js';
 import {
-  compositionKey,
+  addBlock,
+  emptyJourneyUi,
+  insertOnEdge,
+  logicKey,
+  type JourneyUi,
+} from '../../src/sdk/ui/dashboard-journey.js';
+import {
   emptyLibraryUi,
   runnableScenarios,
   visibleBlocks,
   type LibraryUi,
 } from '../../src/sdk/ui/dashboard-library.js';
 import type { SheetTab } from '../../src/sdk/ui/dashboard-library-sheet.js';
+import { checkKey, declaredOf, emptyWizard, nameProblem } from '../../src/sdk/ui/dashboard-library-wizard.js';
 import { emptyRecordingsUi } from '../../src/sdk/ui/dashboard-recordings.js';
 import { emptyImportForm } from '../../src/sdk/ui/dashboard-requirements.js';
 import { activeNav, renderDashboard, type DashboardState } from '../../src/sdk/ui/dashboard-view.js';
+import { pageNumbers, pageOf } from '../../src/sdk/ui/dashboard-library-catalog.js';
+import { journeyCompat } from '../../src/sdk/ui/dashboard-library-insight.js';
+import type { ContractField, LibraryBlockActivity } from '../../src/sdk/core/contracts.js';
 
 /**
  * LA BIBLIOTHÈQUE DANS LE DASHBOARD (fonctions pures) : le catalogue (version, provenance, entrées et
@@ -210,41 +221,61 @@ const reader = {
 
 describe('dashboard — scenario library', () => {
   it('the catalog: version, provenance, inputs and outputs, contract state, usage; the composer beside it', () => {
-    const html = renderDashboard(base('library'));
+    const html = renderDashboard(base('library', {}, { tab: 'catalog' }));
     expect(activeNav({ view: 'library', projectId: 'prj_a' })).toBe('library');
     expect(html).toContain('<h1>Bibliothèque de scénarios</h1>');
     expect(html).toContain('Demandes · 3 bloc(s) réutilisable(s)');
     expect(html).toContain('data-action="lib-panel-open"');
-    // Un contrat valide : une coche discrète ; à revalider : une pastille.
+    // La carte : nom, version, statut réel du contrat (une coche et son libellé quand il est valide).
     expect(html).toMatch(
-      /<h3><button class="lib-title" data-action="lib-open" data-block="Bloc connexion" aria-haspopup="dialog">Bloc connexion<\/button><\/h3><span class="lib-ver"[^>]*>v2<\/span><span class="lib-ok" title="Contrat valide">/,
+      /<h3><button class="lib-title" data-action="lib-open" data-block="Bloc connexion" aria-haspopup="dialog">Bloc connexion<\/button><\/h3><span class="lib-ver"[^>]*>v2<\/span><\/div>[^]*?<span class="lib-state ok"><span class="lib-ok" title="Contrat valide">/,
     );
-    expect(html).toContain('<span class="lib-kind standalone">Autonome</span><span>2 étape(s)</span>');
-    // L'origine, courte ; le détail au survol.
+    // Les nombres réels : étapes, entrées et sorties du contrat (jamais codés en dur).
+    expect(html).toMatch(
+      /data-block="Bloc connexion"[^]*?<p class="lib-counts"><span title="Étapes">[^]*?2 étapes<\/span><span title="Entrées">[^]*?0 entrée<\/span><span title="Sorties">[^]*?1 sortie<\/span><\/p>/,
+    );
+    // Les catégories réelles : l'origine (scénario, enregistrement) et les groupes métier.
     expect(html).toContain(
-      '<span class="lib-origin" title="Scénario « Connexion »">Scénario Connexion</span>',
+      '<span class="lib-tag origin lib-origin" title="Scénario « Connexion »">Scénario Connexion</span>',
     );
     expect(html).toContain(
-      '<span class="lib-origin" title="Groupe « Création » de l’enregistrement creer">Enregistrement creer</span>',
+      '<span class="lib-tag origin lib-origin" title="Groupe « Création » de l’enregistrement creer">Enregistrement creer</span>',
     );
-    // Le pied : la date, et l'utilisation seulement quand il y en a une.
-    expect(html).toMatch(/<small class="mu">modifié le [^<]+ · Utilisé dans 1 scénario\(s\)<\/small>/);
+    // Le pied : la date, l'utilisation seulement quand il y en a une, « Ouvrir » et l'ajout au parcours.
+    expect(html).toMatch(
+      /Modifié le [^<]+<\/small><small class="mu lib-used">Utilisé dans 1 scénario\(s\)<\/small>/,
+    );
     expect(html).not.toContain('Utilisé dans aucun scénario');
-    expect(html).toContain('<code class="lib-key">user.name</code>');
-    expect(html).toContain('Ni entrée ni sortie : il se joue seul.');
     expect(html).toContain(
-      'class="btn small lib-add" data-action="lib-part-add" data-block="Bloc seul" title="Ajouter au parcours"',
+      'data-action="lib-open" data-block="Bloc connexion" title="Ouvrir la fiche de « Bloc connexion »">Ouvrir</button>',
     );
+    expect(html).toContain(
+      'class="btn small ghost lib-add" data-action="lib-part-add" data-block="Bloc seul" title="Ajouter au parcours"',
+    );
+    expect(html).toContain('<p class="lib-found" role="status">3 blocs trouvés</p>');
     expect(html).toContain('<span class="lib-state warn">À revalider</span>');
     expect(html).toContain('Bloc &lt;x&gt;');
     expect(html).toContain('<ul class="plain lib-cards grid">');
     // Le retrait est dans la fiche, jamais sur la carte.
     expect(html).not.toContain('data-action="lib-remove"');
-    // Trois colonnes : le catalogue, le parcours, son contrat et ses diagnostics.
-    expect(html).toContain('id="lib-composer"');
-    expect(html).toContain('Ajoutez des blocs depuis le catalogue');
-    expect(html).toContain('<h2 id="lib-diag-t">Contrat et diagnostics</h2>');
-    expect(html).toContain('La vérification du serveur apparaît ici');
+    // Les onglets de la page : Catalogue (ici), Compositeur (par défaut), Diagnostics.
+    expect(html).toMatch(/id="lib-tab-catalog"[^>]*aria-selected="true"/);
+    // L'onglet Compositeur : modes, catalogue compact des vrais blocs, scène ; propriétés et validation à droite.
+    const composer = renderDashboard(base('library'));
+    expect(composer).toContain('id="lib-composer"');
+    expect(composer).toMatch(/id="lib-tab-composer"[^>]*aria-selected="true"/);
+    expect(composer).toMatch(/role="radio" id="jn-mode-LINEAR"[^>]*aria-checked="true"/);
+    expect(composer).toContain('Mode libre (Diagramme)');
+    expect(composer).toContain('Catalogue de blocs');
+    expect(composer).toMatch(/<li class="jn-pal-item"[^>]*draggable="true" data-jn-block="Bloc seul">/);
+    expect(composer).toContain('Aucun bloc : glissez-en un ici ou utilisez + dans le catalogue.');
+    expect(composer).toContain('<p class="jn-props-k">Propriétés du parcours</p>');
+    // Jamais « valide » sans vérification réelle.
+    expect(composer).toContain('<h3 id="jn-val-t">Validation du parcours</h3>');
+    expect(composer).toContain('Pas encore vérifié');
+    expect(composer).not.toContain('jn-val-state ok');
+    // Les actions du parcours en tête : Enregistrer, Vérifier, Créer.
+    expect(composer).toMatch(/data-action="jn-save"[^]*data-action="jn-check"[^]*data-action="jn-publish"/);
   });
 
   it('display: grid or list, grouped by origin, recently opened, standalone or composite', () => {
@@ -269,7 +300,7 @@ describe('dashboard — scenario library', () => {
       base(
         'library',
         {},
-        { blocks: all, layout: 'list', groupBy: 'origin', recent: ['Bloc seul', 'disparu'] },
+        { blocks: all, layout: 'list', groupBy: 'origin', recent: ['Bloc seul', 'disparu'], tab: 'catalog' },
       ),
     );
     expect(html).toContain('<ul class="plain lib-cards list">');
@@ -279,13 +310,16 @@ describe('dashboard — scenario library', () => {
     expect(html).toContain(
       '<h3 class="lib-bucket-t">Origine non enregistrée <small class="mu">1</small></h3>',
     );
-    expect(html).toContain('<span class="lib-kind composite">Composé · 2 groupe(s)</span>');
+    // Un bloc composé : ses groupes métier sont ses catégories.
+    expect(html).toMatch(
+      /data-block="Parcours complet"[^]*?<span class="lib-tag">Création<\/span><span class="lib-tag">Recherche<\/span>/,
+    );
     expect(html).toContain('<option value="composite" >Composés</option>');
     // Les récents : seulement les blocs qui existent encore.
     expect(html).toMatch(/lib-recent[^]*data-action="lib-open" data-block="Bloc seul"/);
     expect(html).not.toContain('disparu');
     // Un type absent des données n'est pas proposé.
-    expect(renderDashboard(base('library'))).not.toContain('data-lib="kind"');
+    expect(renderDashboard(base('library', {}, { tab: 'catalog' }))).not.toContain('data-lib="kind"');
   });
 
   it('search, criteria and sort run on the real data; only the choices the data allows are offered', () => {
@@ -310,7 +344,7 @@ describe('dashboard — scenario library', () => {
     expect(html).toContain('<option value="CHANGED" >À revalider</option>');
     expect(html).not.toContain('value="INVALID"');
     expect(html).toContain('3 sur 3');
-    const none = renderDashboard(base('library', {}, { query: 'rien' }));
+    const none = renderDashboard(base('library', {}, { query: 'rien', tab: 'catalog' }));
     expect(none).toContain('Aucun bloc ne correspond à cette recherche.');
     expect(none).toContain('data-action="lib-clear"');
   });
@@ -327,13 +361,20 @@ describe('dashboard — scenario library', () => {
     for (const label of [
       'Vue d’ensemble',
       'Étapes',
+      'Entrées',
+      'Sorties',
       'Contrat',
-      'Données',
+      'Paramètres',
       'Dépendances',
+      'Traçabilité',
       'Versions',
       'Provenance',
     ])
-      expect(overview).toContain(`>${label}</button>`);
+      expect(overview).toMatch(new RegExp(`>${label}(<span class="lib-tc">\\(\\d+\\)</span>)?</button>`));
+    // Les nombres réels à côté des onglets : 2 étapes, 0 entrée, 1 sortie.
+    expect(overview).toContain('>Étapes<span class="lib-tc">(2)</span></button>');
+    expect(overview).toContain('>Entrées<span class="lib-tc">(0)</span></button>');
+    expect(overview).toContain('>Sorties<span class="lib-tc">(1)</span></button>');
     expect(overview).toContain('<dt>Type</dt><dd>Autonome</dd>');
     expect(overview).toContain('2 étape(s) · départ /login');
     expect(overview).toContain('1 assertion(s) métier déclarée(s), vérifiée(s) au rejeu');
@@ -488,72 +529,327 @@ describe('dashboard — scenario library', () => {
     expect(render({ block: 'Bloc connexion', tab: 'provenance' })).not.toContain('lib-compare');
   });
 
-  it('the composer: order, where each input comes from, the server check, create only when it holds', () => {
-    const compose = { name: 'Parcours', parts: ['Bloc <x>', 'Bloc connexion'] };
-    const html = renderDashboard(
-      base('library', {}, { compose, check, checkedFor: compositionKey(compose) }),
-    );
+  it('the composer: linear cards, instance parameters from the real contract, the path check on the cards', () => {
+    const journey = journeyOfParts('Parcours', [
+      { block: 'Bloc <x>', version: 1 },
+      { block: 'Bloc connexion', version: 1 },
+    ]);
+    const [first, second] = journey.graph.nodes.filter((node) => node.kind === 'BLOCK');
+    const ui: JourneyUi = {
+      ...emptyJourneyUi(),
+      journey,
+      savedName: 'Parcours',
+      savedRevision: 'abcd1234',
+      selected: { kind: 'node', id: first?.id ?? '' },
+      check: {
+        ok: false,
+        outputs: { guaranteed: [], partial: [] },
+        linear: true,
+        publishable: 'NONE',
+        paths: [{ index: 0, nodes: [], choices: [], check: { ...check } }],
+        nodes: {
+          [first?.id ?? '']: {
+            errors: ['entrée user.name manquante'],
+            warnings: [],
+            available: [],
+            missing: [{ key: 'user.name', path: 1 }],
+            produces: [],
+            satisfied: [],
+          },
+          [second?.id ?? '']: {
+            errors: [],
+            warnings: [],
+            available: ['user.name'],
+            missing: [],
+            produces: ['user.name'],
+            satisfied: [],
+          },
+        },
+        edges: {},
+        errors: [],
+        warnings: [],
+      },
+    };
+    ui.checkedFor = logicKey(journey);
+    const html = renderDashboard(base('library', {}, { journey: ui }));
+    // La suite : début, cartes numérotées dans l'ordre, fin ; poignée, actions, zones de dépôt.
     expect(html).toMatch(
-      /lib-steps[^]*<span class="n" aria-hidden="true">1<\/span>[^]*Bloc &lt;x&gt;[^]*<span class="n" aria-hidden="true">2<\/span>[^]*Bloc connexion/,
+      /jn-term start[^]*<span class="jn-num"[^>]*>1<\/span>[^]*Bloc &lt;x&gt;[^]*<span class="jn-num"[^>]*>2<\/span>[^]*Bloc connexion[^]*jn-term end/,
     );
-    expect(html).toContain('<li class="lib-miss">user.name : non disponible</li>');
-    // Le contrat du parcours : ce qu'il reçoit de l'extérieur, ce qu'il produit.
-    expect(html).toMatch(/Reçoit<\/span><code class="lib-key">user\.name<\/code>/);
-    expect(html).toMatch(/Produit<\/span><code class="lib-key">user\.name<\/code>/);
-    expect(html).toContain('Produit : user.name');
-    expect(html).toContain(
-      'data-action="lib-part-move" data-index="0" data-direction="up" aria-label="Monter" title="Monter" disabled',
+    expect(html).toContain('data-jn-gap="0"');
+    expect(html).toMatch(/class="jn-card sel ko" data-jn-node="[^"]+" draggable="true"/);
+    expect(html).toContain('<span class="jn-err">');
+    expect(html).toContain('entrée user.name manquante');
+    // La version retenue (v1) est plus ancienne que la version actuelle (v2) : à accepter explicitement.
+    expect(html).toContain('Utiliser la version 2');
+    expect(html).toMatch(/data-action="jn-move" data-node="[^"]+" data-to="-1"[^>]*disabled/);
+    // Le panneau de propriétés : le bloc choisi, ses paramètres tirés de son contrat réel.
+    expect(html).toContain('<h3 id="jn-props-t">Bloc &lt;x&gt;</h3>');
+    expect(html).toContain('<code class="lib-key">user.name</code><small class="mu">obligatoire</small>');
+    expect(html).toContain('<option value="INHERIT" selected>Amont ou données</option>');
+    // La vérification est à jour (positions exclues) et le parcours ne tient pas : créer est refusé.
+    expect(html).toContain('<li class="jn-chip ko">Parcours invalide</li>');
+    expect(html).toMatch(/data-action="jn-publish" disabled/);
+    // Un paramètre de valeur pour l'instance.
+    if (first) first.params = { 'user.name': { mode: 'VALUE', value: 'alice' } };
+    const valued = renderDashboard(base('library', {}, { journey: ui }));
+    expect(valued).toContain('<option value="VALUE" selected>Valeur</option>');
+    expect(valued).toContain('data-jn="param.value" data-key="user.name" value="alice"');
+    expect(valued).toContain(
+      '<li class="jn-chip warn">Vérification antérieure à la dernière modification</li>',
     );
-    expect(html).toContain('aria-label="Retirer « Bloc connexion » du parcours"');
-    expect(html).toContain('Le parcours ne peut pas être créé tel quel.');
-    expect(html).toContain('2 bloc(s) · 3 étape(s) · Ordre : #1 Bloc &lt;x&gt; → #2 Bloc connexion');
-    expect(html).toContain('item.title est définie autrement par « A » et « B »');
-    expect(html).toContain('#1 &quot;Bloc &lt;x&gt;&quot; needs user.name');
-    expect(html).toContain('<code>user.name</code>');
-    expect(html).toMatch(/type="submit" class="btn primary" disabled aria-busy="false">Créer le scénario/);
-    const ok = {
-      ...check,
+    // Une erreur du serveur garde la saisie et détaille ses raisons.
+    const failed = renderDashboard(
+      base('library', {}, { journey: { ...ui, error: 'refused', details: ['raison 1', 'raison 2'] } }),
+    );
+    expect(failed).toContain('<li>raison 1</li><li>raison 2</li>');
+    expect(failed).toContain('data-jn="name" value="Parcours"');
+  });
+
+  it('the diagram: nodes positioned, connections with Oui/Non, tools; the linear mode refused with its reason', () => {
+    const journey = journeyOfParts('Parcours', [{ block: 'Bloc seul', version: 1 }]);
+    journey.mode = 'DIAGRAM';
+    journey.graph.nodes.push({ id: 'n9', kind: 'CONDITION', label: 'Urgent ?', x: 300, y: 100 });
+    journey.graph.edges.push({ id: 'e9', from: 'n9', to: 'n2', branch: 'YES' });
+    const ui: JourneyUi = {
+      ...emptyJourneyUi(),
+      journey,
+      modeMessage: 'Le mode linéaire n’est pas possible sans perte : le parcours contient 1 condition(s).',
+    };
+    const html = renderDashboard(base('library', {}, { journey: ui }));
+    expect(html).toMatch(/role="radio" id="jn-mode-DIAGRAM"[^>]*aria-checked="true"/);
+    expect(html).toContain('data-jn-canvas');
+    expect(html).toMatch(
+      /class="jn-node condition" data-jn-node="n9" style="left:300px;top:100px;width:160px;height:92px"/,
+    );
+    expect(html).toContain('data-jn-port="n9" data-branch="YES"');
+    expect(html).toContain('data-jn-port="n9" data-branch="NO"');
+    expect(html).toMatch(/<g class="jn-edge yes" data-jn-edge="e9"><path class="jn-e" d="M/);
+    expect(html).toContain('>Oui</text>');
+    expect(html).toContain('data-action="jn-fit"');
+    expect(html).toContain('data-jn-shape="CONDITION"');
+    expect(html).toContain('Le mode linéaire n’est pas possible sans perte');
+  });
+
+  it('the journey outputs: guaranteed and per path; « Transformer en bloc » only for a saved, valid journey without conditions', () => {
+    const journey = journeyOfParts('Parcours', [{ block: 'Bloc connexion', version: 1 }]);
+    const valid = {
       ok: true,
-      conflicts: [],
+      outputs: { guaranteed: ['user.name'], partial: [{ key: 'user.role', paths: [2] }] },
+      linear: true,
+      publishable: 'SINGLE' as const,
+      paths: [{ index: 0, nodes: [], choices: [], check: { ...check } }],
+      nodes: {},
+      edges: {},
       errors: [],
       warnings: [],
-      dependencies: [{ key: 'user.name', from: 1, to: 2 }],
-      order: check.order.map((entry) => ({
-        ...entry,
-        missing: [],
-        satisfied: entry.position === 2 ? [{ key: 'user.name', from: 1 }] : [],
-      })),
     };
-    const ready = renderDashboard(
-      base('library', {}, { compose, check: ok, checkedFor: compositionKey(compose) }),
+    const ui: JourneyUi = { ...emptyJourneyUi(), journey, savedName: 'Parcours', check: valid };
+    ui.checkedFor = logicKey(journey);
+    const html = renderDashboard(base('library', {}, { journey: ui }));
+    expect(html).toContain('<h4 id="jn-out-t">Sorties du parcours</h4>');
+    expect(html).toMatch(/Produites sur tous les chemins<\/dt><dd><code class="lib-key">user\.name<\/code>/);
+    expect(html).toContain(
+      '<code class="lib-key warn">user.role</code> <small class="mu">chemin(s) B</small>',
     );
-    expect(ready).toContain('Parcours vérifié : il peut être créé.');
-    expect(ready).toContain('user.name : produite par #1, utilisée par #2');
-    expect(ready).toContain('<li class="lib-src">user.name ← produite par #1</li>');
-    expect(ready).toMatch(/type="submit" class="btn primary" {2}aria-busy="false">Créer le scénario/);
-    // Une soumission en cours : le bouton le dit et ne se reclique pas.
-    const creating = renderDashboard(
-      base('library', {}, { compose, check: ok, checkedFor: compositionKey(compose), creating: true }),
-    );
-    expect(creating).toMatch(/type="submit" class="btn primary" disabled aria-busy="true">Création…/);
-    // Changé depuis la vérification : la vérification le dit.
-    const stale = renderDashboard(
+    expect(html).toMatch(/<button type="button" class="btn small" data-action="jn-to-block" title="/);
+    // Le formulaire : le nom du bloc proposé, puis « Créer le bloc ».
+    const form = renderDashboard(base('library', {}, { journey: { ...ui, blockName: 'Parcours (bloc)' } }));
+    expect(form).toContain('data-jn="blockName" value="Parcours (bloc)"');
+    expect(form).toContain('data-action="jn-to-block-confirm"');
+    // Modifié depuis l'enregistrement, ou avec des conditions : refusé, la raison est dite.
+    const dirty = renderDashboard(base('library', {}, { journey: { ...ui, dirty: true } }));
+    expect(dirty).toMatch(/data-action="jn-to-block" disabled/);
+    expect(dirty).toContain('Enregistrez le parcours avant de créer ses scénarios.');
+    const paths = renderDashboard(
       base(
         'library',
         {},
-        { compose: { ...compose, name: 'Autre' }, check: ok, checkedFor: compositionKey(compose) },
+        { journey: { ...ui, check: { ...valid, linear: false, publishable: 'PER_PATH' } } },
       ),
     );
-    expect(stale).toContain('Le parcours a changé depuis cette vérification.');
-    // Une erreur du serveur garde la saisie et détaille ses raisons.
-    const failed = renderDashboard(
-      base('library', {}, { compose, error: 'refused', details: ['raison 1', 'raison 2'] }),
-    );
-    expect(failed).toContain('<li>raison 1</li><li>raison 2</li>');
-    expect(failed).toContain('value="Parcours"');
+    expect(paths).toContain('Un parcours avec conditions ne devient pas un bloc');
   });
 
-  it('the add panel: source preview (no value), name checked before sending, busy while adding', () => {
+  it('adding a block in the diagram: picked in the catalogue, dropped without an ambiguous link, inserted on a connection only when confirmed', () => {
+    const journey = journeyOfParts('Parcours', [{ block: 'Bloc seul', version: 1 }]);
+    journey.mode = 'DIAGRAM';
+    const ui: JourneyUi = { ...emptyJourneyUi(), journey, picked: 'Bloc connexion' };
+    const [, only] = journey.graph.nodes;
+    const edge = journey.graph.edges.find((entry) => entry.from === only?.id);
+    // Déposé à un endroit : une instance indépendante, choisie, jamais reliée d'office.
+    const id = addBlock(ui, { name: 'Bloc connexion', version: 2 }, { x: 400, y: 40 });
+    expect(ui.selected).toEqual({ kind: 'node', id });
+    expect(journey.graph.edges.some((entry) => entry.from === id || entry.to === id)).toBe(false);
+    // Sur une connexion : insérée entre ses deux nœuds sur demande, les autres nœuds ne bougent pas.
+    const before = journey.graph.nodes
+      .filter((node) => node.id !== id)
+      .map((node) => [node.id, node.x, node.y]);
+    expect(insertOnEdge(ui, edge?.id ?? '', id)).toBeUndefined();
+    expect(journey.graph.edges.filter((entry) => entry.from === id || entry.to === id)).toHaveLength(2);
+    expect(journey.graph.edges.find((entry) => entry.to === id)?.from).toBe(only?.id);
+    expect(
+      journey.graph.nodes.filter((node) => node.id !== id).map((node) => [node.id, node.x, node.y]),
+    ).toEqual(before);
+    // Déjà relié : refusé, avec la raison.
+    expect(insertOnEdge(ui, journey.graph.edges[0]?.id ?? '', id)).toMatch(/déjà relié/);
+    // La géométrie : une connexion orthogonale, et un point posé dessus est reconnu.
+    const from = journey.graph.nodes.find((node) => node.id === id);
+    const to = journey.graph.nodes.find((node) => node.kind === 'END');
+    if (!from || !to) throw new Error('nodes expected');
+    const points = edgePoints(from, to);
+    expect(
+      points.every(
+        (point, index) => index === 0 || point.x === points[index - 1]?.x || point.y === points[index - 1]?.y,
+      ),
+    ).toBe(true);
+    const middle = points[1] ?? { x: 0, y: 0 };
+    expect(distanceToPoints(points, middle)).toBe(0);
+    // Le rendu : le bloc choisi est surligné dans le catalogue, la barre flottante et la confirmation réelles.
+    ui.toast = 'Bloc « Bloc connexion » ajouté au parcours';
+    ui.pendingInsert = undefined;
+    const html = renderDashboard(base('library', {}, { journey: ui }));
+    expect(html).toMatch(/<li class="jn-pal-item picked"[^>]*data-jn-block="Bloc connexion">/);
+    expect(html).toContain('data-action="jn-tool-block"');
+    expect(html).toMatch(
+      /class="jn-node block sel[^"]*" data-jn-node="[^"]+"[^]*class="jn-float" role="toolbar"/,
+    );
+    expect(html).toContain('data-action="jn-edit"');
+    expect(html).toContain('<div class="jn-toast" role="status">');
+    expect(html).toContain('Bloc « Bloc connexion » ajouté au parcours');
+    // Une proposition d'insertion en attente se dit au-dessus du canvas.
+    const target = journey.graph.edges[0];
+    const free = addBlock(ui, { name: 'Bloc seul', version: 1 }, { x: 600, y: 40 });
+    ui.pendingInsert = { edge: target?.id ?? '', node: free };
+    expect(renderDashboard(base('library', {}, { journey: ui }))).toContain('data-action="jn-insert-yes"');
+  });
+
+  it('the validation card follows the real check: four points, with the issues counted', () => {
+    const journey = journeyOfParts('Parcours', [{ block: 'Bloc connexion', version: 1 }]);
+    const [node] = journey.graph.nodes.filter((entry) => entry.kind === 'BLOCK');
+    const ui: JourneyUi = {
+      ...emptyJourneyUi(),
+      journey,
+      check: {
+        ok: false,
+        outputs: { guaranteed: [], partial: [] },
+        linear: true,
+        publishable: 'NONE',
+        paths: [{ index: 0, nodes: [], choices: [], check: { ...check } }],
+        nodes: {
+          [node?.id ?? '']: {
+            errors: ['entrée user.name manquante'],
+            warnings: [],
+            available: [],
+            missing: [{ key: 'user.name', path: 1 }],
+            produces: [],
+            satisfied: [],
+          },
+        },
+        edges: {},
+        errors: [],
+        warnings: [],
+      },
+    };
+    ui.checkedFor = logicKey(journey);
+    const html = renderDashboard(base('library', {}, { journey: ui }));
+    expect(html).toContain('<p class="jn-val-state ko" role="status">');
+    expect(html).toContain('Dépendances non satisfaites <small>· 1 problème(s)</small>');
+    // Le bloc retenu en v1 alors que la v2 existe : la version est à accepter.
+    expect(html).toContain('Versions à vérifier ou à accepter');
+    expect(html).toContain('Structure et connexions correctes');
+    // L'onglet Diagnostics détaille le nœud en cause.
+    const diagnostics = renderDashboard(base('library', {}, { journey: ui, tab: 'diagnostics' }));
+    expect(diagnostics).toMatch(/id="lib-tab-diagnostics"[^>]*aria-selected="true"/);
+    expect(diagnostics).toContain('entrée user.name manquante');
+  });
+
+  it('wiring proposals from the check: reliable one to apply, ambiguous ones to choose, none; incompatible types said', () => {
+    const journey = journeyOfParts('Parcours', [{ block: 'Bloc <x>', version: 1 }]);
+    const [node] = journey.graph.nodes.filter((entry) => entry.kind === 'BLOCK');
+    const id = node?.id ?? '';
+    const withProposal = (proposal: object): string => {
+      const ui: JourneyUi = {
+        ...emptyJourneyUi(),
+        journey,
+        selected: { kind: 'node', id },
+        check: {
+          ok: false,
+          outputs: { guaranteed: [], partial: [] },
+          linear: true,
+          publishable: 'NONE',
+          paths: [{ index: 0, nodes: [], choices: [], check: { ...check } }],
+          nodes: {
+            [id]: {
+              errors: ['entrée user.name manquante'],
+              warnings: [],
+              available: ['account.name', 'other.name'],
+              missing: [{ key: 'user.name', path: 1 }],
+              produces: [],
+              satisfied: [],
+              proposals: [proposal as never],
+            },
+          },
+          edges: {},
+          errors: [],
+          warnings: [],
+        },
+      };
+      ui.checkedFor = logicKey(journey);
+      return renderDashboard(base('library', {}, { journey: ui }));
+    };
+    const unique = withProposal({
+      input: 'user.name',
+      type: 'text',
+      status: 'UNIQUE',
+      candidates: [
+        {
+          key: 'account.name',
+          from: 'data',
+          type: 'text',
+          compatible: true,
+          reason: 'même sens métier (« nom du compte »)',
+        },
+        {
+          key: 'other.name',
+          from: 'data',
+          type: 'email',
+          compatible: false,
+          reason: 'types incompatibles (identifier ≠ email)',
+        },
+      ],
+    });
+    expect(unique).toContain('<div class="jn-proposal unique" role="note">');
+    expect(unique).toContain('Correspondance proposée (fiable) : à retenir');
+    expect(unique).toContain(
+      'data-action="jn-apply-map" data-node="' +
+        id +
+        '" data-key="user.name" data-to="account.name">Utiliser account.name</button>',
+    );
+    expect(unique).toContain('types incompatibles (identifier ≠ email)');
+    const ambiguous = withProposal({
+      input: 'user.name',
+      type: 'text',
+      status: 'AMBIGUOUS',
+      candidates: [
+        {
+          key: 'account.name',
+          from: 'data',
+          type: 'text',
+          compatible: true,
+          reason: 'même nom final (name)',
+        },
+        { key: 'other.name', from: 'data', type: 'text', compatible: true, reason: 'même nom final (name)' },
+      ],
+    });
+    expect(ambiguous).toContain('Correspondance ambiguë : choisissez la donnée');
+    expect(ambiguous.match(/data-action="jn-apply-map"/g)?.length).toBe(2);
+    const none = withProposal({ input: 'user.name', type: 'text', status: 'NONE', candidates: [] });
+    expect(none).toContain('Aucune donnée compatible en amont');
+    expect(none).not.toContain('jn-apply-map');
+  });
+
+  it('the « Ajouter un bloc » window: four steps on the real source, the name checked, the contract derived or declared, creation only after a real check', () => {
     const preview = {
       scenario: 'Créer une demande',
       file: 'create/create.flow.yaml',
@@ -562,59 +858,164 @@ describe('dashboard — scenario library', () => {
       data: [{ key: 'request.title', dynamic: true }],
       contract: {
         source: 'DERIVED' as const,
-        inputs: [],
+        inputs: [{ key: 'user.name', required: true }],
         outputs: [{ key: 'request.title', dynamic: true }],
         preconditions: [],
         postconditions: [],
       },
       reusable: false,
     };
-    const html = renderDashboard(
-      base(
-        'library',
-        {},
-        {
-          panel: {
-            scenario: 'Créer une demande',
-            name: 'Composé',
-            description: '',
-            preview,
-            previewFor: 'Créer une demande',
-          },
-        },
-      ),
+    const wizard = {
+      ...emptyWizard('Créer une demande'),
+      name: 'Composé',
+      preview,
+      previewFor: 's:Créer une demande',
+    };
+    const step1 = renderDashboard(base('library', {}, { wizard }));
+    expect(step1).toContain('role="dialog" aria-modal="true" aria-labelledby="wz-t"');
+    expect(step1).toContain('<h2 id="wz-t">Ajouter un bloc</h2>');
+    expect(step1).toMatch(/aria-current="step" aria-label="Étape 1 : Informations \(en cours\)"/);
+    expect(step1).toContain('3 étape(s) exécutable(s) · départ /requests');
+    // Le nom est vérifié avant d'aller plus loin (même portée que le serveur).
+    expect(step1).toContain(
+      '<small id="wz-name-hint" class="err">« Composé » est déjà pris par un scénario ou un bloc.</small>',
     );
-    expect(html).toContain('role="dialog" aria-modal="true" aria-labelledby="lib-sheet-t"');
-    expect(html).toContain('Aperçu de la source');
-    expect(html).toContain('3 étape(s) · départ /requests');
-    expect(html).toContain(
-      '<small id="lib-name-hint" class="err">« Composé » est déjà pris par un scénario ou un bloc.</small>',
+    expect(step1).toMatch(/data-action="wz-next" disabled/);
+    // Ni type « Condition » ni « Boucle » : ce ne sont pas des blocs ; la version initiale suit la règle (v1).
+    expect(step1).toContain('Bloc standard');
+    expect(step1).not.toMatch(/value="(CONDITION|LOOP)"/);
+    expect(step1).toContain('value="v1" readonly');
+    const named = { ...wizard, name: 'Nouveau bloc' };
+    expect(renderDashboard(base('library', {}, { wizard: named }))).not.toMatch(
+      /data-action="wz-next" disabled/,
     );
-    expect(html).toMatch(/type="submit" class="btn primary" disabled/);
-    const busy = renderDashboard(
-      base(
-        'library',
-        {},
-        { panel: { scenario: 'Créer une demande', name: 'Nouveau bloc', description: '', busy: true } },
-      ),
+    // Étape 2 : entrées et sorties du contrat déduit, avec leurs compteurs ; déclarer est un choix explicite.
+    const step2 = renderDashboard(base('library', {}, { wizard: { ...named, step: 2 } }));
+    expect(step2).toContain('Contrat déduit des étapes');
+    expect(step2).toMatch(/Entrées nécessaires <small class="mu">\(1\)<\/small>/);
+    expect(step2).toContain('générée au rejeu');
+    // Étape 3 : les paramètres sont les entrées ; les rendre facultatives déclare le contrat.
+    const step3 = renderDashboard(base('library', {}, { wizard: { ...named, step: 3 } }));
+    expect(step3).toContain('data-wz="optional" value="user.name"');
+    expect(declaredOf({ ...named, declare: true, optional: ['user.name'] }, preview.contract)).toEqual({
+      inputs: [{ key: 'user.name', required: false }],
+      outputs: ['request.title'],
+      preconditions: [],
+      postconditions: [],
+    });
+    // Étape 4 : « Créer le bloc » n'est possible qu'après une vérification réelle et réussie.
+    const step4 = renderDashboard(base('library', {}, { wizard: { ...named, step: 4 } }));
+    expect(step4).toMatch(/data-action="wz-create" disabled/);
+    const checked = { ...named, step: 4 as const, check: { ok: true, errors: [], warnings: [] } };
+    const ok = renderDashboard(
+      base('library', {}, { wizard: { ...checked, checkFor: checkKey(checked, undefined) } }),
     );
-    expect(busy).toMatch(/disabled aria-busy="true">Ajout…/);
+    expect(ok).toContain('Le bloc peut être créé.');
+    expect(ok).toContain('Le bloc attend 1 entrée(s)');
+    expect(ok).not.toMatch(/data-action="wz-create" disabled/);
+    const ko = {
+      ...named,
+      step: 4 as const,
+      check: { ok: false, errors: ['no executable step'], warnings: [] },
+    };
+    const blocked = renderDashboard(
+      base('library', {}, { wizard: { ...ko, checkFor: checkKey(ko, undefined) } }),
+    );
+    expect(blocked).toContain('Création impossible tant que ces erreurs restent.');
+    expect(blocked).toMatch(/data-action="wz-create" disabled/);
+    // Un échec du serveur garde la saisie ; fermer avec des changements demande confirmation.
     const failed = renderDashboard(
-      base(
-        'library',
-        {},
-        {
-          panel: {
-            scenario: 'Créer une demande',
-            name: 'Nouveau bloc',
-            description: 'd',
-            error: 'already exists',
-          },
-        },
-      ),
+      base('library', {}, { wizard: { ...named, error: 'already exists', dirty: true, confirmClose: true } }),
     );
     expect(failed).toContain('<p class="err" role="alert">already exists</p>');
     expect(failed).toContain('value="Nouveau bloc"');
+    expect(failed).toContain('Abandonner la création du bloc ?');
+    expect(nameProblem(base('library'), { ...named, name: ' ' })).toBe('Le nom est obligatoire.');
+  });
+
+  it('the window from a recording: a group, the steps kept, the dependencies nothing produces', () => {
+    const steps = [
+      { position: 1, stepId: 's1', kind: 'click', label: 'click « Nouveau »', groupId: 'g1' },
+      { position: 2, stepId: 's2', kind: 'fill', label: 'fill « Titre »', groupId: 'g1' },
+    ];
+    const plan = {
+      recording: 'rec1',
+      mode: 'separate' as const,
+      ok: true,
+      groups: [],
+      blocks: [
+        {
+          key: 'g1',
+          name: 'Bloc g1',
+          composite: false,
+          groups: [{ id: 'g1', name: 'Création', steps: 1, partial: true }],
+          startAt: '/items',
+          steps: [steps[1] ?? steps[0]],
+          assertions: 0,
+          checks: 0,
+          data: [],
+          produces: [],
+          consumes: ['item.code'],
+          contract: {
+            source: 'DERIVED' as const,
+            inputs: [{ key: 'item.code', required: true }],
+            outputs: [],
+            preconditions: [],
+            postconditions: [],
+          },
+          dependencies: [{ key: 'item.code', source: 'NOWHERE' as const }],
+          transformations: [],
+          midway: true,
+          gaps: [],
+          validation: { ok: true, errors: [], warnings: [] },
+        },
+      ],
+      summary: {
+        groups: 1,
+        steps: 1,
+        produced: 0,
+        consumed: 1,
+        external: ['item.code'],
+        errors: 0,
+        warnings: 0,
+      },
+      errors: [],
+    };
+    const wizard = {
+      ...emptyWizard(''),
+      origin: 'recording' as const,
+      recording: 'rec1',
+      recordings: ['rec1'],
+      groups: [
+        {
+          id: 'g1',
+          name: 'Création',
+          stepIds: ['s1', 's2'],
+          positions: [1, 2],
+          startAt: '/items',
+          checks: [],
+          assertionIds: [],
+          runnableAlone: { ok: true, missing: [] },
+        },
+      ],
+      groupsFor: 'rec1',
+      groupId: 'g1',
+      stepIds: ['s2'],
+      groupSteps: steps,
+      name: 'Bloc titre',
+    };
+    const html = renderDashboard(
+      base('library', {}, { wizard: { ...wizard, plan, planFor: 'r:rec1:g1:s2' } as never }),
+    );
+    expect(html).toContain('<option value="g1" selected>Création · 2</option>');
+    expect(html).toMatch(/data-wz="step" value="s1"><span>1\. click « Nouveau »/);
+    expect(html).toMatch(/data-wz="step" value="s2" checked>/);
+    expect(html).toContain('1 étape(s) exécutable(s) · départ /items');
+    const io = renderDashboard(
+      base('library', {}, { wizard: { ...wizard, step: 2, plan, planFor: 'r:rec1:g1:s2' } as never }),
+    );
+    expect(io).toContain('Données consommées que rien ne produit');
+    expect(io).toContain('<code class="lib-key">item.code</code>');
   });
 
   it('scenarios: a block is not run alone; insertion carries the revision read; a changed block is shown', () => {
@@ -706,17 +1107,247 @@ describe('dashboard — scenario library', () => {
     const html = renderDashboard(
       base('library', reader, {
         sheet: { block: 'Bloc seul', tab: 'contract' },
-        compose: { name: 'P', parts: ['Bloc seul'] },
+        journey: { ...emptyJourneyUi(), journey: journeyOfParts('P', [{ block: 'Bloc seul', version: 1 }]) },
       }),
     );
     expect(html).toContain('Bloc connexion');
     expect(html).not.toMatch(
       /data-action="lib-(remove|panel-open|part-add|part-move|check|contract-edit|validate-version|update-ask|update-yes)"/,
     );
+    expect(html).not.toMatch(/data-action="jn-(add|move|remove|duplicate|save|publish|check|shape)"/);
+    expect(html).not.toContain('data-jn-gap');
     expect(html).not.toContain('Créer le scénario');
     const scenarios = renderDashboard(base('scenarios', { ...reader, scenarioHistory: [], recordings: [] }));
     expect(scenarios).not.toContain('data-action="lib-insert"');
     expect(scenarios).not.toContain('data-action="lib-from-scenario"');
     expect(scenarios).not.toContain('data-action="lib-accept"');
+  });
+});
+
+describe('dashboard — block catalogue (pages, states, docked sheet) and the block traceability', () => {
+  const field = (
+    over: Partial<ContractField> & Pick<ContractField, 'key' | 'direction' | 'origin'>,
+  ): ContractField => ({
+    id: `x:${over.direction}:${over.key}`,
+    type: 'text',
+    typeSource: 'DEFAULT',
+    required: over.direction === 'input',
+    version: 1,
+    detection: 'CONFIRMED',
+    evidence: [],
+    steps: [],
+    exposed: true,
+    ...over,
+  });
+
+  it('pages: bounds, numbers around the current page, the found range', () => {
+    const items = Array.from({ length: 30 }, (_, index) => index);
+    expect(pageOf(items, 3, 12)).toMatchObject({ page: 3, pages: 3, from: 25, to: 30 });
+    expect(pageOf(items, 9, 12).page).toBe(3);
+    expect(pageOf([], 1, 12)).toMatchObject({ page: 1, pages: 1, from: 0, to: 0 });
+    expect(pageNumbers(5, 10)).toEqual([1, 'gap', 4, 5, 6, 'gap', 10]);
+    expect(pageNumbers(1, 2)).toEqual([1, 2]);
+    const many = Array.from({ length: 30 }, (_, index) =>
+      block({ name: `Bloc ${String.fromCharCode(97 + (index % 26))}${String(index)}` }),
+    );
+    const html = renderDashboard(
+      base('library', {}, { blocks: many, tab: 'catalog', pageSize: 12, page: 3 }),
+    );
+    expect(html.match(/<li class="lib-card/g)).toHaveLength(6);
+    expect(html).toContain('<p class="lib-found" role="status">25–30 sur 30 blocs</p>');
+    expect(html).toContain('data-action="lib-page" data-page="3" aria-label="Page 3" aria-current="page"');
+    expect(html).toContain('<option value="12" selected>12 / page</option>');
+  });
+
+  it('states: loading, a read error with retry, no result', () => {
+    const loading = renderDashboard(base('library', {}, { blocks: undefined, tab: 'catalog' }));
+    expect(loading).toContain('Lecture du catalogue…');
+    const failed = renderDashboard(
+      base('library', {}, { blocks: undefined, tab: 'catalog', error: 'HTTP 500' }),
+    );
+    expect(failed).toContain('Le catalogue n’a pas pu être lu. HTTP 500');
+    expect(failed).toContain('data-action="lib-reload"');
+  });
+
+  it('a sheet opened from the catalogue sits beside it (not modal), the list compact, no composer panel', () => {
+    const html = renderDashboard(
+      base(
+        'library',
+        {},
+        { tab: 'catalog', sheet: { block: 'Bloc connexion', tab: 'overview', docked: true } },
+      ),
+    );
+    expect(html).toContain('class="lib-sheet lib-fiche docked" role="region" aria-labelledby="lib-fiche-t"');
+    expect(html).not.toContain('lib-sheet-bg');
+    expect(html).toContain(
+      '<div class="lib-split"><div class="lib-split-list"><ul class="plain lib-cards list compact">',
+    );
+    expect(html).toContain('<li class="lib-card open compact" data-block="Bloc connexion">');
+    expect(html).not.toContain('data-panel="props" data-open="1"');
+    // Les actions réelles de la fiche ; jamais « Exécuter » : un bloc ne se joue pas seul.
+    expect(html).toMatch(
+      /data-action="lib-preview"[^]*data-action="lib-edit"[^]*data-action="lib-dup-open"[^]*data-action="lib-part-add"/,
+    );
+    expect(html).not.toMatch(/>Exécuter</);
+    // Hors du catalogue, la fiche ancrée est gardée mais cachée (aucune fenêtre modale par-dessus le compositeur).
+    const composer = renderDashboard(
+      base(
+        'library',
+        {},
+        { tab: 'composer', sheet: { block: 'Bloc connexion', tab: 'overview', docked: true } },
+      ),
+    );
+    expect(composer).not.toContain('lib-fiche');
+  });
+
+  it('traceability: declared / detected / observed; a cited input is never generated, a fixed value is not generated', () => {
+    const traced = block({
+      name: 'Tracé',
+      steps: 3,
+      contract: {
+        source: 'DERIVED',
+        inputs: [{ key: 'company.id', required: true }],
+        outputs: [
+          { key: 'request.id', dynamic: true },
+          { key: 'request.label', dynamic: false },
+        ],
+        preconditions: [],
+        postconditions: [],
+        fields: {
+          inputs: [
+            field({
+              key: 'company.id',
+              direction: 'input',
+              origin: 'INPUT',
+              steps: [1],
+              evidence: ['lue par une référence explicite à l’étape 1 (citée)'],
+            }),
+          ],
+          outputs: [
+            field({
+              key: 'request.id',
+              direction: 'output',
+              origin: 'CAPTURED',
+              steps: [2],
+              capture: { source: 'champ id de la réponse POST /api/requests', onFailure: 'FAIL' },
+            }),
+            field({
+              key: 'request.label',
+              direction: 'output',
+              origin: 'DATA',
+              detection: 'PROBABLE',
+              steps: [3],
+            }),
+          ],
+          candidates: [],
+        },
+      },
+    });
+    const all = [...blocks, traced];
+    const sheetOf = (traceKey: string, activity?: LibraryBlockActivity): string =>
+      renderDashboard(
+        base(
+          'library',
+          {},
+          {
+            blocks: all,
+            sheet: { block: 'Tracé', tab: 'traceability', traceKey, ...(activity ? { activity } : {}) },
+          },
+        ),
+      );
+    const input = sheetOf('input:company.id');
+    expect(input).toContain('<dd>Entrée fournie par l’amont (jamais générée par ce bloc)</dd>');
+    expect(input).not.toContain('Générée par le bloc');
+    expect(input).toContain('Rien d’observé : aucune exécution réelle n’a rejoué ce bloc.');
+    expect(sheetOf('output:request.label')).toContain(
+      '<dd>Valeur fixe du jeu de données du bloc (non générée)</dd>',
+    );
+    expect(sheetOf('output:request.label')).toContain('<span class="lib-det probable">Probable</span>');
+    const activity: LibraryBlockActivity = {
+      scanned: 2,
+      last: { run: 'run-a', createdAt: at, verdict: 'PASSED', durationMs: 138_000, scenarios: ['Composé'] },
+      events: [
+        {
+          at,
+          key: 'request.id',
+          origin: 'CAPTURED',
+          withheld: true,
+          step: 7,
+          stepName: 'run Tracé › capture request.id',
+          block: 'Tracé',
+          flow: 'Composé',
+        },
+      ],
+    };
+    const observed = sheetOf('output:request.id', activity);
+    expect(observed).toContain(
+      'Capturée pendant le rejeu · source : champ id de la réponse POST /api/requests',
+    );
+    expect(observed).toMatch(
+      /<b>Capture<\/b><span class="mu small">étape 7 du scénario · capture request.id<\/span><small class="mu">non conservée \(rétention\)<\/small>/,
+    );
+    // La dernière exécution réelle, sur la vue d'ensemble.
+    const overview = renderDashboard(
+      base('library', {}, { blocks: all, sheet: { block: 'Tracé', tab: 'overview', activity } }),
+    );
+    expect(overview).toContain('<span class="lib-state ok">Succès</span>');
+    expect(overview).toContain('2 min 18 s');
+    expect(overview).toContain('data-action="open-run" data-project="prj_a" data-run="run-a"');
+  });
+
+  it('compatibility with the open journey: provided, ambiguous, own data, missing, optional, older version', () => {
+    const producer = block({
+      name: 'P1',
+      contract: {
+        source: 'DERIVED',
+        inputs: [],
+        outputs: [
+          { key: 'a', dynamic: true },
+          { key: 'b', dynamic: true },
+        ],
+        preconditions: [],
+        postconditions: [],
+      },
+    });
+    const producer2 = block({
+      name: 'P2',
+      contract: {
+        source: 'DERIVED',
+        inputs: [],
+        outputs: [{ key: 'b', dynamic: true }],
+        preconditions: [],
+        postconditions: [],
+      },
+    });
+    const consumer = block({
+      name: 'C',
+      version: 3,
+      data: [{ key: 'own', dynamic: false }],
+      contract: {
+        source: 'DERIVED',
+        inputs: [
+          { key: 'a', required: true },
+          { key: 'b', required: true },
+          { key: 'own', required: true },
+          { key: 'gone', required: true },
+          { key: 'maybe', required: false },
+        ],
+        outputs: [],
+        preconditions: [],
+        postconditions: [],
+      },
+    });
+    const journey = emptyJourneyUi();
+    journey.journey = journeyOfParts('J', [{ block: 'P1' }, { block: 'P2' }, { block: 'C', version: 2 }]);
+    const state = base('library', {}, { blocks: [producer, producer2, consumer], journey });
+    const compat = journeyCompat(state, consumer);
+    expect(compat.rows.map((row) => [row.key, row.status, row.blocks])).toEqual([
+      ['a', 'FROM', ['P1']],
+      ['b', 'AMBIGUOUS', ['P1', 'P2']],
+      ['own', 'DATA', []],
+      ['gone', 'MISSING', []],
+      ['maybe', 'OPTIONAL', []],
+    ]);
+    expect(compat.pinned).toBe(2);
   });
 });

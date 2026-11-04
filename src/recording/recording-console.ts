@@ -329,8 +329,10 @@ export class RecordingConsole {
   private async detach(): Promise<void> {
     if (this.detached || this.detaching || !this.openWindow) return;
     this.detaching = true;
+    let page: Page | undefined;
     try {
-      const window = await RecorderPanel.open(await this.openWindow(), this.language, 'preview');
+      page = await this.openWindow();
+      const window = await RecorderPanel.open(page, this.language, 'preview');
       this.detached = window;
       window.onCommand((command) => {
         void this.handle(command);
@@ -340,6 +342,11 @@ export class RecordingConsole {
         this.render();
       });
       await window.page.bringToFront().catch(() => undefined);
+    } catch (error) {
+      // La fenêtre (ou le navigateur) fermée pendant son ouverture — fin de l'enregistrement : rien à détacher.
+      // Sans cela, le rejet n'est attrapé par personne (la commande est traitée sans attendre).
+      if (page?.isClosed() || /has been closed/i.test(String(error))) return;
+      throw error;
     } finally {
       this.detaching = false;
     }

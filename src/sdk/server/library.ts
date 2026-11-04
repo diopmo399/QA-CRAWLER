@@ -10,6 +10,7 @@ import type {
   ComposeScenarioInput,
   CompositionCheck,
   CompositionDrift,
+  BlockContract,
   DeclaredContract,
   ExtractionInput,
   ExtractionPlan,
@@ -35,7 +36,10 @@ import {
   type ExtractionSource,
 } from './library-extract.js';
 import { describeStep, flowSchema } from '../../config/flow-schema.js';
+import { expandedStepsOf } from '../../flows/flow-includes.js';
 import { flowsDirOf, revisionOf } from './platform.js';
+import { contractFields, type StoredFields } from './library-fields.js';
+import { sanitizeWait, waitProblems, waitReferences, waitStep, waitSummary } from '../core/wait.js';
 
 /**
  * LA BIBLIOTHÈQUE DE SCÉNARIOS : des parcours réutilisables. Un bloc est un flow `reusable: true`
@@ -69,7 +73,7 @@ export class LibraryError extends Error {
 
 type Raw = Record<string, unknown>;
 
-interface FlowEntry {
+export interface FlowEntry {
   name: string;
   /** Le fichier (absolu) et son chemin relatif au dossier des flows. */
   file: string;
@@ -79,7 +83,7 @@ interface FlowEntry {
   index?: number;
 }
 
-interface BlockRecord {
+export interface BlockRecord {
   id: string;
   version: number;
   hash: string;
@@ -87,15 +91,17 @@ interface BlockRecord {
   updatedAt?: string;
   origin?: LibraryBlockView['origin'];
   contract?: DeclaredContract;
+  /** Ce que des personnes ont déclaré des données (libellé, type, sens…) et leur version de définition. */
+  fields?: StoredFields;
   history: { version: number; at?: string; change: string }[];
 }
 
-interface CompositionRecord {
+export interface CompositionRecord {
   at: string;
   blocks: { name: string; id: string; version: number; hash: string }[];
 }
 
-interface Registry {
+export interface Registry {
   version: 2;
   blocks: Record<string, BlockRecord>;
   compositions: Record<string, CompositionRecord>;
@@ -120,7 +126,7 @@ const exists = (file: string): Promise<boolean> =>
 const locks = new Map<string, Promise<unknown>>();
 
 /** Les opérations de la bibliothèque d'un projet passent l'une après l'autre (jamais deux écritures mêlées). */
-function withLock<T>(projectDir: string, run: () => Promise<T>): Promise<T> {
+export function withLock<T>(projectDir: string, run: () => Promise<T>): Promise<T> {
   const previous = locks.get(projectDir) ?? Promise.resolve();
   const next = previous.then(run, run);
   locks.set(
@@ -173,7 +179,7 @@ const removeBackups = (staged: readonly { backup?: string }[]): Promise<unknown>
 // Le registre : version 2, l'ancien format (origines seules) est repris avec des valeurs explicites.
 // ---------------------------------------------------------------------------------------------
 
-async function readRegistry(projectDir: string): Promise<Registry> {
+export async function readRegistry(projectDir: string): Promise<Registry> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(path.join(projectDir, LIBRARY_FILE), 'utf8'));
@@ -204,7 +210,7 @@ async function readRegistry(projectDir: string): Promise<Registry> {
   };
 }
 
-const registryFile = (projectDir: string, registry: Registry): { file: string; content: string } => ({
+export const registryFile = (projectDir: string, registry: Registry): { file: string; content: string } => ({
   file: path.join(projectDir, LIBRARY_FILE),
   content: `${JSON.stringify(registry, null, 2)}\n`,
 });
@@ -213,7 +219,7 @@ const registryFile = (projectDir: string, registry: Registry): { file: string; c
 // Lecture des flows du projet.
 // ---------------------------------------------------------------------------------------------
 
-async function flowEntries(projectDir: string): Promise<{ root: string; entries: FlowEntry[] }> {
+export async function flowEntries(projectDir: string): Promise<{ root: string; entries: FlowEntry[] }> {
   const root = await flowsDirOf(projectDir);
   if (!(await exists(root))) return { root, entries: [] };
   const files = (await readdir(root, { withFileTypes: true, recursive: true }))
@@ -241,7 +247,7 @@ async function flowEntries(projectDir: string): Promise<{ root: string; entries:
   return { root, entries };
 }
 
-const stepsOf = (flow: Raw): Raw[] => (Array.isArray(flow.steps) ? flow.steps.filter(isObject) : []);
+export const stepsOf = (flow: Raw): Raw[] => (Array.isArray(flow.steps) ? flow.steps.filter(isObject) : []);
 
 /** Les flows qu'un flow rejoue par `run:`, dans l'ordre. */
 export function runsOf(flow: Raw): string[] {
@@ -261,7 +267,7 @@ async function testDataOf(entry: FlowEntry): Promise<TestDataSet | undefined> {
   return parseTestDataSet(raw, entry.name);
 }
 
-interface BlockInfo {
+export interface BlockInfo {
   view: LibraryBlockView;
   data?: TestDataSet;
   /** L'enregistrement à écrire si le bloc vient d'être repris (pas encore dans le registre). */
@@ -301,17 +307,39 @@ async function describeBlock(
           ...(known?.origin ? { origin: known.origin } : {}),
           history: [{ version: 1, change: 'taken over: no earlier record of this block' }],
         };
-  const { contract, problems: contradictions } = contractOf({
+  // Un bloc qui rejoue d'autres blocs (`run:`) : son contrat se lit sur les étapes que le moteur rejouera.
+  const analyzed =
+    runsOf(entry.flow).length > 0
+      ? (expandedStepsOf(
+          entries.map((other) => other.flow),
+          entry.name,
+        ) ?? steps)
+      : steps;
+  const hidden = Object.entries(record.fields ?? {})
+    .filter(([id, field]) => id.startsWith('output:') && field.confirmed === false)
+    .map(([id]) => id.slice('output:'.length));
+  const { contract: base, problems: contradictions } = contractOf({
     name: entry.name,
-    steps,
+    steps: analyzed,
     ...(data ? { data } : {}),
     ...(record.contract ? { declared: record.contract } : {}),
+    ...(hidden.length > 0 ? { hidden } : {}),
   });
   problems.push(...contradictions);
+  const contract = {
+    ...base,
+    fields: contractFields({
+      blockId: record.id,
+      steps: analyzed,
+      ...(data ? { data } : {}),
+      contract: base,
+      ...(record.fields ? { stored: record.fields } : {}),
+    }),
+  };
   const changed = record.hash !== hash;
   if (changed) problems.push(`its content changed since version ${String(record.version)}`);
   const state: BlockState = problems.length > (changed ? 1 : 0) ? 'INVALID' : changed ? 'CHANGED' : 'VALID';
-  const use = dataUse(steps);
+  const use = dataUse(analyzed);
   const pinnedBy = Object.entries(registry.compositions).flatMap(([scenario, composition]) =>
     composition.blocks
       .filter((ref) => ref.name === entry.name)
@@ -359,7 +387,10 @@ async function describeBlock(
   };
 }
 
-async function blocksOf(entries: readonly FlowEntry[], registry: Registry): Promise<Map<string, BlockInfo>> {
+export async function blocksOf(
+  entries: readonly FlowEntry[],
+  registry: Registry,
+): Promise<Map<string, BlockInfo>> {
   const blocks = new Map<string, BlockInfo>();
   for (const entry of entries)
     if (entry.flow.reusable === true) blocks.set(entry.name, await describeBlock(entry, entries, registry));
@@ -394,7 +425,7 @@ export async function previewSource(projectDir: string, scenario: string): Promi
   };
 }
 
-function freeName(entries: readonly FlowEntry[], raw: unknown): string {
+export function freeName(entries: readonly FlowEntry[], raw: unknown): string {
   const name = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : '';
   if (!name || name.length > NAME_MAX || !slug(name))
     throw new LibraryError(`a name of 1 to ${String(NAME_MAX)} characters is required`, 400);
@@ -404,7 +435,7 @@ function freeName(entries: readonly FlowEntry[], raw: unknown): string {
 }
 
 /** Les fichiers d'un nouveau flow dans <flows>/<dossier>/<nom>/, avec son jeu de données ; jamais par-dessus un autre. */
-async function flowFiles(
+export async function flowFiles(
   root: string,
   folder: string,
   flow: Raw,
@@ -437,12 +468,17 @@ async function flowFiles(
   };
 }
 
-async function newBlock(
+/**
+ * Écrit un nouveau bloc (version 1) et son entrée au registre. `extra.contract` le déclare d'emblée ;
+ * `extra.uses` suit les blocs qu'il rejoue (comme un parcours composé). À appeler sous `withLock`.
+ */
+export async function newBlock(
   projectDir: string,
   root: string,
   flow: Raw,
   data: TestDataSet | undefined,
   origin: NonNullable<LibraryBlockView['origin']>,
+  extra: { contract?: DeclaredContract; uses?: CompositionRecord } = {},
 ): Promise<LibraryBlockView> {
   const name = String(flow.name);
   const { files } = await flowFiles(root, 'library', flow, data);
@@ -455,25 +491,89 @@ async function newBlock(
     createdAt: at,
     updatedAt: at,
     origin,
+    ...(extra.contract ? { contract: extra.contract } : {}),
     history: [
       {
         version: 1,
         at,
-        change:
-          origin.kind === 'scenario'
+        change: origin.journey
+          ? `created from the journey "${origin.journey}"`
+          : origin.kind === 'scenario'
             ? `created from the scenario "${origin.name}"`
             : `created from the group "${origin.group ?? ''}" of the recording ${origin.name}`,
       },
     ],
   };
+  if (extra.uses) registry.compositions[name] = extra.uses;
   await commitFiles([...files, registryFile(projectDir, registry)]);
   return blockNamed(projectDir, name);
+}
+
+/**
+ * DUPLIQUER un bloc : un nouveau bloc, version 1, avec les mêmes étapes, le même jeu de données, le même contrat
+ * déclaré et les mêmes déclarations de données (libellés, types, sens). Le bloc d'origine ne change pas ; aucun
+ * parcours ne référence la copie. La provenance dit d'où elle vient (bloc et version).
+ */
+export function duplicateBlock(
+  projectDir: string,
+  source: string,
+  input: { name: unknown; description?: string },
+): Promise<LibraryBlockView> {
+  return withLock(projectDir, async () => {
+    const { root, entries } = await flowEntries(projectDir);
+    const registry = await readRegistry(projectDir);
+    const entry = entries.find((candidate) => candidate.name === source);
+    if (!entry || entry.flow.reusable !== true) throw new LibraryError(`no block named "${source}"`, 404);
+    // Un bloc pas encore suivi par le registre (déposé dans le dossier des flows) : sa version présente.
+    const record = registry.blocks[source] ?? {
+      version: (await blockNamed(projectDir, source)).version,
+    };
+    const name = freeName(entries, input.name);
+    const steps = stepsOf(entry.flow);
+    const description =
+      input.description?.trim() ||
+      (typeof entry.flow.description === 'string' ? entry.flow.description : undefined);
+    const created = await newBlock(
+      projectDir,
+      root,
+      {
+        name,
+        ...(description ? { description } : {}),
+        reusable: true,
+        ...(typeof entry.flow.startAt === 'string' ? { startAt: entry.flow.startAt } : {}),
+        steps,
+      },
+      await testDataOf(entry),
+      {
+        kind: 'scenario',
+        name: source,
+        transformations: [`duplicated from the block "${source}" (v${String(record.version)})`],
+      },
+      'contract' in record && record.contract ? { contract: record.contract } : {},
+    );
+    // Les déclarations des données suivent la copie (la même définition, version comprise) ; l'historique
+    // dit d'où elle vient.
+    const after = await readRegistry(projectDir);
+    const copy = after.blocks[name];
+    if (!copy) return created;
+    if ('fields' in record && record.fields && Object.keys(record.fields).length > 0)
+      copy.fields = structuredClone(record.fields);
+    copy.history = [
+      {
+        version: 1,
+        ...(copy.createdAt ? { at: copy.createdAt } : {}),
+        change: `duplicated from the block "${source}" (v${String(record.version)})`,
+      },
+    ];
+    await commitFiles([registryFile(projectDir, after)]);
+    return blockNamed(projectDir, name);
+  });
 }
 
 /** Un scénario devient un bloc de la bibliothèque (ses étapes et ses données sont recopiées). */
 export function addScenarioToLibrary(
   projectDir: string,
-  input: { scenario: string; name: string; description?: string },
+  input: { scenario: string; name: string; description?: string; contract?: unknown },
 ): Promise<LibraryBlockView> {
   return withLock(projectDir, async () => {
     const { root, entries } = await flowEntries(projectDir);
@@ -493,6 +593,21 @@ export function addScenarioToLibrary(
     );
     if (invalid.length > 0)
       throw new LibraryError(`"${input.scenario}" is not a valid flow: ${invalid[0] ?? ''}`, 422, invalid);
+    // Un contrat déclaré à la création : il doit tenir sur les étapes recopiées (sinon rien n'est écrit).
+    const contract =
+      input.contract === undefined || input.contract === null
+        ? undefined
+        : declaredContractOf(input.contract);
+    if (contract) {
+      const problems = contractOf({
+        name,
+        steps: stepsForContract(entries, source, steps),
+        ...(await dataOf(source)),
+        declared: contract,
+      }).problems;
+      if (problems.length > 0)
+        throw new LibraryError(`the declared contract does not hold: ${problems[0] ?? ''}`, 422, problems);
+    }
     return newBlock(
       projectDir,
       root,
@@ -505,8 +620,95 @@ export function addScenarioToLibrary(
       },
       await testDataOf(source),
       { kind: 'scenario', name: input.scenario },
+      contract ? { contract } : {},
     );
   });
+}
+
+/** Les étapes sur lesquelles se lit un contrat : dépliées quand le flow rejoue d'autres blocs (`run:`). */
+function stepsForContract(entries: readonly FlowEntry[], source: FlowEntry, steps: unknown[]): unknown[] {
+  return runsOf(source.flow).length > 0
+    ? (expandedStepsOf(
+        entries.map((entry) => entry.flow),
+        source.name,
+      ) ?? steps)
+    : steps;
+}
+
+async function dataOf(source: FlowEntry): Promise<{ data?: TestDataSet }> {
+  const data = await testDataOf(source);
+  return data ? { data } : {};
+}
+
+/**
+ * VÉRIFIER, SANS RIEN ÉCRIRE, ce qu'un scénario deviendrait en bloc : la source, ses étapes exécutables, le
+ * schéma du flow, les blocs qu'il rejoue (existants, sans récursion), le nom (libre), et le contrat (déduit,
+ * ou déclaré : il doit tenir). Les mêmes règles que la création, qui les refait.
+ */
+export async function checkScenarioBlock(
+  projectDir: string,
+  input: { scenario: string; name: unknown; contract?: unknown },
+): Promise<{
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  steps: number;
+  version: number;
+  contract?: BlockContract;
+}> {
+  const { entries } = await flowEntries(projectDir);
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const source = entries.find((entry) => entry.name === input.scenario);
+  if (!source)
+    return { ok: false, errors: [`no scenario named "${input.scenario}"`], warnings, steps: 0, version: 1 };
+  let name = '';
+  try {
+    name = freeName(entries, input.name);
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+  const steps = stepsOf(source.flow);
+  if (steps.length === 0) errors.push(`"${input.scenario}" has no executable step`);
+  const data = await testDataOf(source);
+  errors.push(
+    ...validateBlockFlow(
+      {
+        name: name || input.scenario,
+        ...(typeof source.flow.startAt === 'string' ? { startAt: source.flow.startAt } : {}),
+        steps,
+      },
+      data,
+    ),
+  );
+  for (const run of runsOf(source.flow)) {
+    if (!entries.some((entry) => entry.name === run)) errors.push(`run "${run}": no flow has this name`);
+    if (name && run === name) errors.push(`run "${run}": a block cannot replay itself`);
+  }
+  let declared: DeclaredContract | undefined;
+  try {
+    declared =
+      input.contract === undefined || input.contract === null
+        ? undefined
+        : declaredContractOf(input.contract);
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+  const { contract, problems } = contractOf({
+    name: name || input.scenario,
+    steps: stepsForContract(entries, source, steps),
+    ...(data ? { data } : {}),
+    ...(declared ? { declared } : {}),
+  });
+  errors.push(...problems);
+  return {
+    ok: errors.length === 0,
+    errors: [...new Set(errors)],
+    warnings,
+    steps: steps.length,
+    version: 1,
+    contract,
+  };
 }
 
 /** Un groupe métier d'un enregistrement devient un bloc (ses étapes, telles que dans le flow généré). */
@@ -557,7 +759,7 @@ export function addGroupToLibrary(
   });
 }
 
-async function blockNamed(projectDir: string, name: string): Promise<LibraryBlockView> {
+export async function blockNamed(projectDir: string, name: string): Promise<LibraryBlockView> {
   const block = (await listLibrary(projectDir)).find((entry) => entry.name === name);
   if (!block) throw new LibraryError(`the block "${name}" could not be read back`, 422);
   return block;
@@ -587,7 +789,7 @@ export function removeFromLibrary(projectDir: string, name: string): Promise<voi
 }
 
 /** Les blocs d'une composition, tels que la vérification les voit. */
-function partsOf(
+export function partsOf(
   names: readonly string[],
   blocks: Map<string, BlockInfo>,
   entries: readonly FlowEntry[],
@@ -632,14 +834,17 @@ function partsOf(
   });
 }
 
-const refsOf = (names: readonly string[], blocks: Map<string, BlockInfo>): CompositionRecord['blocks'] =>
+export const refsOf = (
+  names: readonly string[],
+  blocks: Map<string, BlockInfo>,
+): CompositionRecord['blocks'] =>
   names.flatMap((name) => {
     const block = blocks.get(name);
     return block ? [{ name, id: block.view.id, version: block.view.version, hash: block.view.hash }] : [];
   });
 
 /** Le registre, avec les blocs repris (lus pour la première fois) enregistrés tels qu'ils sont. */
-function withTakenOver(registry: Registry, blocks: Map<string, BlockInfo>): Registry {
+export function withTakenOver(registry: Registry, blocks: Map<string, BlockInfo>): Registry {
   const next: Registry = { ...registry, blocks: { ...registry.blocks } };
   for (const [name, block] of blocks)
     if ((next.blocks[name]?.version ?? 0) === 0) next.blocks[name] = block.record;
@@ -1206,6 +1411,115 @@ export function updateFromSource(
   });
 }
 
+/** Les clés de données qu'une suite d'étapes saisit (`{ testData: clé }`) ou cite (`${testData:clé}`). */
+export function keysUsedBy(steps: readonly unknown[]): Set<string> {
+  const keys = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (typeof value === 'string') {
+      for (const match of value.matchAll(/\$\{testData:([A-Za-z0-9_.-]+)\}/g))
+        if (match[1]) keys.add(match[1]);
+    } else if (Array.isArray(value)) value.forEach(visit);
+    else if (isObject(value)) {
+      if (typeof value.testData === 'string' && Object.keys(value).length === 1) keys.add(value.testData);
+      Object.values(value).forEach(visit);
+    }
+  };
+  visit(steps);
+  return keys;
+}
+
+/**
+ * INSÉRER UNE ATTENTE dans un bloc enregistré, entre deux de ses étapes (`after` : 0 = avant la première).
+ * L'attente devient une étape `expect` du fichier du bloc ; les groupes métier sont décalés. Le bloc passe à
+ * CHANGED : sa version suivante n'existe qu'une fois validée explicitement, et les parcours qui le suivent
+ * gardent la version retenue tant qu'ils ne l'acceptent pas. Une donnée citée doit être connue du bloc ; une
+ * donnée générée au rejeu doit être saisie avant l'attente (citée plus tôt, elle serait générée à l'attente).
+ */
+export function insertWaitInBlock(
+  projectDir: string,
+  name: string,
+  input: { after: unknown; wait: unknown; name?: unknown },
+): Promise<LibraryBlockView> {
+  return withLock(projectDir, async () => {
+    const { entries } = await flowEntries(projectDir);
+    const entry = entries.find((candidate) => candidate.name === name && candidate.flow.reusable === true);
+    if (!entry) throw new LibraryError(`no block named "${name}"`, 404);
+    if (entry.index !== undefined)
+      throw new LibraryError(`"${name}" shares its file with other flows: edit it in the editor`, 409);
+    const registry = await readRegistry(projectDir);
+    const blocks = await blocksOf(entries, registry);
+    const block = blocks.get(name);
+    if (!block) throw new LibraryError(`no block named "${name}"`, 404);
+    const steps = stepsOf(entry.flow);
+    const after = typeof input.after === 'number' && Number.isInteger(input.after) ? input.after : -1;
+    if (after < 0 || after > steps.length)
+      throw new LibraryError(`after is a position between 0 and ${String(steps.length)}`, 400);
+    const wait = sanitizeWait(input.wait);
+    const problems = waitProblems(wait);
+    if (problems.length > 0) throw new LibraryError(problems[0] ?? 'incomplete wait', 422, problems);
+    const before = keysUsedBy(steps.slice(0, after));
+    const known = new Set([
+      ...block.view.data.map((item) => item.key),
+      ...block.view.contract.inputs.map((item) => item.key),
+      ...before,
+    ]);
+    const dynamic = new Set(block.view.data.filter((item) => item.dynamic).map((item) => item.key));
+    for (const key of waitReferences(wait)) {
+      if (!known.has(key))
+        throw new LibraryError(
+          `la donnée ${key} n’est ni dans le jeu du bloc ni saisie avant l’attente`,
+          422,
+        );
+      if (dynamic.has(key) && !before.has(key))
+        throw new LibraryError(
+          `la donnée ${key} est générée au rejeu : insérez l’attente après l’étape qui la saisit`,
+          422,
+        );
+    }
+    const label = typeof input.name === 'string' ? input.name.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+    const step = waitStep(wait, label || undefined);
+    const groups = Array.isArray(entry.flow.groups)
+      ? entry.flow.groups.map((group): unknown =>
+          isObject(group) && Array.isArray(group.steps)
+            ? {
+                ...group,
+                steps: group.steps.map((position: unknown) =>
+                  typeof position === 'number' && position > after ? position + 1 : position,
+                ),
+              }
+            : group,
+        )
+      : undefined;
+    const flow: Raw = {
+      ...entry.flow,
+      steps: [...steps.slice(0, after), step, ...steps.slice(after)],
+      ...(groups ? { groups } : {}),
+    };
+    const invalid = validateBlockFlow(flow, block.data);
+    if (invalid.length > 0)
+      throw new LibraryError(`the wait does not hold: ${invalid[0] ?? ''}`, 422, invalid);
+    const next = withTakenOver(registry, blocks);
+    const record = next.blocks[name] as BlockRecord;
+    next.blocks[name] = {
+      ...record,
+      updatedAt: new Date().toISOString(),
+      history: [
+        ...record.history,
+        {
+          version: record.version,
+          at: new Date().toISOString(),
+          change: `wait inserted after step ${String(after)} (${waitSummary(wait)}): validate it to make version ${String(record.version + 1)}`,
+        },
+      ],
+    };
+    await commitFiles([
+      { file: entry.file, content: stringifyYaml(flow, { lineWidth: 0 }) },
+      registryFile(projectDir, next),
+    ]);
+    return blockNamed(projectDir, name);
+  });
+}
+
 /** LE DÉTAIL d'un bloc : ses étapes en mots, ses groupes internes, ses données (jamais une valeur sensible). */
 export async function blockDetails(projectDir: string, name: string): Promise<LibraryBlockDetails> {
   const { entries } = await flowEntries(projectDir);
@@ -1250,7 +1564,27 @@ export async function blockDetails(projectDir: string, name: string): Promise<Li
           ? describeStep(parsed.data, true)
           : kind;
     const group = groupAt(index + 1);
-    return { position: index + 1, kind, label, ...(group ? { groupId: group } : {}) };
+    const filled = isObject(step.fill) && isObject(step.fill.value) ? step.fill.value.testData : undefined;
+    const generatedKey =
+      typeof filled === 'string' &&
+      ['GENERATE_AT_REPLAY', 'TEMPLATE'].includes(data?.values[filled]?.strategy ?? '');
+    const role: ExtractionStepView['role'] =
+      kind === 'loop'
+        ? 'loop'
+        : kind === 'capture'
+          ? isObject(step.capture) && typeof step.capture.generate === 'string'
+            ? 'generation'
+            : 'capture'
+          : kind === 'expect'
+            ? step.timeoutMs !== undefined
+              ? 'wait'
+              : 'check'
+            : kind === 'goto'
+              ? 'navigation'
+              : generatedKey
+                ? 'generation'
+                : 'action';
+    return { position: index + 1, kind, label, role, ...(group ? { groupId: group } : {}) };
   });
   return {
     block,

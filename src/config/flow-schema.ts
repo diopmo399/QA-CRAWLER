@@ -153,6 +153,8 @@ const STEP_KINDS = [
   'auto',
   'intent',
   'dragAndDrop',
+  'capture',
+  'loop',
 ] as const;
 
 /**
@@ -173,6 +175,87 @@ const dragAndDropSchema = z
     (step) => step.to.section !== undefined || step.to.label !== undefined,
     'dragAndDrop.to needs a section or a label',
   );
+
+/** Une clé de donnée de test (« order.id ») : lettres, chiffres, _ et -, segments séparés par des points. */
+export const DATA_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$/;
+/** Une clé qui évoque un secret (mot de passe, jeton, session…) n'est jamais capturée. */
+export const SECRET_KEY_PATTERN =
+  /pass(word)?|pwd|secret|token|otp|cookie|session|auth|credential|api[-_]?key|private/i;
+
+const regexOk = (pattern: string): string | undefined => {
+  try {
+    const groups = new RegExp(`${pattern}|`).exec('')?.length ?? 1;
+    return groups >= 2 ? undefined : 'pattern needs a capturing group ( … )';
+  } catch (error) {
+    return `pattern is not a regular expression (${error instanceof Error ? error.message : String(error)})`;
+  }
+};
+
+/**
+ * CAPTURE : une valeur lue pendant le rejeu, rangée sous une clé de donnée de test du run (`as`), citée
+ * ensuite comme les autres (`${testData:as}`, `{ testData: as }`). Une seule source :
+ *   text       le texte visible d'un élément (cible ordinaire), filtré par `pattern` (groupe 1)
+ *   attribute  un attribut d'un élément (`attribute: href`)
+ *   url        l'adresse courante : un paramètre (`param`) ou un motif (`pattern`, groupe 1)
+ *   response   un champ JSON (`field`, chemin à points) de la réponse d'une requête OBSERVÉE dont le
+ *              moteur a gardé le corps (écritures avec network.captureBodies ; corps masqués)
+ *   data       une donnée déjà produite dans le run (copiée sous un autre nom)
+ * Une clé qui évoque un secret est refusée ; une valeur masquée n'est jamais capturée ; une clé qui a déjà
+ * une autre valeur dans le run n'est jamais écrasée (échec explicite).
+ */
+/** Les transformations d'une capture (rien d'autre n'est exécuté). */
+export const CAPTURE_TRANSFORMS = ['uppercase', 'lowercase', 'trim', 'digits'] as const;
+export type CaptureTransform = (typeof CAPTURE_TRANSFORMS)[number];
+
+const captureAttributeSchema = z
+  .object({ ...targetShape, attribute: nonEmpty })
+  .strict()
+  .superRefine(checkTarget);
+const captureSchema = z
+  .object({
+    as: nonEmpty,
+    text: targetSchema.optional(),
+    attribute: captureAttributeSchema.optional(),
+    url: z.object({ pattern: nonEmpty.optional(), param: nonEmpty.optional() }).strict().optional(),
+    response: z.object({ method: nonEmpty.optional(), url: nonEmpty, field: nonEmpty }).strict().optional(),
+    data: nonEmpty.optional(),
+    /** Une valeur GÉNÉRÉE par le fournisseur de données du run (email, company, unique…), une fois par run. */
+    generate: nonEmpty.optional(),
+    pattern: nonEmpty.optional(),
+    /** Une transformation prise en charge de la valeur lue. */
+    transform: z.enum(CAPTURE_TRANSFORMS).optional(),
+  })
+  .strict()
+  .superRefine((capture, ctx) => {
+    const sources = (['text', 'attribute', 'url', 'response', 'data', 'generate'] as const).filter(
+      (key) => capture[key] !== undefined,
+    );
+    if (sources.length !== 1)
+      ctx.addIssue({
+        code: 'custom',
+        message: `a capture needs exactly one of text, attribute, url, response, data, generate${sources.length > 0 ? ` (got ${sources.join(', ')})` : ''}`,
+      });
+    if (!DATA_KEY_PATTERN.test(capture.as))
+      ctx.addIssue({ code: 'custom', message: `capture.as "${capture.as}" is not a data key` });
+    if (SECRET_KEY_PATTERN.test(capture.as))
+      ctx.addIssue({
+        code: 'custom',
+        message: `capture.as "${capture.as}" looks like a secret: never captured`,
+      });
+    if (capture.pattern !== undefined && capture.text === undefined && capture.attribute === undefined)
+      ctx.addIssue({
+        code: 'custom',
+        message: 'capture.pattern goes with text or attribute (url has its own)',
+      });
+    for (const pattern of [capture.pattern, capture.url?.pattern]) {
+      const problem = pattern === undefined ? undefined : regexOk(pattern);
+      if (problem) ctx.addIssue({ code: 'custom', message: `capture: ${problem}` });
+    }
+    if (capture.url && (capture.url.pattern === undefined) === (capture.url.param === undefined))
+      ctx.addIssue({ code: 'custom', message: 'capture.url needs exactly one of pattern, param' });
+    if (capture.data !== undefined && !DATA_KEY_PATTERN.test(capture.data))
+      ctx.addIssue({ code: 'custom', message: `capture.data "${capture.data}" is not a data key` });
+  });
 
 const intentValueSchema = z.union([z.string(), z.object({ env: nonEmpty }).strict(), testDataValueSchema]);
 
@@ -341,6 +424,165 @@ const functionalIntentSchema = z
   })
   .strict();
 
+/**
+ * BOUCLES : un corps d'étapes répété sous contrôle. REPEAT (un nombre de fois), FOR_EACH (une collection
+ * en ligne ou lue dans une donnée JSON du run) et WHILE (tant qu'une condition d'écran est vraie). Chaque
+ * boucle est bornée (maxIterations, timeoutMs) : une boucle qui ne s'arrête pas échoue, jamais ne tourne
+ * sans fin. Les boucles s'imbriquent sur LOOP_LIMITS.maxDepth niveaux au plus.
+ */
+export const LOOP_TYPES = ['REPEAT', 'FOR_EACH', 'WHILE'] as const;
+export type LoopType = (typeof LOOP_TYPES)[number];
+export const LOOP_FAILURE_POLICIES = ['STOP', 'CONTINUE'] as const;
+export type LoopFailurePolicy = (typeof LOOP_FAILURE_POLICIES)[number];
+export const LOOP_LIMITS = {
+  /** Le plafond absolu d'itérations d'une boucle. */
+  maxIterations: 100,
+  /** Le plafond par défaut d'une boucle WHILE. */
+  whileIterations: 20,
+  /** Profondeur d'imbrication maximale. */
+  maxDepth: 2,
+  /** Délai global par défaut d'une boucle, et son maximum (ms). */
+  timeoutMs: 120_000,
+  maxTimeoutMs: 600_000,
+  /** Délai d'évaluation d'une condition WHILE (ms). */
+  conditionTimeoutMs: 1_000,
+} as const;
+const LOOP_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+/** Un élément d'une collection FOR_EACH : une valeur, ou des champs nommés (`person.firstName`). */
+export type LoopItem = string | Record<string, string>;
+const loopItemSchema = z.union([
+  z.string(),
+  z.record(z.string().regex(LOOP_NAME, 'item fields are simple names'), z.string()),
+]);
+
+export type FlowLoop = {
+  id: string;
+  /** Le nom de la variable d'itération (`${testData:<as>}`, `${testData:<as>.<champ>}`, `${testData:<as>.index}`). */
+  as: string;
+  maxIterations: number;
+  timeoutMs: number;
+  onFailure: LoopFailurePolicy;
+  steps: FlowStep[];
+} & (
+  | { type: 'REPEAT'; times: number }
+  | { type: 'FOR_EACH'; items?: LoopItem[]; itemsFrom?: string }
+  | { type: 'WHILE'; while: FlowExpectation }
+);
+
+/** Les étapes d'un corps de boucle : récursif (une boucle peut en contenir une autre). */
+const loopStepsSchema: z.ZodType<FlowStep[]> = z.lazy(() => z.array(stepSchema).min(1));
+
+const loopSchema = z
+  .object({
+    id: z.string().regex(LOOP_NAME, 'a loop id is a simple name'),
+    type: z.enum(LOOP_TYPES),
+    times: z.number().int().min(1).max(LOOP_LIMITS.maxIterations).optional(),
+    items: z.array(loopItemSchema).min(1).max(LOOP_LIMITS.maxIterations).optional(),
+    itemsFrom: z.string().regex(DATA_KEY_PATTERN, 'itemsFrom is a data key').optional(),
+    as: z.string().regex(LOOP_NAME, 'as is a simple name').optional(),
+    while: expectSchema.optional(),
+    maxIterations: z.number().int().min(1).max(LOOP_LIMITS.maxIterations).optional(),
+    timeoutMs: z.number().int().min(1).max(LOOP_LIMITS.maxTimeoutMs).optional(),
+    onFailure: z.enum(LOOP_FAILURE_POLICIES).default('STOP'),
+    steps: loopStepsSchema,
+  })
+  .strict()
+  .superRefine((loop, ctx) => {
+    const issue = (message: string): void => {
+      ctx.addIssue({ code: 'custom', message: `loop "${loop.id}": ${message}` });
+    };
+    const present = (['times', 'items', 'itemsFrom', 'while'] as const).filter(
+      (key) => loop[key] !== undefined,
+    );
+    const allowed: Record<LoopType, readonly string[]> = {
+      REPEAT: ['times'],
+      FOR_EACH: ['items', 'itemsFrom'],
+      WHILE: ['while'],
+    };
+    const extra = present.filter((key) => !allowed[loop.type].includes(key));
+    if (extra.length > 0) issue(`${loop.type} does not take ${extra.join(', ')}`);
+    if (loop.type === 'REPEAT' && loop.times === undefined) issue('REPEAT needs times');
+    if (loop.type === 'WHILE' && loop.while === undefined) issue('WHILE needs a while condition');
+    if (loop.type === 'FOR_EACH' && (loop.items === undefined) === (loop.itemsFrom === undefined))
+      issue('FOR_EACH needs exactly one of items, itemsFrom');
+    if (
+      loop.type === 'REPEAT' &&
+      loop.times !== undefined &&
+      loop.maxIterations !== undefined &&
+      loop.times > loop.maxIterations
+    )
+      issue(`times (${String(loop.times)}) is above maxIterations (${String(loop.maxIterations)})`);
+    if (
+      loop.type === 'FOR_EACH' &&
+      loop.items &&
+      loop.maxIterations !== undefined &&
+      loop.items.length > loop.maxIterations
+    )
+      issue(`${String(loop.items.length)} items is above maxIterations (${String(loop.maxIterations)})`);
+    if (loopDepth(loop.steps) + 1 > LOOP_LIMITS.maxDepth)
+      issue(`loops nest at most ${String(LOOP_LIMITS.maxDepth)} levels deep`);
+  })
+  .transform((loop): FlowLoop => {
+    const common = {
+      id: loop.id,
+      as: loop.as ?? loop.id,
+      timeoutMs: loop.timeoutMs ?? LOOP_LIMITS.timeoutMs,
+      onFailure: loop.onFailure,
+      steps: loop.steps,
+    };
+    if (loop.type === 'REPEAT') {
+      const times = loop.times ?? 1;
+      return { ...common, type: 'REPEAT', times, maxIterations: loop.maxIterations ?? times };
+    }
+    if (loop.type === 'WHILE')
+      return {
+        ...common,
+        type: 'WHILE',
+        while: toExpectation(loop.while ?? { noError: true }),
+        maxIterations: loop.maxIterations ?? LOOP_LIMITS.whileIterations,
+      };
+    return {
+      ...common,
+      type: 'FOR_EACH',
+      ...(loop.items ? { items: loop.items } : {}),
+      ...(loop.itemsFrom !== undefined ? { itemsFrom: loop.itemsFrom } : {}),
+      maxIterations: loop.maxIterations ?? loop.items?.length ?? LOOP_LIMITS.maxIterations,
+    };
+  });
+
+/** Toutes les étapes, corps de boucles compris (dans l'ordre d'écriture). */
+export function allSteps(steps: readonly FlowStep[]): FlowStep[] {
+  return steps.flatMap((step) => (step.kind === 'loop' ? [step, ...allSteps(step.loop.steps)] : [step]));
+}
+
+/** La profondeur de boucles d'une liste d'étapes (0 : aucune boucle). */
+export function loopDepth(steps: readonly FlowStep[]): number {
+  let depth = 0;
+  for (const step of steps) if (step.kind === 'loop') depth = Math.max(depth, 1 + loopDepth(step.loop.steps));
+  return depth;
+}
+
+function toExpectation(raw: z.infer<typeof expectSchema>): FlowExpectation {
+  const { text, url, visible, hidden, noError, response } = raw;
+  return {
+    ...(text !== undefined ? { text } : {}),
+    ...(url !== undefined ? { url } : {}),
+    ...(visible !== undefined ? { visible: toTarget(visible) } : {}),
+    ...(hidden !== undefined ? { hidden: toTarget(hidden) } : {}),
+    ...(noError ? { noError } : {}),
+    ...(response
+      ? {
+          response: {
+            ...(response.method !== undefined ? { method: response.method.toUpperCase() } : {}),
+            url: response.url,
+            status: response.status,
+          },
+        }
+      : {}),
+  };
+}
+
 const stepSchema = z
   .object({
     /** Courte description affichée dans les rapports (par défaut : générée à partir de l'étape). */
@@ -374,6 +616,10 @@ const stepSchema = z
     intent: intentSchema.optional(),
     /** Glisser-déposer : un élément vers une zone (effet ITEM_MOVED vérifié au rejeu). */
     dragAndDrop: dragAndDropSchema.optional(),
+    /** Capture d'une valeur (écran, adresse, réponse observée, donnée du run) sous une clé du run. */
+    capture: captureSchema.optional(),
+    /** Boucle : un corps d'étapes répété (REPEAT, FOR_EACH, WHILE), borné. */
+    loop: loopSchema.optional(),
     /**
      * Permission explicite pour cette étape seulement : MUTATION (créer, enregistrer,
      * envoyer…) et/ou UNKNOWN (contrôle réduit à une icône). DANGEROUS (supprimer,
@@ -423,33 +669,48 @@ const stepSchema = z
     if (step.click !== undefined) return { ...common, kind: 'click', target: toTarget(step.click) };
     if (step.check !== undefined) return { ...common, kind: 'check', target: toTarget(step.check) };
     if (step.uncheck !== undefined) return { ...common, kind: 'uncheck', target: toTarget(step.uncheck) };
-    if (step.expect !== undefined) {
-      const { text, url, visible, hidden, noError, response } = step.expect;
-      return {
-        ...common,
-        kind: 'expect',
-        expect: {
-          ...(text !== undefined ? { text } : {}),
-          ...(url !== undefined ? { url } : {}),
-          ...(visible !== undefined ? { visible: toTarget(visible) } : {}),
-          ...(hidden !== undefined ? { hidden: toTarget(hidden) } : {}),
-          ...(noError ? { noError } : {}),
-          ...(response
-            ? {
-                response: {
-                  ...(response.method !== undefined ? { method: response.method.toUpperCase() } : {}),
-                  url: response.url,
-                  status: response.status,
-                },
-              }
-            : {}),
-        },
-      };
-    }
+    if (step.expect !== undefined) return { ...common, kind: 'expect', expect: toExpectation(step.expect) };
+    if (step.loop !== undefined) return { ...common, kind: 'loop', loop: step.loop };
     if (step.manual !== undefined) return { ...common, kind: 'manual', text: step.manual };
     if (step.auto !== undefined)
       return { ...common, kind: 'auto', sentence: step.auto.sentence, type: step.auto.type };
     if (step.intent !== undefined) return { ...common, kind: 'intent', intent: step.intent };
+    if (step.capture !== undefined) {
+      const { as, text, attribute, url, response, data, generate, pattern, transform } = step.capture;
+      const source: FlowCaptureSource = text
+        ? { from: 'text', target: toTarget(text), ...(pattern !== undefined ? { pattern } : {}) }
+        : attribute
+          ? (() => {
+              const { attribute: name, ...target } = attribute;
+              return {
+                from: 'attribute' as const,
+                target: toTarget(target),
+                attribute: name,
+                ...(pattern !== undefined ? { pattern } : {}),
+              };
+            })()
+          : url
+            ? {
+                from: 'url',
+                ...(url.pattern !== undefined ? { pattern: url.pattern } : {}),
+                ...(url.param !== undefined ? { param: url.param } : {}),
+              }
+            : response
+              ? {
+                  from: 'response',
+                  ...(response.method !== undefined ? { method: response.method.toUpperCase() } : {}),
+                  url: response.url,
+                  field: response.field,
+                }
+              : generate !== undefined
+                ? { from: 'generate', generator: generate }
+                : { from: 'data', key: data ?? '' };
+      return {
+        ...common,
+        kind: 'capture',
+        capture: { as, ...source, ...(transform !== undefined ? { transform } : {}) },
+      };
+    }
     if (step.dragAndDrop !== undefined) {
       const { item, from, to } = step.dragAndDrop;
       return {
@@ -694,7 +955,82 @@ export type FlowStep = StepCommon &
     | { kind: 'auto'; sentence: string; type: 'Context' | 'Action' | 'Outcome' | 'Unknown' }
     | { kind: 'intent'; intent: GherkinIntent }
     | { kind: 'dragAndDrop'; item: string; from?: DropZone; to: DropZone }
+    | { kind: 'capture'; capture: FlowCapture }
+    | { kind: 'loop'; loop: FlowLoop }
   );
+
+/** La source d'une capture (voir captureSchema). */
+export type FlowCaptureSource =
+  | { from: 'text'; target: FlowTarget; pattern?: string }
+  | { from: 'attribute'; target: FlowTarget; attribute: string; pattern?: string }
+  | { from: 'url'; pattern?: string; param?: string }
+  | { from: 'response'; method?: string; url: string; field: string }
+  | { from: 'data'; key: string }
+  | { from: 'generate'; generator: string };
+export type FlowCapture = { as: string; transform?: CaptureTransform } & FlowCaptureSource;
+
+/** Une capture sous la forme écrite dans un flow YAML (`target` : la forme d'une cible). */
+export function captureYaml(
+  capture: FlowCapture,
+  target: (value: FlowTarget) => Record<string, unknown>,
+): Record<string, unknown> {
+  const pattern =
+    (capture.from === 'text' || capture.from === 'attribute') && capture.pattern !== undefined
+      ? { pattern: capture.pattern }
+      : {};
+  const source =
+    capture.from === 'text'
+      ? { text: target(capture.target) }
+      : capture.from === 'attribute'
+        ? { attribute: { ...target(capture.target), attribute: capture.attribute } }
+        : capture.from === 'url'
+          ? {
+              url: {
+                ...(capture.pattern !== undefined ? { pattern: capture.pattern } : {}),
+                ...(capture.param !== undefined ? { param: capture.param } : {}),
+              },
+            }
+          : capture.from === 'response'
+            ? {
+                response: {
+                  ...(capture.method !== undefined ? { method: capture.method } : {}),
+                  url: capture.url,
+                  field: capture.field,
+                },
+              }
+            : capture.from === 'generate'
+              ? { generate: capture.generator }
+              : { data: capture.key };
+  return {
+    as: capture.as,
+    ...source,
+    ...pattern,
+    ...(capture.transform !== undefined ? { transform: capture.transform } : {}),
+  };
+}
+
+/** Une capture en mots (rapport, fiche d'un bloc). */
+export function describeCapture(capture: FlowCapture): string {
+  const source =
+    capture.from === 'text'
+      ? `text of ${describeTarget(capture.target)}`
+      : capture.from === 'attribute'
+        ? `attribute ${capture.attribute} of ${describeTarget(capture.target)}`
+        : capture.from === 'url'
+          ? capture.param !== undefined
+            ? `URL parameter ${capture.param}`
+            : `URL /${capture.pattern ?? ''}/`
+          : capture.from === 'response'
+            ? `field ${capture.field} of the response to ${capture.method ? `${capture.method} ` : ''}${capture.url}`
+            : capture.from === 'generate'
+              ? `generated (${capture.generator})`
+              : `testData.${capture.key}`;
+  const pattern =
+    (capture.from === 'text' || capture.from === 'attribute') && capture.pattern
+      ? ` /${capture.pattern}/`
+      : '';
+  return `capture ${capture.as} ← ${source}${pattern}${capture.transform ? ` | ${capture.transform}` : ''}`;
+}
 
 /** Une zone de dépôt : sa section et/ou son libellé. */
 export interface DropZone {
@@ -808,7 +1144,46 @@ export function describeStep(step: FlowStep, maskValue = false): string {
       return `intent: ${describeIntent(step.intent)}`;
     case 'dragAndDrop':
       return `drag "${step.item}"${step.from ? ` from ${describeDropZone(step.from)}` : ''} to ${describeDropZone(step.to)}`;
+    case 'capture':
+      return describeCapture(step.capture);
+    case 'loop':
+      return describeLoop(step.loop);
   }
+}
+
+/**
+ * Une boucle sous la forme écrite dans un flow YAML : le corps est rendu par `stepYaml` (le sérialiseur
+ * de l'appelant), la condition WHILE par `expectationYaml`.
+ */
+export function loopYaml(
+  loop: FlowLoop,
+  stepYaml: (step: FlowStep) => Record<string, unknown>,
+  expectationYaml: (expectation: FlowExpectation) => Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    id: loop.id,
+    type: loop.type,
+    ...(loop.type === 'REPEAT' ? { times: loop.times } : {}),
+    ...(loop.type === 'FOR_EACH' && loop.items ? { items: loop.items } : {}),
+    ...(loop.type === 'FOR_EACH' && loop.itemsFrom !== undefined ? { itemsFrom: loop.itemsFrom } : {}),
+    ...(loop.type === 'WHILE' ? { while: expectationYaml(loop.while) } : {}),
+    ...(loop.as !== loop.id ? { as: loop.as } : {}),
+    maxIterations: loop.maxIterations,
+    timeoutMs: loop.timeoutMs,
+    onFailure: loop.onFailure,
+    steps: loop.steps.map(stepYaml),
+  };
+}
+
+/** `loop persons: FOR_EACH person in 3 items (5 steps)`. */
+export function describeLoop(loop: FlowLoop): string {
+  const head =
+    loop.type === 'REPEAT'
+      ? `REPEAT ${String(loop.times)} times`
+      : loop.type === 'WHILE'
+        ? `WHILE ${describeExpectation(loop.while)} (at most ${String(loop.maxIterations)})`
+        : `FOR_EACH ${loop.as} in ${loop.items ? `${String(loop.items.length)} items` : `\${testData:${loop.itemsFrom ?? ''}}`}`;
+  return `loop ${loop.id}: ${head} (${String(loop.steps.length)} steps)`;
 }
 
 export function describeValue(value: FlowValue): string {

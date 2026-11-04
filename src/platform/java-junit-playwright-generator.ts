@@ -1,3 +1,4 @@
+import { describeCapture, describeLoop } from '../config/flow-schema.js';
 import {
   expectStepOf,
   nativeComment,
@@ -470,6 +471,14 @@ function stepCode(
       lines.push(
         `page.getByText(${javaText(step.item)}).first().dragTo(page.getByText(${javaText(step.to.label ?? step.to.section ?? '')}).first());`,
       );
+      break;
+    case 'capture':
+      unsupported = `step ${String(index)}: value captured by QA-CRAWLER at replay: ${describeCapture(step.capture)}`;
+      lines.push(`unsupported(${javaString(unsupported)});`);
+      break;
+    case 'loop':
+      unsupported = `step ${String(index)}: loop run by QA-CRAWLER at replay: ${describeLoop(step.loop)}`;
+      lines.push(`unsupported(${javaString(unsupported)});`);
       break;
   }
   if (step.effects?.route) {

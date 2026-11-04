@@ -6,6 +6,7 @@ import type { FlowDriftReport, StepRecoveryReport } from '../workflow-healing/mo
 import type { FlowReplayReport, ReplayStepReport } from '../replay/model.js';
 import type { FlowQualityReport } from '../quality/model.js';
 import type { ActionClassification } from './discovered-action.js';
+import type { DataTraceEntry } from '../data/test-data-run-context.js';
 
 /**
  * - PASSED : fait (un `expect` a été vérifié).
@@ -18,6 +19,52 @@ import type { ActionClassification } from './discovered-action.js';
 export const FLOW_STATUSES = ['PASSED', 'FAILED', 'BLOCKED', 'SKIPPED', 'MANUAL'] as const;
 export type FlowStatus = (typeof FLOW_STATUSES)[number];
 
+/**
+ * Pourquoi une boucle s'est arrêtée :
+ * - COMPLETED : toutes les itérations prévues (REPEAT, FOR_EACH) ont été faites ;
+ * - CONDITION_FALSE : la condition WHILE est devenue fausse (arrêt normal) ;
+ * - MAX_ITERATIONS : la condition WHILE était encore vraie au plafond (protection contre la boucle infinie) ;
+ * - TIMEOUT : le délai global de la boucle est dépassé ;
+ * - FAILED : une itération a échoué et la politique est STOP ;
+ * - REFUSED : la boucle n'a pas pu commencer (collection illisible, trop d'éléments, limite de la mission).
+ */
+export const LOOP_STOPS = [
+  'COMPLETED',
+  'CONDITION_FALSE',
+  'MAX_ITERATIONS',
+  'TIMEOUT',
+  'FAILED',
+  'REFUSED',
+] as const;
+export type LoopStop = (typeof LOOP_STOPS)[number];
+
+/** Une itération exécutée d'une boucle : ses variables (sans valeur sensible) et ses étapes. */
+export interface LoopIterationReport {
+  /** 1…n. */
+  iteration: number;
+  status: FlowStatus;
+  startedAt: string;
+  durationMs: number;
+  /** Les variables de l'itération (`person.firstName` → valeur ; une clé sensible n'a pas de valeur). */
+  variables: { key: string; value?: string }[];
+  steps: FlowStepReport[];
+  reason?: string;
+}
+
+/** Le déroulé RÉEL d'une boucle : chaque itération exécutée, et la raison de l'arrêt. */
+export interface LoopRunReport {
+  id: string;
+  type: 'REPEAT' | 'FOR_EACH' | 'WHILE';
+  as: string;
+  maxIterations: number;
+  timeoutMs: number;
+  onFailure: 'STOP' | 'CONTINUE';
+  /** Le nombre d'itérations prévues (REPEAT, FOR_EACH) ; absent pour WHILE. */
+  planned?: number;
+  iterations: LoopIterationReport[];
+  stop: LoopStop;
+}
+
 /** Résultat d'une étape d'un flow imposé. */
 export interface FlowStepReport {
   /** Position dans le flow, à partir de 1. */
@@ -26,6 +73,8 @@ export interface FlowStepReport {
   description: string;
   status: FlowStatus;
   optional: boolean;
+  /** Une étape `loop` : ses itérations réellement exécutées. */
+  loop?: LoopRunReport;
   /** Raison de l'échec ou du blocage. */
   reason?: string;
   /** Les données du jeu citées par l'étape (${testData:clé}), résolues pour ce run : des clés, jamais des valeurs. */
@@ -244,6 +293,11 @@ export interface FlowRunReport {
   comparison?: FlowRunComparison;
   /** INTENT-DRIVEN REPLAY : checkpoints, dépendances, position finale, fenêtre de divergence, confiance. */
   replay?: FlowReplayReport;
+  /**
+   * TRAÇABILITÉ DES DONNÉES : chaque valeur générée, capturée ou variable d'itération, et chaque lecture,
+   * avec l'étape et l'itération (valeurs des clés sensibles jamais gardées).
+   */
+  dataTrace?: DataTraceEntry[];
 }
 
 export interface CssResolutionReport {

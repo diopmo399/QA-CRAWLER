@@ -271,6 +271,14 @@ export function rightFor(segments: readonly string[], method: string): Right {
       // enrichir la bibliothèque, déclarer un contrat, valider une version : publier des scénarios.
       if (sub === 'scenarios' && item === 'compose' && action === 'check') return 'VIEW';
       return 'PUBLISH';
+    case 'journeys':
+      // Vérifier un parcours visuel ne change rien ; l'enregistrer, le retirer, en créer des scénarios ou un bloc : publier.
+      // Un aperçu (simulation statique) ne change rien ; une exécution de simulation joue l'application.
+      return item === 'check' || item === 'preview' || item === 'traceability'
+        ? 'VIEW'
+        : item === 'simulate'
+          ? 'RUN'
+          : 'PUBLISH';
     case 'executions':
     case 'explorations':
       return 'RUN';
@@ -342,6 +350,10 @@ const KEYWORDS = new Set([
   'remove',
   'scenarios',
   'library',
+  'journeys',
+  'to-block',
+  'open',
+  'publish',
   'compose',
   'insert',
   'preview',
@@ -350,6 +362,9 @@ const KEYWORDS = new Set([
   'drift',
   'contract',
   'version',
+  'wait',
+  'outputs',
+  'fields',
   'accept',
   'executions',
   'explorations',

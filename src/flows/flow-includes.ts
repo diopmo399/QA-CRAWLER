@@ -13,6 +13,10 @@
  *         - run: creer-dossier
  *         - click: { role: button, name: Modifier }
  *
+ * `with:` (à côté de `run`) renomme les données du flow rejoué dans les étapes recopiées
+ * (`testData` et `${testData:…}`) : `- run: creer-dossier` suivi de `with: { dossier.code: dossier2.code }`
+ * rejoue le même flow avec une autre donnée, sans toucher au flow rejoué.
+ *
  * Travaille sur le YAML brut (avant zod) ; les erreurs sont des messages pour l'utilisateur.
  */
 
@@ -30,6 +34,7 @@ const STEP_KINDS = [
   'screenshot',
   'manual',
   'auto',
+  'capture',
 ];
 
 export class FlowIncludeError extends Error {}
@@ -49,26 +54,34 @@ export function resolveFlowRuns(flows: readonly unknown[]): unknown[] {
       throw new FlowIncludeError(`flows: "run" loop ${[...chain, name].map((n) => `"${n}"`).join(' → ')}`);
     const flow = byName.get(name);
     const steps = Array.isArray(flow?.steps) ? (flow.steps as unknown[]) : [];
-    const expanded = steps.flatMap((step): unknown[] => {
-      if (!isObject(step) || step.run === undefined) return [step];
-      if (typeof step.run !== 'string' || step.run.trim() === '')
-        throw new FlowIncludeError(`flow "${name}": "run" needs the name of a flow`);
-      // `allow` d'une phrase Gherkin taguée n'élargit pas le flow rejoué : ses étapes gardent leurs propres droits.
-      const extra = Object.keys(step).filter((key) => !['run', 'name', 'allow', 'optional'].includes(key));
-      if (extra.length > 0)
-        throw new FlowIncludeError(
-          `flow "${name}": a "run" step only takes a name (got ${extra.join(', ')})`,
+    const expand = (list: readonly unknown[]): RawStep[] =>
+      list.flatMap((step): unknown[] => {
+        // Une BOUCLE garde sa forme : seuls les `run:` de son corps sont dépliés (jamais aplatie).
+        if (isObject(step) && isObject(step.loop) && Array.isArray(step.loop.steps))
+          return [{ ...step, loop: { ...step.loop, steps: expand(step.loop.steps as unknown[]) } }];
+        if (!isObject(step) || step.run === undefined) return [step];
+        if (typeof step.run !== 'string' || step.run.trim() === '')
+          throw new FlowIncludeError(`flow "${name}": "run" needs the name of a flow`);
+        // `allow` d'une phrase Gherkin taguée n'élargit pas le flow rejoué : ses étapes gardent leurs propres droits.
+        const extra = Object.keys(step).filter(
+          (key) => !['run', 'name', 'allow', 'optional', 'with'].includes(key),
         );
-      const target = step.run.trim();
-      if (!byName.has(target))
-        throw new FlowIncludeError(`flow "${name}": run "${target}": no flow has this name`);
-      const outer = typeof step.name === 'string' ? step.name : `run ${target}`;
-      return stepsOf(target, [...chain, name]).map((inner) => ({
-        ...inner,
-        ...(step.optional === true ? { optional: true } : {}),
-        name: `${outer} › ${typeof inner.name === 'string' ? inner.name : labelOf(inner)}`,
-      }));
-    }) as RawStep[];
+        if (extra.length > 0)
+          throw new FlowIncludeError(
+            `flow "${name}": a "run" step only takes a name (got ${extra.join(', ')})`,
+          );
+        const target = step.run.trim();
+        if (!byName.has(target))
+          throw new FlowIncludeError(`flow "${name}": run "${target}": no flow has this name`);
+        const mapping = runMapping(name, target, step.with);
+        const outer = typeof step.name === 'string' ? step.name : `run ${target}`;
+        return stepsOf(target, [...chain, name]).map((inner) => ({
+          ...(mapping ? (renameTestData(inner, mapping) as RawStep) : inner),
+          ...(step.optional === true ? { optional: true } : {}),
+          name: `${outer} › ${typeof inner.name === 'string' ? inner.name : labelOf(inner)}`,
+        }));
+      }) as RawStep[];
+    const expanded = expand(steps);
     resolved.set(name, expanded);
     return expanded;
   };
@@ -82,8 +95,106 @@ export function resolveFlowRuns(flows: readonly unknown[]): unknown[] {
     });
 }
 
+/**
+ * Les étapes d'UN flow, ses `run:` dépliés (avec `with:`), sans rien modifier : ce que le moteur rejouera.
+ * Sert à analyser ce qu'un bloc fait de ses données quand il rejoue d'autres blocs. Undefined si un `run`
+ * ne se résout pas (flow inconnu, boucle) : l'appelant garde alors les étapes telles quelles.
+ */
+export function expandedStepsOf(flows: readonly unknown[], name: string): unknown[] | undefined {
+  try {
+    // Seul le flow demandé est déplié : un autre flow cassé ne le concerne pas.
+    const only = flows.map((flow) => (isObject(flow) ? { ...flow, reusable: flow.name !== name } : flow));
+    const flow = resolveFlowRuns(only).find((item) => isObject(item) && item.name === name);
+    return isObject(flow) && Array.isArray(flow.steps) ? (flow.steps as unknown[]) : undefined;
+  } catch (error) {
+    if (error instanceof FlowIncludeError) return undefined;
+    throw error;
+  }
+}
+
+const DATA_KEY = /^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$/;
+
+/**
+ * `with:` d'une étape `run` : la correspondance des données de CETTE instance du bloc rejoué
+ * (`{ cléDuBloc: cléDuScénario }`). Les étapes recopiées lisent alors la clé du scénario à la place de
+ * celle du bloc ; le bloc lui-même n'est pas modifié. Deux instances d'un même bloc peuvent ainsi lire
+ * des données différentes sans s'écraser.
+ */
+function runMapping(name: string, target: string, raw: unknown): Map<string, string> | undefined {
+  if (raw === undefined) return undefined;
+  if (!isObject(raw))
+    throw new FlowIncludeError(`flow "${name}": run "${target}": "with" maps data keys to data keys`);
+  const mapping = new Map<string, string>();
+  for (const [from, to] of Object.entries(raw)) {
+    if (!DATA_KEY.test(from) || typeof to !== 'string' || !DATA_KEY.test(to))
+      throw new FlowIncludeError(
+        `flow "${name}": run "${target}": "with" needs data keys (got ${from}: ${String(to)})`,
+      );
+    mapping.set(from, to);
+  }
+  return mapping.size > 0 ? mapping : undefined;
+}
+
+/** Les références `{ testData: clé }` et `${testData:clé}` d'une étape, renommées selon `with:`. */
+export function renameTestData(node: unknown, mapping: ReadonlyMap<string, string>): unknown {
+  if (typeof node === 'string')
+    return node.replace(/\$\{testData:([^}]+)\}/g, (whole, key: string) => {
+      const target = mapping.get(key.trim());
+      return target ? `\${testData:${target}}` : whole;
+    });
+  if (Array.isArray(node)) return node.map((item) => renameTestData(item, mapping));
+  if (!isObject(node)) return node;
+  if (typeof node.testData === 'string' && Object.keys(node).length === 1)
+    return { testData: mapping.get(node.testData) ?? node.testData };
+  // Une boucle FOR_EACH lit sa collection dans une donnée : renommée comme ses citations.
+  if (isObject(node.loop) && typeof node.loop.itemsFrom === 'string') {
+    const loop = node.loop;
+    const renamed = renameTestData({ ...node, loop: { ...loop, itemsFrom: undefined } }, mapping) as Record<
+      string,
+      unknown
+    >;
+    return {
+      ...renamed,
+      loop: {
+        ...(renamed.loop as Record<string, unknown>),
+        itemsFrom: mapping.get(loop.itemsFrom as string) ?? loop.itemsFrom,
+      },
+    };
+  }
+  // Une capture produit (`as`) ou recopie (`data`) une donnée : renommée comme ses citations.
+  if (isObject(node.capture)) {
+    const capture = node.capture;
+    return {
+      ...Object.fromEntries(
+        Object.entries(node)
+          .filter(([key]) => key !== 'capture')
+          .map(([key, value]) => [key, renameTestData(value, mapping)]),
+      ),
+      capture: {
+        ...(renameTestData(capture, mapping) as Record<string, unknown>),
+        ...(typeof capture.as === 'string' ? { as: mapping.get(capture.as) ?? capture.as } : {}),
+        ...(typeof capture.data === 'string' ? { data: mapping.get(capture.data) ?? capture.data } : {}),
+      },
+    };
+  }
+  return Object.fromEntries(
+    Object.entries(node).map(([key, value]) => [key, renameTestData(value, mapping)]),
+  );
+}
+
 function hasRun(flow: RawFlow): boolean {
-  return Array.isArray(flow.steps) && flow.steps.some((step) => isObject(step) && step.run !== undefined);
+  return Array.isArray(flow.steps) && stepsHaveRun(flow.steps as unknown[]);
+}
+
+function stepsHaveRun(steps: readonly unknown[]): boolean {
+  return steps.some(
+    (step) =>
+      isObject(step) &&
+      (step.run !== undefined ||
+        (isObject(step.loop) &&
+          Array.isArray(step.loop.steps) &&
+          stepsHaveRun(step.loop.steps as unknown[]))),
+  );
 }
 
 /** Libellé court d'une étape brute sans nom : `click "Enregistrer"`, `goto /x`. */

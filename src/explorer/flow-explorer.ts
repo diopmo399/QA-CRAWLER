@@ -32,6 +32,10 @@ import {
   describeExpectation,
   describeStep,
   describeTarget,
+  LOOP_LIMITS,
+  type CaptureTransform,
+  type LoopItem,
+  type FlowCapture,
   type FlowConfig,
   type FlowExpectation,
   type FlowStep,
@@ -202,6 +206,8 @@ import {
 } from '../model/verification.js';
 import type {
   FlowRunReport,
+  LoopIterationReport,
+  LoopRunReport,
   FlowTestDataEntry,
   FlowStatus,
   CssResolutionReport,
@@ -423,6 +429,14 @@ export interface ExplorationListener {
     step: { index: number; kind: string; description: string; optional: boolean; sourceLine?: number },
   ): void;
   onFlowStep?(flow: FlowConfig, step: FlowStepReport): void;
+  /**
+   * BOUCLE : une itération commence (`status` absent) ou se termine (avec son statut). `step` : la position
+   * de l'étape `loop` dans le flow. Les étapes du corps ne passent pas par onFlowStepStart/onFlowStep.
+   */
+  onLoopIteration?(
+    flow: FlowConfig,
+    event: { step: number; loop: string; iteration: number; status?: FlowStatus; reason?: string },
+  ): void;
   onFlowEnd?(report: FlowRunReport): void;
   /** Une interaction du navigateur hors du DOM a été traitée (ou refusée). */
   onInteraction?(result: BrowserInteractionResult): void;
@@ -448,7 +462,8 @@ export interface ExplorationListener {
       | 'TEST_DATA_GENERATED_FOR_RUN'
       | 'TEST_DATA_STRATEGY_CANDIDATE'
       | 'TEST_DATA_REFERENCE_RESOLVED'
-      | 'TEST_DATA_REFERENCE_UNRESOLVED';
+      | 'TEST_DATA_REFERENCE_UNRESOLVED'
+      | 'TEST_DATA_CAPTURED';
     message: string;
   }): void;
   /** VÉRIFICATION MÉTIER : assertions, cohérence des données, couverture des exigences (jamais une valeur). */
@@ -1040,6 +1055,7 @@ export class FlowExplorer {
     this.testDataRun = new TestDataRunContext({
       runId: this.runId,
       env: this.env,
+      traceValues: config.testData.traceValues,
       onGenerated: (key) => {
         this.listener.onTestData?.({
           at: new Date().toISOString(),
@@ -2589,7 +2605,8 @@ export class FlowExplorer {
         let step = intent.step;
         const correlated = 'target' in intent.step && referencedTestDataKeys(intent.step.target).length > 0;
         if (referencedTestDataKeys(step).length > 0) {
-          const cited = this.citeTestData(step, flow);
+          // Une sonde ne joue rien : ses citations ne sont pas des utilisations.
+          const cited = this.citeTestData(step, flow, false);
           if (!cited.ok) return { status: 'NOT_FOUND', reason: cited.reason, confidence: 0, final: true };
           step = cited.value;
         }
@@ -2681,6 +2698,8 @@ export class FlowExplorer {
           case 'manual':
           case 'screenshot':
           case 'dragAndDrop':
+          case 'capture':
+          case 'loop':
             return { status: 'NOT_FOUND', reason: 'interpreted only when performed', confidence: 0 };
         }
       },
@@ -2956,6 +2975,8 @@ export class FlowExplorer {
     this.pendingResolution = undefined;
     this.currentStepReplay = undefined;
     this.listener.onFlowStart?.(flow);
+    // TRAÇABILITÉ : la trace des données de CE flow commence ici.
+    const traceMark = this.testDataRun.trace().length;
     this.cognitive?.learnFlow(flow);
     this.startQuality(flow, report, () => page);
     const issuesBefore = new Set(this.collector.all().map((issue) => issue.id));
@@ -3018,6 +3039,7 @@ export class FlowExplorer {
         optional: step.optional,
         ...(step.sourceLine !== undefined ? { sourceLine: step.sourceLine } : {}),
       });
+      this.testDataRun.locate({ step: index, stepName: step.name ?? describeStep(step) });
       const outcome = await this.runFlowStep(page, browser, observers, flow, step, index, context);
       this.enrichStepReport(step, index, outcome.report, this.flowNetwork.slice(networkMark));
       if (this.replayMachine)
@@ -3152,6 +3174,8 @@ export class FlowExplorer {
     }
     // TEST DATA OF THIS RUN + PREUVE MÉTIER : d'après les étapes, leurs données et leurs requêtes.
     report.testDataReport = this.flowTestDataReport();
+    const dataTrace = this.testDataRun.trace().slice(traceMark);
+    if (dataTrace.length > 0) report.dataTrace = dataTrace;
     report.businessProof = businessProofOf(report);
     // Fin du parcours sans étape suivante : l'objectif atteint suffit pour apprendre.
     const unconfirmed = this.pendingRecovery();
@@ -3693,6 +3717,9 @@ export class FlowExplorer {
       ...(citedTestData ? { testData: citedTestData } : {}),
       ...extra,
     });
+    // BOUCLE : ses étapes citent les variables de l'itération, résolues à chaque itération (jamais ici).
+    if (step.kind === 'loop')
+      return this.runLoopStep(page, browser, observers, flow, step, index, context, done);
     // TEST DATA REFERENCES : une donnée citée par la cible, l'empreinte, un effet ou une attente (le
     // résultat créé plus haut, à ouvrir) — résolue ICI, une fois par étape, par le contexte du run.
     const original = step;
@@ -3744,6 +3771,20 @@ export class FlowExplorer {
                 url: context.url,
               })
             : done('PASSED', { stateId: context.stateId, url: redactUrl(page.url()) }),
+        };
+      }
+      case 'capture': {
+        const result = await this.captureStep(page, flow, step.capture, timeout);
+        return {
+          page,
+          report:
+            'error' in result
+              ? done('FAILED', {
+                  reason: `capture ${step.capture.as} failed: ${result.error}`,
+                  stateId: context.stateId,
+                  url: context.url,
+                })
+              : done('PASSED', { stateId: context.stateId, url: redactUrl(page.url()) }),
         };
       }
       case 'auto':
@@ -3852,7 +3893,217 @@ export class FlowExplorer {
         return this.runFlowElementStep(page, browser, observers, flow, step, context, timeout, done);
       case 'dragAndDrop':
         return this.runDragStep(page, flow, step, context, timeout, done);
+      case 'loop':
+        return this.runLoopStep(page, browser, observers, flow, step, index, context, done);
     }
+  }
+
+  /**
+   * BOUCLE (REPEAT / FOR_EACH / WHILE) : le corps est exécuté par runFlowStep, itération par itération,
+   * dans une portée de données propre (variables d'itération, valeurs générées ou capturées pendant
+   * l'itération). Bornée par maxIterations et timeoutMs : une condition WHILE encore vraie au plafond est
+   * un échec (jamais une boucle sans fin). Jamais aplatie : chaque itération est rapportée.
+   */
+  private async runLoopStep(
+    page: Page,
+    browser: BrowserManager,
+    observers: { all: PageObserver[]; pageErrors: PageErrorObserver },
+    flow: FlowConfig,
+    step: Extract<FlowStep, { kind: 'loop' }>,
+    index: number,
+    context: PageContext,
+    done: (status: FlowStatus, extra?: Partial<FlowStepReport>) => FlowStepReport,
+  ): Promise<{ page: Page; context?: PageContext; report: FlowStepReport }> {
+    const loop = step.loop;
+    const started = Date.now();
+    const deadline = started + loop.timeoutMs;
+    const run: LoopRunReport = {
+      id: loop.id,
+      type: loop.type,
+      as: loop.as,
+      maxIterations: loop.maxIterations,
+      timeoutMs: loop.timeoutMs,
+      onFailure: loop.onFailure,
+      iterations: [],
+      stop: 'COMPLETED',
+    };
+    const finish = (
+      status: FlowStatus,
+      reason?: string,
+    ): { page: Page; context?: PageContext; report: FlowStepReport } => ({
+      page,
+      context,
+      report: done(status, {
+        loop: run,
+        ...(reason !== undefined ? { reason } : {}),
+        stateId: context.stateId,
+        url: redactUrl(page.url()),
+      }),
+    });
+    let items: LoopItem[] | undefined;
+    if (loop.type === 'FOR_EACH') {
+      const collection = loop.items ? { items: loop.items } : this.loopItems(loop.itemsFrom ?? '', flow);
+      if ('error' in collection) {
+        run.stop = 'REFUSED';
+        return finish('FAILED', `loop ${loop.id}: ${collection.error}`);
+      }
+      if (collection.items.length > loop.maxIterations) {
+        // Jamais tronquée en silence : trop d'éléments est un refus explicite.
+        run.stop = 'REFUSED';
+        return finish(
+          'FAILED',
+          `loop ${loop.id}: ${String(collection.items.length)} items is above maxIterations (${String(loop.maxIterations)})`,
+        );
+      }
+      items = collection.items;
+    }
+    const planned = loop.type === 'REPEAT' ? loop.times : items?.length;
+    if (planned !== undefined) run.planned = planned;
+    const failures: string[] = [];
+    let stopReason: string | undefined;
+    for (let iteration = 1; ; iteration += 1) {
+      if (planned !== undefined && iteration > planned) break;
+      if (Date.now() >= deadline) {
+        run.stop = 'TIMEOUT';
+        stopReason = `loop ${loop.id} exceeded its ${String(loop.timeoutMs)} ms timeout after ${String(iteration - 1)} iteration(s)`;
+        break;
+      }
+      const limit = this.limitReached();
+      if (limit) {
+        run.stop = 'REFUSED';
+        stopReason = `loop ${loop.id}: mission limit reached (${limit})`;
+        break;
+      }
+      if (loop.type === 'WHILE') {
+        const unmet = await this.flowSteps.expect(
+          page,
+          loop.while,
+          Math.max(1, Math.min(LOOP_LIMITS.conditionTimeoutMs, deadline - Date.now())),
+          this.flowNetwork,
+        );
+        if (unmet) {
+          run.stop = 'CONDITION_FALSE';
+          break;
+        }
+        if (iteration > loop.maxIterations) {
+          run.stop = 'MAX_ITERATIONS';
+          stopReason = `loop ${loop.id}: the WHILE condition is still true after ${String(loop.maxIterations)} iterations (stopped: infinite loop protection)`;
+          break;
+        }
+      }
+      const variables = loopVariables(loop.as, iteration, items?.[iteration - 1]);
+      const iterationStarted = Date.now();
+      const record: LoopIterationReport = {
+        iteration,
+        status: 'PASSED',
+        startedAt: new Date(iterationStarted).toISOString(),
+        durationMs: 0,
+        // Sans `testData.traceValues`, seul le numéro d'itération garde sa valeur (pas une donnée du run).
+        variables: Object.entries(variables).map(([key, value]) =>
+          LOOP_SENSITIVE.test(key) || (!this.config.testData.traceValues && key !== `${loop.as}.index`)
+            ? { key }
+            : { key, value },
+        ),
+        steps: [],
+      };
+      this.listener.onLoopIteration?.(flow, { step: index, loop: loop.id, iteration });
+      this.testDataRun.enterIteration(loop.id, iteration, variables);
+      try {
+        for (const [position, inner] of loop.steps.entries()) {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) {
+            record.status = 'FAILED';
+            record.reason = `loop ${loop.id} exceeded its ${String(loop.timeoutMs)} ms timeout`;
+            run.stop = 'TIMEOUT';
+            break;
+          }
+          const where = this.testDataRun.loops();
+          this.testDataRun.locate({
+            step: position + 1,
+            stepName: inner.name ?? describeStep(inner),
+            ...(where.length > 0 ? { loops: where } : {}),
+          });
+          // Le délai d'une étape ne dépasse jamais le délai restant de la boucle.
+          const bounded: FlowStep = {
+            ...inner,
+            timeoutMs: Math.max(
+              1,
+              Math.min(inner.timeoutMs ?? this.config.exploration.actionTimeoutMs, remaining),
+            ),
+          };
+          const outcome = await this.runFlowStep(
+            page,
+            browser,
+            observers,
+            flow,
+            bounded,
+            position + 1,
+            context,
+          );
+          page = outcome.page;
+          context = outcome.context ?? context;
+          record.steps.push(outcome.report);
+          if (outcome.report.stateId && !this.currentFlowReport?.states.includes(outcome.report.stateId))
+            this.currentFlowReport?.states.push(outcome.report.stateId);
+          if (
+            (outcome.report.status === 'FAILED' || outcome.report.status === 'BLOCKED') &&
+            !inner.optional
+          ) {
+            record.status = outcome.report.status;
+            record.reason = `step ${String(position + 1)} "${outcome.report.description}": ${outcome.report.reason ?? outcome.report.status.toLowerCase()}`;
+            if (Date.now() >= deadline) run.stop = 'TIMEOUT';
+            break;
+          }
+        }
+      } finally {
+        this.testDataRun.leaveIteration();
+        this.testDataRun.locate({ step: index, stepName: step.name ?? describeStep(step) });
+      }
+      record.durationMs = Date.now() - iterationStarted;
+      run.iterations.push(record);
+      this.listener.onLoopIteration?.(flow, {
+        step: index,
+        loop: loop.id,
+        iteration,
+        status: record.status,
+        ...(record.reason ? { reason: record.reason } : {}),
+      });
+      if (record.status !== 'PASSED') {
+        failures.push(`iteration ${String(iteration)}: ${record.reason ?? record.status}`);
+        if (run.stop === 'TIMEOUT') {
+          stopReason = `loop ${loop.id} exceeded its ${String(loop.timeoutMs)} ms timeout during iteration ${String(iteration)}`;
+          break;
+        }
+        if (loop.onFailure === 'STOP') {
+          run.stop = 'FAILED';
+          break;
+        }
+      }
+    }
+    if (stopReason !== undefined) return finish('FAILED', stopReason);
+    if (failures.length > 0)
+      return finish(
+        'FAILED',
+        `loop ${loop.id}: ${String(failures.length)} of ${String(run.iterations.length)} iteration(s) failed — ${failures.join('; ')}`,
+      );
+    return finish('PASSED');
+  }
+
+  /** La collection d'une boucle FOR_EACH lue dans une donnée du run : un tableau JSON de valeurs ou d'objets. */
+  private loopItems(key: string, flow: FlowConfig): { items: LoopItem[] } | { error: string } {
+    const known = this.testDataRun.values().find((entry) => entry.key === key)?.value;
+    const defined =
+      known !== undefined ||
+      [flow.testData, this.config.testData.set].some((set) => set?.values[key] !== undefined);
+    if (!defined)
+      return { error: `testData.${key} is unknown (not in the data set, not produced in this run)` };
+    const data =
+      known !== undefined
+        ? { kind: 'value' as const, value: known }
+        : this.testDataValue(undefined, key, flow);
+    if (data.kind !== 'value') return { error: `testData.${key} has no value` };
+    this.testDataRun.used(key, 'READ', data.value);
+    return parseLoopItems(data.value, key);
   }
 
   /**
@@ -5413,6 +5664,8 @@ export class FlowExplorer {
         typeof step.value !== 'string' && 'testData' in step.value
           ? this.testDataValue(action, step.value.testData, flow)
           : undefined;
+      if (data?.kind === 'value' && typeof step.value !== 'string' && 'testData' in step.value)
+        this.testDataRun.used(step.value.testData, 'ASSIGN', data.value);
       if (data?.kind === 'preserve')
         return {
           page,
@@ -8676,8 +8929,68 @@ export class FlowExplorer {
     return `AMBIGUOUS_CORRELATION: ${String(count)} elements carry ${keys.map((key) => `testData.${key}`).join(', ')} — the correlated result is never picked arbitrarily (nothing executed)`;
   }
 
+  /**
+   * CAPTURE : la valeur lue (écran, adresse, réponse observée, donnée du run) devient la donnée `as` du run,
+   * citée ensuite avec la même valeur. Une donnée définie par un jeu n'est jamais remplacée ; une donnée qui
+   * a déjà une AUTRE valeur dans le run n'est jamais écrasée (conflit dit) ; la valeur n'est jamais journalisée.
+   */
+  private async captureStep(
+    page: Page,
+    flow: FlowConfig,
+    capture: FlowCapture,
+    timeoutMs: number,
+  ): Promise<{ value: string } | { error: string }> {
+    if ([flow.testData, this.config.testData.set].some((set) => set?.values[capture.as] !== undefined))
+      return { error: `testData.${capture.as} is defined by a data set: a capture never replaces it` };
+    let result: { value: string } | { error: string };
+    if (capture.from === 'data') {
+      const value = this.testDataRun.values().find((entry) => entry.key === capture.key)?.value;
+      result =
+        value === undefined ? { error: `testData.${capture.key} has no value yet in this run` } : { value };
+    } else if (capture.from === 'generate') {
+      // Une valeur GÉNÉRÉE par le fournisseur du run, une fois par run (ou par itération dans une boucle).
+      const generated = this.testDataValue(undefined, capture.as, {
+        ...flow,
+        testData: {
+          id: 'capture',
+          name: 'capture',
+          source: 'MANUAL',
+          values: {
+            [capture.as]: {
+              key: capture.as,
+              strategy: 'GENERATE_AT_REPLAY',
+              generator: capture.generator,
+              sensitive: false,
+            },
+          },
+        },
+      });
+      result =
+        generated.kind === 'value'
+          ? { value: generated.value }
+          : { error: generated.kind === 'missing' ? generated.reason : `no generator ${capture.generator}` };
+    } else result = await this.flowSteps.capture(page, capture, timeoutMs, this.flowNetwork);
+    if ('error' in result) return result;
+    if (capture.transform) {
+      const value = transformValue(result.value, capture.transform);
+      if (value === '') return { error: `the value is empty after ${capture.transform}` };
+      result = { value };
+    }
+    const refused = this.testDataRun.capture(capture.as, result.value);
+    if (refused !== undefined) return { error: refused };
+    if (capture.transform) this.testDataRun.transformed(capture.as, capture.transform);
+    this.listener.onTestData?.({
+      at: new Date().toISOString(),
+      event: 'TEST_DATA_CAPTURED',
+      message: `testData.${capture.as} captured (${capture.from}) for this run`,
+    });
+    return result;
+  }
+
   /** Les références ${testData:clé} d'une étape, résolues par le contexte du run (même valeur pour tout le run). */
-  private citeTestData(step: FlowStep, flow: FlowConfig): ResolvedReferences<FlowStep> {
+  private citeTestData(step: FlowStep, flow: FlowConfig, trace = true): ResolvedReferences<FlowStep> {
+    // Comment l'étape utilise la donnée : saisie, vérification, ou citation dans une action.
+    const use = step.kind === 'fill' ? 'ASSIGN' : step.kind === 'expect' ? 'VALIDATE' : 'READ';
     return resolveTestDataReferences(step, (key) => {
       // Une CITATION vise une donnée connue : jamais une valeur inventée pour une clé que rien ne définit.
       const defined =
@@ -8687,6 +9000,7 @@ export class FlowExplorer {
       if (!defined)
         return { error: `unknown test data key "${key}" (not in the data set, never entered in this run)` };
       const data = this.testDataValue(undefined, key, flow);
+      if (data.kind === 'value' && trace) this.testDataRun.used(key, use, data.value);
       return data.kind === 'value'
         ? { value: data.value }
         : { error: data.kind === 'missing' ? data.reason : 'PRESERVE_EXISTING: no value to cite' };
@@ -9967,4 +10281,68 @@ function qualityDeclared(config: ScenarioConfig): boolean {
 async function screenText(page: Page): Promise<string | undefined> {
   if (page.isClosed()) return undefined;
   return page.evaluate(() => document.body.innerText.slice(0, 200_000)).catch(() => undefined);
+}
+
+/** Une transformation prise en charge d'une valeur capturée (rien d'autre n'est exécuté). */
+function transformValue(value: string, transform: CaptureTransform): string {
+  switch (transform) {
+    case 'uppercase':
+      return value.toUpperCase();
+    case 'lowercase':
+      return value.toLowerCase();
+    case 'trim':
+      return value.replace(/\s+/g, ' ').trim();
+    case 'digits':
+      return value.replace(/\D+/g, '');
+  }
+}
+
+const LOOP_SENSITIVE = /(password|passwd|secret|token|apikey|api-key|credential)/i;
+
+/**
+ * Les variables d'une itération : `<as>.index` (1…n) ; un élément texte devient `<as>`, un objet
+ * `<as>.<champ>` pour chacun de ses champs.
+ */
+export function loopVariables(
+  as: string,
+  iteration: number,
+  item: LoopItem | undefined,
+): Record<string, string> {
+  const variables: Record<string, string> = { [`${as}.index`]: String(iteration) };
+  if (typeof item === 'string') variables[as] = item;
+  else if (item) for (const [field, value] of Object.entries(item)) variables[`${as}.${field}`] = value;
+  return variables;
+}
+
+/** Une collection FOR_EACH lue dans une donnée : un tableau JSON de textes, ou d'objets à champs texte. */
+export function parseLoopItems(text: string, key: string): { items: LoopItem[] } | { error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { error: `testData.${key} is not a JSON array` };
+  }
+  if (!Array.isArray(parsed)) return { error: `testData.${key} is not a JSON array` };
+  const items: LoopItem[] = [];
+  for (const [position, item] of parsed.entries()) {
+    if (typeof item === 'string' || typeof item === 'number') {
+      items.push(String(item));
+      continue;
+    }
+    if (item === null || typeof item !== 'object' || Array.isArray(item))
+      return { error: `testData.${key}[${String(position)}] is neither a value nor an object` };
+    const fields: Record<string, string> = {};
+    for (const [field, value] of Object.entries(item as Record<string, unknown>)) {
+      if (
+        !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(field) ||
+        (typeof value !== 'string' && typeof value !== 'number')
+      )
+        return {
+          error: `testData.${key}[${String(position)}].${field}: fields are simple names with text values`,
+        };
+      fields[field] = String(value);
+    }
+    items.push(fields);
+  }
+  return { items };
 }

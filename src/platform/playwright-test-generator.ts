@@ -1,3 +1,4 @@
+import { describeCapture, describeLoop } from '../config/flow-schema.js';
 import {
   expectStepOf,
   nativeComment,
@@ -153,6 +154,16 @@ function stepLines(
       lines.push(
         `await page.getByText(${quote(step.item)}).first().dragTo(page.getByText(${quote(step.to.label ?? step.to.section ?? '')}).first());`,
       );
+      break;
+    case 'capture':
+      // Une capture remplit le contexte de données du run QA-CRAWLER : le test généré ne la reproduit pas.
+      lines.push(
+        `// TODO (captured by QA-CRAWLER at replay, not generated): ${describeCapture(step.capture)}`,
+      );
+      break;
+    case 'loop':
+      // Une boucle (itérations, variables, limites) est interprétée par le moteur : jamais aplatie ici.
+      lines.push(`// TODO (loop run by QA-CRAWLER at replay, not generated): ${describeLoop(step.loop)}`);
       break;
   }
   // Les effets attendus appris à l'enregistrement deviennent des assertions.

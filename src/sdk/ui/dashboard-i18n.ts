@@ -1167,6 +1167,7 @@ const fr = {
     version: (version: number) => `v${String(version)}`,
     versionLabel: 'Version',
     fromScenario: (name: string) => `Scénario « ${name} »`,
+    fromJourney: (name: string) => `Parcours visuel « ${name} »`,
     fromRecording: (name: string, group: string) => `Groupe « ${group} » de l’enregistrement ${name}`,
     fromRecordingGroups: (name: string, groups: string[]) =>
       `Groupes ${groups.map((group) => `« ${group} »`).join(', ')} de l’enregistrement ${name}`,
@@ -1217,6 +1218,7 @@ const fr = {
       })[text] ??
       text
         .replace(/^created from the scenario "(.+)"$/, 'créé à partir du scénario « $1 »')
+        .replace(/^duplicated from the block "(.+)" \(v(\d+)\)$/, 'copie du bloc « $1 » (v$2)')
         .replace(
           /^created from the group "(.*)" of the recording (.+)$/,
           'créé à partir du groupe « $1 » de l’enregistrement $2',
@@ -1332,6 +1334,7 @@ const fr = {
     layoutGrid: 'Grille',
     layoutList: 'Liste',
     recentTitle: 'Récemment ouverts',
+    recentEmpty: 'Les blocs dont vous ouvrez la fiche se retrouvent ici.',
     updatedOn: (date: string) => `modifié le ${date}`,
     originRecording: (name: string) => `Enregistrement ${name}`,
     originScenario: (name: string) => `Scénario ${name}`,
@@ -1346,13 +1349,23 @@ const fr = {
     tabs: {
       overview: 'Vue d’ensemble',
       steps: 'Étapes',
+      inputs: 'Entrées',
+      outputs: 'Sorties',
       contract: 'Contrat',
-      data: 'Données',
+      data: 'Paramètres',
       dependencies: 'Dépendances',
       versions: 'Versions',
       provenance: 'Provenance',
     } as Record<
-      'overview' | 'steps' | 'contract' | 'data' | 'dependencies' | 'versions' | 'provenance',
+      | 'overview'
+      | 'steps'
+      | 'inputs'
+      | 'outputs'
+      | 'contract'
+      | 'data'
+      | 'dependencies'
+      | 'versions'
+      | 'provenance',
       string
     >,
     contractDerivedNote:
@@ -3332,6 +3345,7 @@ const en: DashboardStrings = {
     version: (version) => `v${String(version)}`,
     versionLabel: 'Version',
     fromScenario: (name) => `Scenario “${name}”`,
+    fromJourney: (name) => `Visual journey “${name}”`,
     fromRecording: (name, group) => `Group “${group}” of recording ${name}`,
     fromRecordingGroups: (name, groups) =>
       `Groups ${groups.map((group) => `“${group}”`).join(', ')} of the recording ${name}`,
@@ -3469,6 +3483,7 @@ const en: DashboardStrings = {
     layoutGrid: 'Grid',
     layoutList: 'List',
     recentTitle: 'Recently opened',
+    recentEmpty: 'Blocks whose sheet you open appear here.',
     updatedOn: (date) => `changed on ${date}`,
     originRecording: (name) => `Recording ${name}`,
     originScenario: (name) => `Scenario ${name}`,
@@ -3483,8 +3498,10 @@ const en: DashboardStrings = {
     tabs: {
       overview: 'Overview',
       steps: 'Steps',
+      inputs: 'Inputs',
+      outputs: 'Outputs',
       contract: 'Contract',
-      data: 'Data',
+      data: 'Parameters',
       dependencies: 'Dependencies',
       versions: 'Versions',
       provenance: 'Provenance',

@@ -358,24 +358,26 @@ describe('Dashboard — recordings, in Chromium', () => {
     // La bibliothèque : composer un parcours qui rejoue le bloc deux fois.
     await dashboard().locator('.drawer [data-action="nav"][data-view="library"]').click();
     await dashboard().locator('h1', { hasText: 'Bibliothèque' }).waitFor({ timeout: 15_000 });
-    await dashboard().locator('input[data-lib="compose.name"]').fill('Consulter deux fois');
-    const add = dashboard().locator('[data-action="lib-part-add"][data-block="Bloc consultation"]');
+    const composer = dashboard().locator('#lib-composer');
+    await composer.locator('input[data-jn="name"]').fill('Consulter deux fois');
+    const add = dashboard().locator('#lib-composer [data-action="jn-add"][data-block="Bloc consultation"]');
     await add.click();
     await add.click();
-    expect(await dashboard().locator('.lib-steps > li').count()).toBe(2);
-    // Vérifié par le serveur avant la création (dry run de composition, rien n'est exécuté).
-    await dashboard().locator('.lib-check.ok', { hasText: 'Parcours vérifié' }).waitFor({ timeout: 15_000 });
-    await dashboard().locator('form[data-action="lib-compose"] button[type="submit"]').click();
-    await dashboard()
-      .locator('.notice', { hasText: 'Le parcours « Consulter deux fois » est créé' })
-      .waitFor({
-        timeout: 15_000,
-      });
+    await expect.poll(() => composer.locator('.jn-card').count()).toBe(2);
+    // Vérifié par le serveur (dry run de composition, rien n'est exécuté), enregistré, puis créé.
+    await composer.locator('.jn-chip.ok', { hasText: 'Parcours valide' }).waitFor({ timeout: 15_000 });
+    await composer.locator('[data-action="jn-save"]').click();
+    await composer.locator('.jn-chip.ok', { hasText: 'Enregistré' }).waitFor({ timeout: 15_000 });
+    await composer.locator('[data-action="jn-publish"]').click();
+    await composer
+      .locator('.notice', { hasText: 'Créé : Consulter deux fois.' })
+      .waitFor({ timeout: 15_000 });
     const composed = (await client.scenarios.list(project.id)).find(
       (entry) => entry.name === 'Consulter deux fois',
     );
     expect(composed?.uses).toEqual(['Bloc consultation', 'Bloc consultation']);
-    await dashboard().locator('.lib-card', { hasText: 'Utilisé dans 1 scénario(s)' }).waitFor();
+    await dashboard().locator('[data-action="jn-tab"][data-tab="catalog"]').click();
+    await dashboard().locator('.lib-tabpanel .lib-card', { hasText: 'Utilisé dans 1 scénario(s)' }).waitFor();
 
     // Le moteur rejoue le parcours composé : les étapes du bloc à la place de chaque `run:`.
     const started = await client.executions.start(project.id, { scenarios: ['Consulter deux fois'] });

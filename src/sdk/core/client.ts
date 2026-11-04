@@ -31,6 +31,10 @@ import type {
   CompositionDrift,
   DeclaredContract,
   LibraryAddInput,
+  LibraryBlockCheck,
+  BlockOutputInput,
+  FieldDeclaration,
+  FieldDeclarationResult,
   LibraryBlockView,
   LibrarySourcePreview,
   GroupCheckView,
@@ -65,7 +69,9 @@ import type {
   BlockSourceComparison,
   ExtractionInput,
   ExtractionPlan,
+  LibraryBlockActivity,
   LibraryBlockDetails,
+  LibraryDuplicateInput,
   OverviewView,
   ProjectDetail,
   ProjectSummary,
@@ -92,6 +98,10 @@ import type {
   RequirementsView,
   TrendsView,
 } from './contracts.js';
+import type { Journey, JourneyCheck, JourneySummary } from './journey.js';
+import type { JourneyPreview } from './journey-loop.js';
+import type { JourneyTraceability } from './journey-trace.js';
+import type { WaitSpec } from './wait.js';
 import { SDK_API_VERSION } from './contracts.js';
 import type {
   EnvironmentCapabilities,
@@ -313,6 +323,14 @@ export interface QaCrawlerClient {
     remove(projectId: string, name: string): Promise<{ removed: string }>;
     /** Ce qu'un scénario deviendrait en bloc (étapes, données sans valeur, contrat dérivé). */
     preview(projectId: string, scenario: string): Promise<LibrarySourcePreview>;
+    /**
+     * Vérifie, sans rien écrire, un scénario qui deviendrait un bloc : source, étapes, blocs rejoués, nom
+     * libre, contrat (déduit ou déclaré). La création refait les mêmes vérifications.
+     */
+    check(
+      projectId: string,
+      input: { scenario: string; name: string; contract?: DeclaredContract },
+    ): Promise<LibraryBlockCheck>;
     /** Déclare le contrat d'un bloc (null : de nouveau dérivé de son contenu). */
     declareContract(
       projectId: string,
@@ -321,10 +339,38 @@ export interface QaCrawlerClient {
     ): Promise<LibraryBlockView>;
     /** Valide le contenu modifié d'un bloc : il devient sa version suivante. */
     validateVersion(projectId: string, name: string): Promise<LibraryBlockView>;
+    /**
+     * Insère une attente dans un bloc, après l'étape `after` (0 : avant la première). Le bloc devient CHANGED :
+     * sa version suivante est à valider explicitement (`validateVersion`).
+     */
+    insertWait(
+      projectId: string,
+      name: string,
+      input: { after: number; wait: WaitSpec; name?: string },
+    ): Promise<LibraryBlockView>;
+    /**
+     * AJOUTE UNE SORTIE à un bloc : une étape exécutable (génération, capture d'écran, d'adresse, de réponse,
+     * transmission d'une entrée) est insérée ; le bloc passe à CHANGED (nouvelle version à valider).
+     */
+    addOutput(projectId: string, name: string, input: BlockOutputInput): Promise<LibraryBlockView>;
+    /**
+     * Déclare des données d'un bloc (libellé, sens, type, défaut, confirmation). Un changement incompatible
+     * sur un bloc utilisé est refusé (409) sans `acceptIncompatible: true`.
+     */
+    declareFields(
+      projectId: string,
+      name: string,
+      fields: FieldDeclaration[],
+      options?: { acceptIncompatible?: boolean },
+    ): Promise<FieldDeclarationResult>;
     /** Les parcours suivis dont un bloc a changé depuis leur composition. */
     drift(projectId: string): Promise<CompositionDrift[]>;
     /** Le détail d'un bloc : ses étapes en mots, ses groupes internes, ses données (sans valeur). */
     details(projectId: string, name: string): Promise<LibraryBlockDetails>;
+    /** La dernière exécution réelle qui a rejoué le bloc, et ce que sa trace a observé pour lui. */
+    activity(projectId: string, name: string): Promise<LibraryBlockActivity>;
+    /** Un nouveau bloc copié de celui-ci (étapes, données, contrat, déclarations), version 1. */
+    duplicate(projectId: string, name: string, input: LibraryDuplicateInput): Promise<LibraryBlockView>;
     /**
      * LE PLAN d'une publication de groupes métier d'un enregistrement (un bloc par groupe, ou un bloc
      * composé) : étapes, données, dépendances, contrat, validation. Rien n'est écrit.
@@ -340,6 +386,57 @@ export interface QaCrawlerClient {
     compareSource(projectId: string, name: string): Promise<BlockSourceComparison>;
     /** Reprend le contenu de la source : le bloc devient CHANGED (une nouvelle version à valider). */
     updateFromSource(projectId: string, name: string): Promise<LibraryBlockView>;
+  };
+  /**
+   * Les parcours visuels de la bibliothèque (mode linéaire ou diagramme) : enregistrés comme brouillons,
+   * vérifiés chemin par chemin, puis transformés en scénarios ordinaires (`run:` + `with:`).
+   */
+  journeys: {
+    list(projectId: string): Promise<JourneySummary[]>;
+    open(projectId: string, name: string): Promise<Journey>;
+    /** Enregistre (sans rien produire d'exécutable) ; 409 sur une révision périmée ou un nom pris. */
+    save(
+      projectId: string,
+      journey: Journey,
+      options?: { revision?: string; previous?: string },
+    ): Promise<Journey>;
+    check(projectId: string, journey: Journey): Promise<JourneyCheck>;
+    /** SIMULATION STATIQUE : l'aperçu du parcours (provenance des entrées, portée des sorties) ; rien n'est exécuté. */
+    preview(projectId: string, journey: Journey): Promise<JourneyPreview>;
+    /**
+     * TRAÇABILITÉ DES DONNÉES : définitions (contrats), correspondances (configurées, suggérées, manquantes) et
+     * traces observées d'une exécution réelle du parcours (la plus récente, ou `run`). Rien n'est exécuté.
+     */
+    traceability(
+      projectId: string,
+      journey: Journey,
+      options?: { run?: string },
+    ): Promise<JourneyTraceability>;
+    /**
+     * EXÉCUTION DE SIMULATION : un vrai rejeu du chemin choisi par le moteur, dans un environnement de
+     * développement ou de test choisi explicitement (refus 422 sinon) ; le parcours n'est pas enregistré.
+     */
+    simulate(
+      projectId: string,
+      journey: Journey,
+      options: { environmentId: string; path?: number; headed?: boolean; slowMoMs?: number },
+    ): Promise<ExplorationSnapshot & { run: string; simulation: { journey: string; path: number } }>;
+    /** Crée le(s) scénario(s) d'un parcours enregistré ; `perPath` : un par chemin (parcours avec conditions). */
+    publish(
+      projectId: string,
+      name: string,
+      options?: { perPath?: boolean },
+    ): Promise<{ scenarios: string[] }>;
+    /**
+     * Transforme un parcours enregistré, valide et sans condition, en bloc de la bibliothèque ; son contrat
+     * déclare les sorties produites par le parcours. 409 sur un nom pris, 422 si le parcours ne tient pas.
+     */
+    toBlock(
+      projectId: string,
+      name: string,
+      input: { block: string; description?: string },
+    ): Promise<{ block: LibraryBlockView; outputs: string[] }>;
+    remove(projectId: string, name: string): Promise<{ removed: string }>;
   };
   /** Les exécutions : le rejeu des scénarios par le moteur, suivi comme une exploration. */
   executions: {
@@ -1002,20 +1099,52 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       acceptBlocks: (projectId, scenario) =>
         request('POST', `${project(projectId)}/scenarios/${encodeURIComponent(scenario)}/accept`, {}),
     },
+    journeys: {
+      list: (projectId) => request('GET', `${project(projectId)}/journeys`),
+      open: (projectId, name) =>
+        request('GET', `${project(projectId)}/journeys/open?name=${encodeURIComponent(name)}`),
+      save: (projectId, journey, options = {}) =>
+        request('POST', `${project(projectId)}/journeys`, { journey, ...options }),
+      check: (projectId, journey) => request('POST', `${project(projectId)}/journeys/check`, { journey }),
+      preview: (projectId, journey) => request('POST', `${project(projectId)}/journeys/preview`, { journey }),
+      traceability: (projectId, journey, options = {}) =>
+        request('POST', `${project(projectId)}/journeys/traceability`, { journey, ...options }),
+      simulate: (projectId, journey, options) =>
+        request('POST', `${project(projectId)}/journeys/simulate`, { journey, ...options }),
+      publish: (projectId, name, options = {}) =>
+        request('POST', `${project(projectId)}/journeys/publish`, { name, ...options }),
+      toBlock: (projectId, name, input) =>
+        request('POST', `${project(projectId)}/journeys/to-block`, { name, ...input }),
+      remove: (projectId, name) => request('POST', `${project(projectId)}/journeys/remove`, { name }),
+    },
     library: {
       list: (projectId) => request('GET', `${project(projectId)}/library`),
       add: (projectId, input) => request('POST', `${project(projectId)}/library`, input),
       remove: (projectId, name) =>
         request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/remove`, {}),
+      check: (projectId, input) => request('POST', `${project(projectId)}/library/check`, input),
       preview: (projectId, scenario) =>
         request('GET', `${project(projectId)}/library/preview?scenario=${encodeURIComponent(scenario)}`),
       declareContract: (projectId, name, contract) =>
         request('PUT', `${project(projectId)}/library/${encodeURIComponent(name)}/contract`, { contract }),
       validateVersion: (projectId, name) =>
         request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/version`, {}),
+      insertWait: (projectId, name, input) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/wait`, input),
+      addOutput: (projectId, name, input) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/outputs`, input),
+      declareFields: (projectId, name, fields, options = {}) =>
+        request('PUT', `${project(projectId)}/library/${encodeURIComponent(name)}/fields`, {
+          fields,
+          ...(options.acceptIncompatible ? { acceptIncompatible: true } : {}),
+        }),
       drift: (projectId) => request('GET', `${project(projectId)}/library/drift`),
       details: (projectId, name) =>
         request('GET', `${project(projectId)}/library/${encodeURIComponent(name)}`),
+      activity: (projectId, name) =>
+        request('GET', `${project(projectId)}/library/${encodeURIComponent(name)}/activity`),
+      duplicate: (projectId, name, input) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/duplicate`, input),
       planExtraction: (projectId, name, input) =>
         request('POST', `${recording(projectId, name)}/library/plan`, input),
       publishExtraction: (projectId, name, input) =>

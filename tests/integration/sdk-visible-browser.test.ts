@@ -299,11 +299,13 @@ describe('a visible browser for the runs started from the Dashboard', () => {
         await dash.locator('select[data-action="project-context"]').selectOption(project.id);
         await dash.locator('.drawer [data-action="nav"][data-view="library"]').click();
         // Composer le parcours dans la bibliothèque, puis le rejouer d'ici, navigateur visible et ralenti.
-        await dash.locator('[data-action="lib-part-add"][data-block="Ouvrir la fiche"]').first().click();
-        await dash.locator('input[data-lib="compose.name"]').fill('Fiche visible');
-        await dash.locator('[data-action="lib-check"]').click();
-        await dash.locator('.lib-check.ok').waitFor({ timeout: 30_000 });
-        await dash.locator('form[data-action="lib-compose"] button[type="submit"]').click();
+        await dash.locator('#lib-composer [data-action="jn-add"][data-block="Ouvrir la fiche"]').click();
+        const composer = dash.locator('#lib-composer');
+        await composer.locator('input[data-jn="name"]').fill('Fiche visible');
+        await composer.locator('.jn-chip.ok', { hasText: 'Parcours valide' }).waitFor({ timeout: 30_000 });
+        await composer.locator('[data-action="jn-save"]').click();
+        await composer.locator('.jn-chip.ok', { hasText: 'Enregistré' }).waitFor({ timeout: 30_000 });
+        await composer.locator('[data-action="jn-publish"]').click();
         const replay = dash.locator('.lib-replay');
         await replay.waitFor({ timeout: 30_000 });
         await replay.locator('[data-bind="headed"]').check();

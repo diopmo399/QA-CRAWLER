@@ -1,0 +1,1502 @@
+import { QaCrawlerError, type QaCrawlerClient } from '../core/client.js';
+import {
+  distanceToPoints,
+  edgePath,
+  edgePoints,
+  NODE_SIZE,
+  portOf,
+  type Journey,
+  type JourneyBranch,
+  type JourneyNode,
+} from '../core/journey.js';
+import { defaultWait, sanitizeWait } from '../core/wait.js';
+import {
+  acceptVersion,
+  addBlock,
+  addLoop,
+  addShape,
+  addWait,
+  bounds,
+  connect,
+  duplicateNode,
+  emptyJourneyUi,
+  insertOnEdge,
+  journeyText,
+  logicKey,
+  moveBlock,
+  placeNode,
+  redo,
+  remember,
+  removeEdge,
+  removeNode,
+  setBranch,
+  setLabel,
+  setParam,
+  setWait,
+  switchMode,
+  undo,
+  type JourneyUi,
+} from './dashboard-journey.js';
+import { can } from './dashboard-access.js';
+import { emptyTraceUi } from './dashboard-journey-trace.js';
+
+const TRACE_TABS = ['trace', 'vars', 'map', 'graph'] as const;
+import {
+  applyLoopField,
+  loopAddBlock,
+  loopAddWait,
+  loopMoveItem,
+  loopRemoveItem,
+  loopText,
+} from './dashboard-journey-loop.js';
+import type { DashboardState } from './dashboard-view.js';
+
+export interface JourneyHost {
+  readonly state: DashboardState;
+  readonly root: ShadowRoot;
+  api(): QaCrawlerClient | undefined;
+  paint(): void;
+  /** Relit le projet et la bibliothèque (après une création de scénarios). */
+  refresh(): Promise<void>;
+}
+
+const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+const detailsOf = (error: unknown): string[] =>
+  error instanceof QaCrawlerError && Array.isArray(error.details) ? error.details.map(String) : [];
+
+type Drag =
+  | {
+      kind: 'node';
+      id: string;
+      x0: number;
+      y0: number;
+      nx: number;
+      ny: number;
+      moved: boolean;
+      el: HTMLElement;
+    }
+  | { kind: 'pan'; x0: number; y0: number; px: number; py: number; moved: boolean; world: HTMLElement }
+  | {
+      kind: 'link';
+      from: string;
+      branch?: JourneyBranch;
+      origin: { x: number; y: number };
+      temp: SVGPathElement;
+    };
+
+type Carried =
+  | { kind: 'block'; name: string }
+  | { kind: 'node'; id: string }
+  | { kind: 'shape'; shape: 'CONDITION' | 'JOIN' | 'END' | 'WAIT' | 'LOOP' };
+
+const ZOOM_MIN = 0.3;
+const ZOOM_MAX = 2;
+
+/**
+ * LE CONTRÔLEUR DU COMPOSITEUR VISUEL : les actions `jn-*`, les champs `data-jn`, le glisser-déposer natif
+ * (palette → parcours, cartes entre elles), les gestes du diagramme (déplacer un nœud, relier depuis un
+ * port, déplacer la vue, zoomer), le clavier (Suppr, Ctrl+Z / Ctrl+Y, Échap) et les appels au serveur
+ * (vérifier, enregistrer, ouvrir, créer). Pendant un geste, seul le DOM concerné bouge ; l'état change à la
+ * fin du geste, en une modification annulable.
+ */
+export class JourneyController {
+  private drag: Drag | undefined;
+  private carried: Carried | undefined;
+  private checkTimer: ReturnType<typeof setTimeout> | undefined;
+  private toastTimer?: ReturnType<typeof setTimeout>;
+  private checkSequence = 0;
+  /** Le paramètre « Relier à » choisi dans le panneau (cible, branche). */
+  private connectTo = '';
+  private connectBranch: JourneyBranch = 'YES';
+
+  constructor(private readonly host: JourneyHost) {
+    const root = host.root;
+    root.addEventListener('pointerdown', (event) => {
+      this.pointerDown(event as PointerEvent);
+    });
+    root.addEventListener('pointermove', (event) => {
+      this.pointerMove(event as PointerEvent);
+    });
+    root.addEventListener('pointerup', (event) => {
+      this.pointerUp(event as PointerEvent);
+    });
+    root.addEventListener('pointercancel', () => {
+      this.cancelDrag();
+    });
+    root.addEventListener('dragstart', (event) => {
+      this.dragStart(event as DragEvent);
+    });
+    root.addEventListener('dragover', (event) => {
+      this.dragOver(event as DragEvent);
+    });
+    root.addEventListener('dragleave', (event) => {
+      (event.target as Element | null)?.closest('.jn-gap')?.classList.remove('over');
+    });
+    root.addEventListener('drop', (event) => {
+      this.drop(event as DragEvent);
+    });
+    root.addEventListener('dragend', () => {
+      this.endCarry();
+    });
+    root.addEventListener(
+      'wheel',
+      (event) => {
+        this.wheel(event as WheelEvent);
+      },
+      { passive: false },
+    );
+  }
+
+  private get ui(): JourneyUi {
+    return this.host.state.lib.journey;
+  }
+
+  private get publish(): boolean {
+    const state = this.host.state;
+    return can(state, 'PUBLISH') && state.project !== undefined && state.project.state !== 'ARCHIVED';
+  }
+
+  private projectId(): string | undefined {
+    return this.host.state.project?.id;
+  }
+
+  private focus(selector: string): void {
+    this.host.root.querySelector<HTMLElement>(selector)?.focus();
+  }
+
+  // ── Chargement ─────────────────────────────────────────────────────────────────────────────
+
+  /** Les parcours enregistrés du projet (un autre projet repart d'un parcours vide). */
+  async loadList(): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!api || !projectId) return;
+    if (this.ui.projectId !== projectId) this.host.state.lib.journey = { ...emptyJourneyUi(), projectId };
+    try {
+      const list = await api.journeys.list(projectId);
+      if (this.projectId() !== projectId) return;
+      this.ui.list = list;
+      this.host.paint();
+    } catch {
+      // La liste n'est qu'une aide : le compositeur reste utilisable sans elle.
+    }
+  }
+
+  // ── Vérification ───────────────────────────────────────────────────────────────────────────
+
+  /** Une vérification du serveur après chaque modification de la logique (regroupées). */
+  scheduleCheck(delay = 350): void {
+    if (this.checkTimer) clearTimeout(this.checkTimer);
+    this.checkTimer = setTimeout(() => {
+      this.checkTimer = undefined;
+      void this.check();
+    }, delay);
+  }
+
+  /** TRAÇABILITÉ : définitions, correspondances et traces de l'exécution choisie (la plus récente par défaut). */
+  async loadTrace(): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!api || !projectId) return;
+    const ui = this.ui;
+    const journey: Journey = { ...ui.journey, name: ui.journey.name.trim() || 'parcours' };
+    const key = logicKey(ui.journey);
+    const current = ui.trace ?? emptyTraceUi();
+    ui.trace = { ...current, loading: true, error: undefined };
+    this.host.paint();
+    try {
+      const data = await api.journeys.traceability(
+        projectId,
+        journey,
+        current.run ? { run: current.run } : {},
+      );
+      ui.trace = {
+        ...(ui.trace ?? current),
+        loading: false,
+        data,
+        key,
+        ...(data.run ? { run: data.run.run } : {}),
+      };
+    } catch (error) {
+      ui.trace = { ...(ui.trace ?? current), loading: false, error: message(error) };
+    }
+    this.host.paint();
+  }
+
+  /** SIMULATION STATIQUE : l'aperçu du parcours (rien n'est exécuté). */
+  async preview(): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!api || !projectId) return;
+    const ui = this.ui;
+    const journey: Journey = { ...ui.journey, name: ui.journey.name.trim() || 'parcours' };
+    const key = logicKey(ui.journey);
+    ui.sim = { ...(ui.sim ?? { path: 0 }), previewBusy: true, previewError: undefined };
+    this.host.paint();
+    try {
+      const preview = await api.journeys.preview(projectId, journey);
+      ui.sim = { ...(ui.sim ?? { path: 0 }), preview, previewBusy: false };
+      ui.simKey = key;
+    } catch (error) {
+      ui.sim = { ...(ui.sim ?? { path: 0 }), previewBusy: false, previewError: message(error) };
+    }
+    this.host.paint();
+  }
+
+  /**
+   * EXÉCUTION DE SIMULATION : un vrai rejeu dans l'environnement isolé choisi ; la progression vient du moteur
+   * et le résultat affiché est celui de l'exécution (jamais présumé).
+   */
+  async simulate(): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    const sim = this.ui.sim;
+    if (!api || !projectId || !sim?.env || sim.running) return;
+    const ui = this.ui;
+    const journey: Journey = { ...ui.journey, name: ui.journey.name.trim() || 'parcours' };
+    ui.sim = { ...sim, running: true, error: undefined, detail: undefined, status: undefined };
+    this.host.paint();
+    try {
+      const started = await api.journeys.simulate(projectId, journey, {
+        environmentId: sim.env,
+        path: sim.path,
+      });
+      ui.sim = { ...(ui.sim ?? sim), run: started.run, status: started.status };
+      this.host.paint();
+      await new Promise<void>((resolve) => {
+        const subscription = api.explorations.subscribe(started.id, (event) => {
+          if (event.type === 'completed' || event.type === 'failed') {
+            subscription.close();
+            resolve();
+          } else if (event.type === 'status' && ui.sim) {
+            ui.sim = { ...ui.sim, status: event.status };
+            this.host.paint();
+          }
+        });
+      });
+      const detail = await api.executions.get(projectId, started.run);
+      ui.sim = { ...(ui.sim ?? sim), running: false, detail };
+    } catch (error) {
+      ui.sim = { ...(ui.sim ?? sim), running: false, error: message(error) };
+    }
+    this.host.paint();
+  }
+
+  async check(): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!api || !projectId) return;
+    const ui = this.ui;
+    const sequence = ++this.checkSequence;
+    const key = logicKey(ui.journey);
+    // Le nom ne compte pas pour la vérification : un parcours sans nom se vérifie aussi.
+    const journey: Journey = { ...ui.journey, name: ui.journey.name.trim() || 'parcours' };
+    ui.checking = true;
+    this.host.paint();
+    try {
+      const check = await api.journeys.check(projectId, journey);
+      if (sequence !== this.checkSequence) return;
+      ui.check = check;
+      ui.checkedFor = key;
+    } catch (error) {
+      if (sequence !== this.checkSequence) return;
+      ui.error = message(error);
+      ui.details = detailsOf(error);
+    }
+    ui.checking = false;
+    this.host.paint();
+  }
+
+  /** Après une modification : redessin, puis vérification. */
+  private changed(focus?: string): void {
+    this.ui.error = undefined;
+    this.ui.details = undefined;
+    this.host.paint();
+    if (focus) this.focus(focus);
+    this.scheduleCheck();
+  }
+
+  // ── Actions ────────────────────────────────────────────────────────────────────────────────
+
+  /** L'outil « relier » : un premier clic choisit le départ, le second relie (branche libre d'une condition). */
+  private connectClick(id: string): void {
+    const ui = this.ui;
+    if (!ui.connectFrom || ui.connectFrom === id) {
+      ui.connectFrom = ui.connectFrom === id ? undefined : id;
+      this.host.paint();
+      return;
+    }
+    const from = ui.journey.graph.nodes.find((node) => node.id === ui.connectFrom);
+    const taken = ui.journey.graph.edges
+      .filter((edge) => edge.from === ui.connectFrom)
+      .map((edge) => edge.branch);
+    const branch = from?.kind === 'CONDITION' ? (taken.includes('YES') ? 'NO' : 'YES') : undefined;
+    const refused = connect(ui, ui.connectFrom, id, branch);
+    ui.connectFrom = undefined;
+    if (refused) {
+      ui.error = refused;
+      this.host.paint();
+      return;
+    }
+    this.changed();
+  }
+
+  /**
+   * Ajoute un bloc de la bibliothèque au parcours (bouton d'une carte, de la fiche, de la palette ou outil du
+   * diagramme) : le bloc ajouté est choisi, ses propriétés s'ouvrent, une confirmation discrète le dit.
+   */
+  addBlockNamed(name: string, at?: { x: number; y: number }): void {
+    const block = this.host.state.lib.blocks?.find((entry) => entry.name === name);
+    if (!block || !this.publish) return;
+    const lib = this.host.state.lib;
+    lib.tab = 'composer';
+    const id = addBlock(this.ui, block, at ?? {});
+    this.added(block.name);
+    this.changed();
+    this.focus(
+      `[data-jn-node="${CSS.escape(id)}"] [data-action="jn-select"], .jn-node[data-jn-node="${CSS.escape(id)}"]`,
+    );
+  }
+
+  /** Après un ajout réussi : propriétés du bloc ouvertes (onglet Paramètres), confirmation discrète. */
+  private added(name: string): void {
+    const ui = this.ui;
+    ui.picked = name;
+    ui.propsTab = 'params';
+    if (this.host.state.lib.propsOpen === false) this.host.state.lib.propsOpen = true;
+    this.host.state.lib.wide = false;
+    ui.toast = journeyText(this.host.state).toastAdded(name);
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => {
+      this.toastTimer = undefined;
+      this.ui.toast = undefined;
+      this.host.paint();
+    }, 4000);
+  }
+
+  /** Après l'ajout d'une attente : ses propriétés s'ouvrent, une confirmation discrète le dit. */
+  private addedWait(message?: string): void {
+    const t = journeyText(this.host.state);
+    if (this.host.state.lib.propsOpen === false) this.host.state.lib.propsOpen = true;
+    this.host.state.lib.wide = false;
+    this.ui.toast = message ?? t.toastWait;
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => {
+      this.toastTimer = undefined;
+      this.ui.toast = undefined;
+      this.host.paint();
+    }, 4000);
+  }
+
+  /** L'attente choisie (ou rien). */
+  private selectedWait(): JourneyNode | undefined {
+    const selected = this.ui.selected;
+    if (selected?.kind !== 'node') return undefined;
+    const node = this.ui.journey.graph.nodes.find((entry) => entry.id === selected.id);
+    return node?.kind === 'WAIT' ? node : undefined;
+  }
+
+  click(action: string, target: HTMLElement): boolean {
+    const ui = this.ui;
+    const data = target.dataset;
+    switch (action) {
+      case 'jn-add':
+        if (data.block) this.addBlockNamed(data.block);
+        return true;
+      case 'jn-add-wait': {
+        if (!this.publish) return true;
+        this.host.state.lib.tab = 'composer';
+        const id = addWait(ui);
+        this.addedWait();
+        this.changed(
+          `.jn-node[data-jn-node="${CSS.escape(id)}"], [data-jn-node="${CSS.escape(id)}"] [data-action="jn-select"]`,
+        );
+        return true;
+      }
+      case 'jn-add-loop': {
+        if (!this.publish) return true;
+        this.host.state.lib.tab = 'composer';
+        const id = addLoop(ui);
+        this.addedWait(loopText(this.host.state).toast);
+        this.changed(
+          `.jn-node[data-jn-node="${CSS.escape(id)}"], [data-jn-node="${CSS.escape(id)}"] [data-action="jn-select"]`,
+        );
+        return true;
+      }
+      case 'jn-loop-add-block': {
+        if (!this.publish || !data.loop) return true;
+        const select = this.host.root.querySelector<HTMLSelectElement>(
+          `[data-jn="loop.pick"][data-loop="${CSS.escape(data.loop)}"]`,
+        );
+        const block = (this.host.state.lib.blocks ?? []).find((entry) => entry.name === select?.value);
+        if (!block) {
+          select?.focus();
+          return true;
+        }
+        loopAddBlock(ui, data.loop, block);
+        this.changed(`[data-jn="loop.pick"][data-loop="${CSS.escape(data.loop)}"]`);
+        return true;
+      }
+      case 'jn-view':
+        ui.view = data.view === 'trace' ? 'trace' : 'compose';
+        this.host.paint();
+        if (ui.view === 'trace') void this.loadTrace();
+        this.focus('#jn-mode-TRACE');
+        return true;
+      case 'jn-trace-load':
+        void this.loadTrace();
+        return true;
+      case 'jn-trace-tab':
+        ui.trace = {
+          ...(ui.trace ?? emptyTraceUi()),
+          tab: TRACE_TABS.find((tab) => tab === data.tab) ?? 'trace',
+        };
+        this.host.paint();
+        this.focus(`[data-action="jn-trace-tab"][data-tab="${ui.trace.tab}"]`);
+        return true;
+      case 'jn-trace-pick':
+        ui.trace = {
+          ...(ui.trace ?? emptyTraceUi()),
+          ...(data.key ? { selected: data.key } : {}),
+          ...(data.tab === 'trace' ? { tab: 'trace' as const } : {}),
+        };
+        this.host.paint();
+        if (data.key) this.focus(`.tc-var[data-key="${CSS.escape(data.key)}"]`);
+        return true;
+      case 'jn-trace-center':
+        ui.trace = {
+          ...(ui.trace ?? emptyTraceUi()),
+          center: data.center === 'graph' ? 'graph' : 'timeline',
+        };
+        this.host.paint();
+        return true;
+      case 'jn-preview':
+        void this.preview();
+        return true;
+      case 'jn-simulate':
+        if (this.publish) void this.simulate();
+        return true;
+      case 'jn-loop-add-wait':
+        if (!this.publish || !data.loop) return true;
+        loopAddWait(ui, data.loop);
+        this.changed();
+        return true;
+      case 'jn-loop-remove':
+        if (!this.publish || !data.loop || !data.item) return true;
+        loopRemoveItem(ui, data.loop, data.item);
+        this.changed();
+        return true;
+      case 'jn-loop-move':
+        if (!this.publish || !data.loop || !data.item) return true;
+        loopMoveItem(ui, data.loop, data.item, Number(data.delta) || 0);
+        this.changed();
+        return true;
+      case 'jn-dock':
+        ui.dock =
+          data.tab === 'map'
+            ? 'map'
+            : data.tab === 'vars'
+              ? 'vars'
+              : data.tab === 'issues'
+                ? 'issues'
+                : data.tab === 'sim'
+                  ? 'sim'
+                  : 'io';
+        ui.dockOpen = true;
+        this.host.paint();
+        this.focus(`#jn-dk-${ui.dock}`);
+        return true;
+      case 'jn-dock-toggle':
+        ui.dockOpen = !ui.dockOpen;
+        this.host.paint();
+        this.focus('[data-action="jn-dock-toggle"]');
+        return true;
+      case 'jn-apply-map': {
+        // Une proposition retenue par une personne : la correspondance est enregistrée explicitement.
+        if (!this.publish || !data.node || !data.key || !data.to) return true;
+        setParam(ui, data.node, data.key, { mode: 'MAP', key: data.to });
+        this.changed(`[data-jn="param.mode"][data-key="${CSS.escape(data.key)}"]`);
+        return true;
+      }
+      case 'jn-map-fix':
+        if (!data.node) return true;
+        ui.selected = { kind: 'node', id: data.node };
+        ui.propsTab = 'params';
+        if (this.host.state.lib.propsOpen === false) this.host.state.lib.propsOpen = true;
+        this.host.paint();
+        this.focus('#jn-pp-params select, #jn-pp-params input, .jn-waitf select');
+        return true;
+      case 'jn-wait-cite': {
+        const node = this.selectedWait();
+        if (!node || !data.key || !this.publish) return true;
+        const spec = node.wait ?? defaultWait();
+        const field = spec.type === 'URL' || spec.type === 'RESPONSE' ? 'url' : 'text';
+        setWait(
+          ui,
+          node.id,
+          sanitizeWait({ ...spec, [field]: `${spec[field] ?? ''}\${testData:${data.key}}` }),
+        );
+        this.changed(`[data-jn="wait.${field}"]`);
+        return true;
+      }
+      case 'jn-shape': {
+        if (!this.publish) return true;
+        const kind = data.kind;
+        if (kind === 'CONDITION' || kind === 'JOIN' || kind === 'END') {
+          const center = this.visibleCenter();
+          addShape(ui, kind, center ? center.x - NODE_SIZE[kind].w / 2 : undefined, center?.y);
+          this.changed();
+        }
+        return true;
+      }
+      case 'jn-select':
+        if (!data.node) return true;
+        if (ui.tool === 'connect' && this.publish && ui.journey.mode === 'DIAGRAM') {
+          this.connectClick(data.node);
+          return true;
+        }
+        ui.selected = { kind: 'node', id: data.node };
+        this.host.paint();
+        return true;
+      case 'jn-select-edge':
+        if (data.edge) {
+          ui.selected = { kind: 'edge', id: data.edge };
+          this.host.paint();
+        }
+        return true;
+      case 'jn-deselect':
+        ui.selected = undefined;
+        this.host.paint();
+        return true;
+      case 'jn-move':
+        if (data.node && moveBlock(ui, data.node, Number(data.to)))
+          this.changed(`.jn-card[data-jn-node="${CSS.escape(data.node)}"] [data-action="jn-select"]`);
+        return true;
+      case 'jn-remove':
+        if (data.node && removeNode(ui, data.node)) this.changed();
+        return true;
+      case 'jn-duplicate':
+        if (data.node && duplicateNode(ui, data.node)) this.changed();
+        return true;
+      case 'jn-edge-remove':
+        if (data.edge && removeEdge(ui, data.edge)) this.changed();
+        return true;
+      case 'jn-connect': {
+        if (!data.node || !this.connectTo) return true;
+        const refused = connect(ui, data.node, this.connectTo, this.connectBranch);
+        if (refused) {
+          ui.error = refused;
+          this.host.paint();
+          return true;
+        }
+        this.connectTo = '';
+        this.changed();
+        return true;
+      }
+      case 'jn-accept-version':
+        if (data.node) {
+          acceptVersion(ui, data.node, Number(data.version));
+          this.changed();
+        }
+        return true;
+      case 'jn-mode': {
+        const mode = data.mode === 'DIAGRAM' ? 'DIAGRAM' : 'LINEAR';
+        ui.view = 'compose';
+        const refused = switchMode(ui, mode);
+        const t = journeyText(this.host.state);
+        ui.modeMessage = refused ? t.linearRefused(refused) : undefined;
+        this.host.paint();
+        if (!refused && mode === 'DIAGRAM') this.fit();
+        this.focus(`#jn-mode-${ui.journey.mode}`);
+        return true;
+      }
+      case 'jn-undo':
+        if (undo(ui)) this.changed();
+        return true;
+      case 'jn-redo':
+        if (redo(ui)) this.changed();
+        return true;
+      case 'jn-check':
+        void this.check();
+        return true;
+      case 'jn-save':
+        void this.save();
+        return true;
+      case 'jn-publish':
+        if (ui.check?.publishable === 'PER_PATH') {
+          ui.confirmPerPath = true;
+          this.host.paint();
+          this.focus('[data-action="jn-publish-paths"]');
+        } else void this.publishNow(false);
+        return true;
+      case 'jn-publish-paths':
+        ui.confirmPerPath = false;
+        void this.publishNow(true);
+        return true;
+      case 'jn-publish-cancel':
+        ui.confirmPerPath = false;
+        this.host.paint();
+        return true;
+      case 'jn-to-block':
+        ui.blockName = `${ui.savedName ?? ui.journey.name} (bloc)`.slice(0, 80);
+        this.host.paint();
+        this.focus('[data-jn="blockName"]');
+        return true;
+      case 'jn-to-block-cancel':
+        ui.blockName = undefined;
+        this.host.paint();
+        return true;
+      case 'jn-to-block-confirm':
+        void this.toBlock();
+        return true;
+      case 'jn-new':
+        if (ui.dirty) {
+          ui.confirmDiscard = '\u0000new';
+          this.host.paint();
+        } else this.reset();
+        return true;
+      case 'jn-discard-yes': {
+        const target1 = ui.confirmDiscard;
+        ui.confirmDiscard = undefined;
+        if (target1 === '\u0000new') this.reset();
+        else if (target1) void this.open(target1);
+        return true;
+      }
+      case 'jn-discard-no':
+        ui.confirmDiscard = undefined;
+        this.host.paint();
+        return true;
+      case 'jn-zoom':
+        this.zoomBy(Number(data.step) > 0 ? 1.2 : 1 / 1.2);
+        return true;
+      case 'jn-fit':
+        this.fit();
+        return true;
+      case 'jn-actual':
+        ui.zoom = 1;
+        this.host.paint();
+        return true;
+      case 'jn-tab': {
+        const tab = data.tab === 'catalog' || data.tab === 'diagnostics' ? data.tab : 'composer';
+        this.host.state.lib.tab = tab;
+        this.host.paint();
+        this.focus(`#lib-tab-${tab}`);
+        if (tab === 'composer' && ui.journey.mode === 'DIAGRAM') this.fit();
+        return true;
+      }
+      case 'jn-panel': {
+        const open = data.open === '1';
+        const lib = this.host.state.lib;
+        lib.wide = false;
+        if (data.panel === 'recent') lib.recentOpen = open;
+        else lib.propsOpen = open;
+        this.host.paint();
+        return true;
+      }
+      case 'jn-wide':
+        this.host.state.lib.wide = !this.host.state.lib.wide;
+        this.host.paint();
+        if (ui.journey.mode === 'DIAGRAM') this.fit();
+        return true;
+      case 'jn-pick':
+        ui.picked = data.block;
+        this.host.paint();
+        return true;
+      case 'jn-tool':
+        ui.tool = data.tool === 'connect' ? 'connect' : 'select';
+        ui.connectFrom = undefined;
+        this.host.paint();
+        return true;
+      case 'jn-tool-block': {
+        const center = this.visibleCenter();
+        if (ui.picked)
+          this.addBlockNamed(
+            ui.picked,
+            center ? { x: center.x - NODE_SIZE.BLOCK.w / 2, y: center.y - NODE_SIZE.BLOCK.h / 2 } : undefined,
+          );
+        return true;
+      }
+      case 'jn-delete-selection':
+        if (ui.selected && this.publish) {
+          const done =
+            ui.selected.kind === 'node' ? removeNode(ui, ui.selected.id) : removeEdge(ui, ui.selected.id);
+          if (done) this.changed('[data-jn-canvas]');
+        }
+        return true;
+      case 'jn-edit':
+        if (data.node) {
+          ui.selected = { kind: 'node', id: data.node };
+          ui.propsTab = 'params';
+          this.host.state.lib.propsOpen = true;
+          this.host.state.lib.wide = false;
+          this.host.paint();
+          this.focus(
+            '.jn-props #jn-pp-params select, .jn-props #jn-pp-params input, .jn-props input[data-jn="label"], .jn-props [data-action="jn-props-tab"]',
+          );
+        }
+        return true;
+      case 'jn-props-tab':
+        ui.propsTab = data.tab === 'io' ? 'io' : data.tab === 'details' ? 'details' : 'params';
+        this.host.paint();
+        this.focus(`#jn-pt-${ui.propsTab}`);
+        return true;
+      case 'jn-insert-yes': {
+        const pending = ui.pendingInsert;
+        ui.pendingInsert = undefined;
+        if (!pending) return true;
+        const refused = insertOnEdge(ui, pending.edge, pending.node);
+        if (refused) {
+          ui.error = refused;
+          this.host.paint();
+          return true;
+        }
+        this.changed();
+        return true;
+      }
+      case 'jn-insert-no':
+        ui.pendingInsert = undefined;
+        this.host.paint();
+        return true;
+      case 'jn-toast-close':
+        ui.toast = undefined;
+        if (this.toastTimer) clearTimeout(this.toastTimer);
+        this.toastTimer = undefined;
+        this.host.paint();
+        return true;
+      case 'jn-focus-palette':
+        this.focus('.jn-palette input[data-jn="palette"]');
+        return true;
+      case 'jn-legend':
+        // Le repli natif de <details> suit ce clic : l'état est gardé pour les redessins.
+        ui.legendOpen = !ui.legendOpen;
+        return true;
+      case 'jn-group': {
+        // Le repli natif de <details> suit ce clic : l'état est gardé pour les redessins.
+        const group = data.group ?? '';
+        ui.paletteClosed = ui.paletteClosed.includes(group)
+          ? ui.paletteClosed.filter((entry) => entry !== group)
+          : [...ui.paletteClosed, group];
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  /** Un champ `data-jn` (saisie ou choix). `true` : traité. */
+  field(target: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, committed: boolean): boolean {
+    const key = target.dataset.jn;
+    if (key === undefined) return false;
+    const ui = this.ui;
+    const value = target.value;
+    const selected = ui.selected?.kind === 'node' ? ui.selected.id : undefined;
+    switch (key) {
+      case 'name':
+        // Jamais de redessin pour le nom : un redessin à la perte du focus avalerait le clic qui la provoque
+        // (le bouton serait remplacé entre l'appui et le relâchement). « Enregistrer » dit s'il manque.
+        if (ui.journey.name !== value) {
+          if (!ui.dirty) remember(ui);
+          ui.journey.name = value.slice(0, 80);
+          ui.dirty = true;
+        }
+        return true;
+      case 'category':
+        ui.category = value;
+        this.host.paint();
+        return true;
+      case 'blockName':
+        // Pas de redessin (comme le nom du parcours) : le clic sur « Créer le bloc » n'est pas avalé.
+        ui.blockName = value.slice(0, 80);
+        return true;
+      case 'description':
+        ui.journey.description = value.slice(0, 500);
+        ui.dirty = true;
+        return true;
+      case 'palette':
+        ui.paletteQuery = value;
+        // La recherche se redessine sans perdre le focus du champ.
+        this.host.paint();
+        this.focus('[data-jn="palette"]');
+        return true;
+      case 'open':
+        if (!committed || !value) return true;
+        if (ui.dirty) {
+          ui.confirmDiscard = value;
+          this.host.paint();
+        } else void this.open(value);
+        return true;
+      case 'label':
+        if (selected) {
+          setLabel(ui, selected, value);
+          if (committed) this.changed();
+        }
+        return true;
+      case 'loop.type':
+      case 'loop.times':
+      case 'loop.source':
+      case 'loop.items':
+      case 'loop.itemsFrom':
+      case 'loop.as':
+      case 'loop.maxIterations':
+      case 'loop.timeoutS':
+      case 'loop.onFailure':
+      case 'loop.while.type':
+      case 'loop.while.value':
+      case 'loop.item.wait.type':
+      case 'loop.item.wait.value':
+      case 'loop.item.param': {
+        // Les réglages sont retenus quand le champ est validé (changement, sortie) : jamais à chaque frappe.
+        if (!committed || !this.publish) return true;
+        if (applyLoopField(ui, key, target))
+          this.changed(
+            ['loop.type', 'loop.source', 'loop.onFailure', 'loop.while.type', 'loop.item.wait.type'].includes(
+              key,
+            )
+              ? `[data-jn="${key}"]${target.dataset.item ? `[data-item="${CSS.escape(target.dataset.item)}"]` : ''}`
+              : undefined,
+          );
+        return true;
+      }
+      case 'loop.pick':
+        return true;
+      case 'trace.query':
+        ui.trace = { ...(ui.trace ?? emptyTraceUi()), query: value };
+        this.host.paint();
+        this.focus('[data-jn="trace.query"]');
+        return true;
+      case 'trace.run':
+        if (!committed) return true;
+        ui.trace = { ...(ui.trace ?? emptyTraceUi()), run: value };
+        void this.loadTrace();
+        return true;
+      case 'sim.env':
+        ui.sim = { ...(ui.sim ?? { path: 0 }), env: value };
+        this.host.paint();
+        this.focus('[data-jn="sim.env"]');
+        return true;
+      case 'sim.path':
+        ui.sim = { ...(ui.sim ?? { path: 0 }), path: Number(value) || 0 };
+        this.host.paint();
+        return true;
+      case 'wait.type':
+      case 'wait.selector':
+      case 'wait.text':
+      case 'wait.url':
+      case 'wait.method':
+      case 'wait.status':
+      case 'wait.timeoutS':
+      case 'wait.onTimeout': {
+        const node = this.selectedWait();
+        if (!node) return true;
+        const spec: Record<string, unknown> = { ...(node.wait ?? defaultWait()) };
+        const name = key.slice('wait.'.length);
+        if (name === 'type' && !committed) return true;
+        if (name === 'timeoutS') {
+          const seconds = Number(value);
+          if (value.trim() === '' || Number.isNaN(seconds)) return true;
+          spec.timeoutS = seconds;
+        } else if (name === 'status') spec.status = /^\d+$/.test(value) ? Number(value) : value;
+        else if (name === 'method' && value === '') delete spec.method;
+        else spec[name] = value;
+        setWait(ui, node.id, sanitizeWait(spec));
+        // Une liste ou un choix garde le focus ; un champ texte validé en le quittant ne le reprend pas (le
+        // clic qui l'a fait quitter n'est pas avalé).
+        if (committed)
+          this.changed(
+            ['type', 'method', 'status', 'onTimeout'].includes(name)
+              ? `[data-jn="${key}"]${name === 'onTimeout' ? ':checked' : ''}`
+              : undefined,
+          );
+        return true;
+      }
+      case 'param.mode':
+        if (selected && committed && target.dataset.key) {
+          const mode = value;
+          setParam(
+            ui,
+            selected,
+            target.dataset.key,
+            mode === 'VALUE'
+              ? { mode: 'VALUE', value: '' }
+              : mode === 'MAP'
+                ? { mode: 'MAP', key: '' }
+                : undefined,
+          );
+          this.changed(
+            `[data-jn="param.${mode === 'MAP' ? 'key' : 'value'}"][data-key="${CSS.escape(target.dataset.key)}"]`,
+          );
+        }
+        return true;
+      case 'param.value':
+      case 'param.key':
+        if (selected && target.dataset.key) {
+          setParam(
+            ui,
+            selected,
+            target.dataset.key,
+            key === 'param.value' ? { mode: 'VALUE', value } : { mode: 'MAP', key: value.trim() },
+          );
+          if (committed) this.changed();
+        }
+        return true;
+      case 'connect.to':
+        this.connectTo = value;
+        return true;
+      case 'connect.branch':
+        this.connectBranch = value === 'NO' ? 'NO' : 'YES';
+        return true;
+      case 'edge.branch':
+        if (ui.selected?.kind === 'edge' && committed) {
+          setBranch(ui, ui.selected.id, value === 'NO' ? 'NO' : 'YES');
+          this.changed();
+        }
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  keydown(event: KeyboardEvent): boolean {
+    if (this.host.state.route.view !== 'library') return false;
+    const target = event.composedPath()[0] as HTMLElement | undefined;
+    if (!target?.closest('#lib-composer')) return false;
+    const typing = target.closest('input, textarea, select') !== null;
+    const ui = this.ui;
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      !typing &&
+      (event.key === 'z' || event.key === 'Z' || event.key === 'y')
+    ) {
+      event.preventDefault();
+      if (event.key === 'y' || event.shiftKey ? redo(ui) : undo(ui)) this.changed();
+      return true;
+    }
+    if (typing) return false;
+    if ((event.key === 'Delete' || event.key === 'Backspace') && ui.selected && this.publish) {
+      event.preventDefault();
+      const done =
+        ui.selected.kind === 'node' ? removeNode(ui, ui.selected.id) : removeEdge(ui, ui.selected.id);
+      if (done) this.changed('[data-jn-stage]');
+      return true;
+    }
+    if (event.key === 'Escape' && (ui.connectFrom || ui.pendingInsert || ui.tool === 'connect')) {
+      ui.connectFrom = undefined;
+      ui.pendingInsert = undefined;
+      ui.tool = 'select';
+      this.host.paint();
+      return true;
+    }
+    if (event.key === 'Escape' && ui.selected) {
+      ui.selected = undefined;
+      this.host.paint();
+      return true;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && target.classList.contains('jn-node')) {
+      event.preventDefault();
+      const id = target.dataset.node;
+      if (id) {
+        ui.selected = { kind: 'node', id };
+        this.host.paint();
+        this.focus(`.jn-node[data-jn-node="${CSS.escape(id)}"]`);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // ── Serveur ────────────────────────────────────────────────────────────────────────────────
+
+  private reset(): void {
+    const projectId = this.ui.projectId;
+    const list = this.ui.list;
+    this.host.state.lib.journey = {
+      ...emptyJourneyUi(),
+      ...(projectId ? { projectId } : {}),
+      ...(list ? { list } : {}),
+    };
+    this.host.paint();
+    this.focus('[data-jn="name"]');
+  }
+
+  async open(name: string): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!api || !projectId) return;
+    try {
+      const journey = await api.journeys.open(projectId, name);
+      const list = this.ui.list;
+      this.host.state.lib.journey = {
+        ...emptyJourneyUi(),
+        projectId,
+        ...(list ? { list } : {}),
+        journey,
+        savedName: journey.name,
+        ...(journey.revision ? { savedRevision: journey.revision } : {}),
+      };
+      this.host.paint();
+      if (journey.mode === 'DIAGRAM') this.fit();
+      void this.check();
+    } catch (error) {
+      this.ui.error = message(error);
+      this.host.paint();
+    }
+  }
+
+  async save(): Promise<boolean> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    const ui = this.ui;
+    const t = journeyText(this.host.state);
+    if (!api || !projectId || ui.saving) return false;
+    if (ui.journey.name.trim() === '') {
+      ui.error = t.nameRequired;
+      this.host.paint();
+      this.focus('[data-jn="name"]');
+      return false;
+    }
+    ui.saving = true;
+    ui.error = undefined;
+    ui.details = undefined;
+    this.host.paint();
+    let ok = false;
+    try {
+      const saved = await api.journeys.save(projectId, ui.journey, {
+        ...(ui.savedRevision ? { revision: ui.savedRevision } : {}),
+        ...(ui.savedName ? { previous: ui.savedName } : {}),
+      });
+      ui.journey = { ...ui.journey, ...saved };
+      ui.savedName = saved.name;
+      if (saved.revision) ui.savedRevision = saved.revision;
+      ui.dirty = false;
+      ui.saveState = 'saved';
+      ui.notice = t.savedNotice(saved.name);
+      ok = true;
+      void this.loadList();
+    } catch (error) {
+      ui.saveState = 'failed';
+      ui.error = message(error);
+      ui.details = detailsOf(error);
+    }
+    ui.saving = false;
+    this.host.paint();
+    return ok;
+  }
+
+  private async publishNow(perPath: boolean): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    const ui = this.ui;
+    const t = journeyText(this.host.state);
+    if (!api || !projectId || ui.publishing || !ui.savedName) return;
+    ui.publishing = true;
+    ui.error = undefined;
+    ui.details = undefined;
+    this.host.paint();
+    try {
+      const result = await api.journeys.publish(projectId, ui.savedName, { perPath });
+      ui.journey.published = [...new Set([...(ui.journey.published ?? []), ...result.scenarios])];
+      ui.notice = t.createdNotice(result.scenarios.join(', '));
+      this.host.state.lib.composed = result.scenarios[0];
+      await this.host.refresh();
+      void this.loadList();
+    } catch (error) {
+      ui.error = message(error);
+      ui.details = detailsOf(error);
+    }
+    ui.publishing = false;
+    this.host.paint();
+  }
+
+  /** Le parcours enregistré devient un bloc de la bibliothèque (contrat : ses sorties garanties). */
+  private async toBlock(): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId();
+    const ui = this.ui;
+    const t = journeyText(this.host.state);
+    if (!api || !projectId || ui.converting || !ui.savedName || ui.blockName === undefined) return;
+    ui.converting = true;
+    ui.error = undefined;
+    ui.details = undefined;
+    ui.notice = undefined;
+    this.host.paint();
+    try {
+      const result = await api.journeys.toBlock(projectId, ui.savedName, { block: ui.blockName });
+      ui.notice = t.toBlockDone(result.block.name, result.outputs.length);
+      ui.blockName = undefined;
+      await this.host.refresh();
+    } catch (error) {
+      ui.error = message(error);
+      ui.details = detailsOf(error);
+    }
+    ui.converting = false;
+    this.host.paint();
+  }
+
+  // ── Glisser-déposer natif (palette → parcours, cartes entre elles) ─────────────────────────
+
+  private dragStart(event: DragEvent): void {
+    const target = event.target as Element | null;
+    if (!target?.closest || !this.publish) return;
+    const block = target.closest<HTMLElement>('[data-jn-block]');
+    const card = target.closest<HTMLElement>('.jn-card[data-jn-node]');
+    const shape = target.closest<HTMLElement>('[data-jn-shape]');
+    if (block?.dataset.jnBlock) this.carried = { kind: 'block', name: block.dataset.jnBlock };
+    else if (card?.dataset.jnNode) {
+      this.carried = { kind: 'node', id: card.dataset.jnNode };
+      card.classList.add('moving');
+    } else if (shape?.dataset.jnShape) {
+      const kind = shape.dataset.jnShape;
+      if (kind === 'CONDITION' || kind === 'JOIN' || kind === 'END' || kind === 'WAIT' || kind === 'LOOP')
+        this.carried = { kind: 'shape', shape: kind };
+    }
+    if (!this.carried) return;
+    event.dataTransfer?.setData(
+      'text/plain',
+      this.carried.kind === 'block' ? this.carried.name : this.carried.kind,
+    );
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = this.carried.kind === 'node' ? 'move' : 'copy';
+    this.host.root.querySelector('.jn-line')?.classList.add('jn-dragging');
+  }
+
+  private dropZone(event: DragEvent): { gap?: number; canvas?: HTMLElement; line?: boolean } | undefined {
+    const target = event.target as Element | null;
+    if (!target?.closest || !this.carried) return undefined;
+    const gap = target.closest<HTMLElement>('.jn-gap');
+    if (gap?.dataset.jnGap !== undefined) return { gap: Number(gap.dataset.jnGap) };
+    const canvas = target.closest<HTMLElement>('[data-jn-canvas]');
+    if (canvas && this.carried.kind !== 'node') return { canvas };
+    if (
+      target.closest('.jn-line') &&
+      (this.carried.kind !== 'shape' || this.carried.shape === 'WAIT' || this.carried.shape === 'LOOP')
+    )
+      return { line: true };
+    return undefined;
+  }
+
+  private dragOver(event: DragEvent): void {
+    const zone = this.dropZone(event);
+    if (!zone) return;
+    event.preventDefault();
+    const target = event.target as Element;
+    for (const element of this.host.root.querySelectorAll('.jn-gap.over')) element.classList.remove('over');
+    target.closest('.jn-gap')?.classList.add('over');
+    const canvas = target.closest<HTMLElement>('[data-jn-canvas]');
+    canvas?.classList.add('drop');
+    for (const element of this.host.root.querySelectorAll('.jn-edge.drop')) element.classList.remove('drop');
+    if (
+      canvas &&
+      (this.carried?.kind === 'block' ||
+        (this.carried?.kind === 'shape' && (this.carried.shape === 'WAIT' || this.carried.shape === 'LOOP')))
+    ) {
+      const edge = this.edgeNear(this.worldPoint(canvas, event.clientX, event.clientY));
+      if (edge) this.host.root.querySelector(`[data-jn-edge="${CSS.escape(edge)}"]`)?.classList.add('drop');
+    }
+  }
+
+  /** La connexion sous un point du diagramme (à quelques pixels près), pour y déposer un bloc. */
+  private edgeNear(point: { x: number; y: number }): string | undefined {
+    const graph = this.ui.journey.graph;
+    let best: { id: string; distance: number } | undefined;
+    for (const edge of graph.edges) {
+      const from = graph.nodes.find((node) => node.id === edge.from);
+      const to = graph.nodes.find((node) => node.id === edge.to);
+      if (!from || !to) continue;
+      const distance = distanceToPoints(edgePoints(from, to, edge.branch), point);
+      if (distance <= 14 / this.ui.zoom && (!best || distance < best.distance))
+        best = { id: edge.id, distance };
+    }
+    return best?.id;
+  }
+
+  private drop(event: DragEvent): void {
+    const zone = this.dropZone(event);
+    const carried = this.carried;
+    if (!zone || !carried) return;
+    event.preventDefault();
+    const ui = this.ui;
+    const blocks = this.host.state.lib.blocks ?? [];
+    if (zone.canvas) {
+      const point = this.worldPoint(zone.canvas, event.clientX, event.clientY);
+      if (carried.kind === 'block') {
+        const block = blocks.find((entry) => entry.name === carried.name);
+        if (block) {
+          // Déposé sur une connexion : le bloc est posé, et son insertion entre les deux nœuds est proposée.
+          const edge = this.edgeNear(point);
+          const id = addBlock(ui, block, {
+            x: point.x - NODE_SIZE.BLOCK.w / 2,
+            y: point.y - NODE_SIZE.BLOCK.h / 2,
+          });
+          ui.pendingInsert = edge ? { edge, node: id } : undefined;
+          this.host.state.lib.tab = 'composer';
+          this.added(block.name);
+        }
+      } else if (carried.kind === 'shape' && carried.shape === 'WAIT') {
+        // Comme un bloc : déposée sur une connexion, son insertion entre les deux nœuds est proposée.
+        const edge = this.edgeNear(point);
+        const id = addWait(ui, { x: point.x - NODE_SIZE.WAIT.w / 2, y: point.y - NODE_SIZE.WAIT.h / 2 });
+        ui.pendingInsert = edge ? { edge, node: id } : undefined;
+        this.addedWait();
+      } else if (carried.kind === 'shape' && carried.shape === 'LOOP') {
+        const edge = this.edgeNear(point);
+        const id = addLoop(ui, { x: point.x - NODE_SIZE.LOOP.w / 2, y: point.y - NODE_SIZE.LOOP.h / 2 });
+        ui.pendingInsert = edge ? { edge, node: id } : undefined;
+        this.addedWait(loopText(this.host.state).toast);
+      } else if (carried.kind === 'shape')
+        addShape(
+          ui,
+          carried.shape,
+          point.x - NODE_SIZE[carried.shape].w / 2,
+          point.y - NODE_SIZE[carried.shape].h / 2,
+        );
+    } else {
+      const order = blocks;
+      const index = zone.gap ?? Number.MAX_SAFE_INTEGER;
+      if (carried.kind === 'block') {
+        const block = order.find((entry) => entry.name === carried.name);
+        if (block) {
+          addBlock(ui, block, { index });
+          this.added(block.name);
+        }
+      } else if (carried.kind === 'shape' && carried.shape === 'WAIT') {
+        addWait(ui, { index });
+        this.addedWait();
+      } else if (carried.kind === 'shape' && carried.shape === 'LOOP') {
+        addLoop(ui, { index });
+        this.addedWait(loopText(this.host.state).toast);
+      } else if (carried.kind === 'node') {
+        const cards = [...this.host.root.querySelectorAll<HTMLElement>('.jn-card[data-jn-node]')].map(
+          (element) => element.dataset.jnNode,
+        );
+        const from = cards.indexOf(carried.id);
+        const to = index === Number.MAX_SAFE_INTEGER ? cards.length - 1 : from < index ? index - 1 : index;
+        moveBlock(ui, carried.id, to);
+      }
+    }
+    this.endCarry();
+    this.changed();
+  }
+
+  private endCarry(): void {
+    this.carried = undefined;
+    for (const element of this.host.root.querySelectorAll(
+      '.jn-gap.over, .jn-card.moving, .jn-dragging, .jn-canvas.drop, .jn-edge.drop',
+    ))
+      element.classList.remove('over', 'moving', 'jn-dragging', 'drop');
+  }
+
+  // ── Gestes du diagramme ────────────────────────────────────────────────────────────────────
+
+  private worldPoint(canvas: HTMLElement, clientX: number, clientY: number): { x: number; y: number } {
+    const rect = canvas.getBoundingClientRect();
+    const ui = this.ui;
+    return { x: (clientX - rect.left - ui.panX) / ui.zoom, y: (clientY - rect.top - ui.panY) / ui.zoom };
+  }
+
+  private visibleCenter(): { x: number; y: number } | undefined {
+    const canvas = this.host.root.querySelector<HTMLElement>('[data-jn-canvas]');
+    if (!canvas) return undefined;
+    const rect = canvas.getBoundingClientRect();
+    return this.worldPoint(canvas, rect.left + rect.width / 2, rect.top + rect.height / 3);
+  }
+
+  private pointerDown(event: PointerEvent): void {
+    if (event.button !== 0 || this.ui.journey.mode !== 'DIAGRAM') return;
+    const target = event.target as Element | null;
+    const canvas = target?.closest<HTMLElement>('[data-jn-canvas]');
+    if (!target || !canvas || target.closest('.jn-tools-v, .jn-float, .jn-insert, .jn-toast, .jn-legend'))
+      return;
+    const ui = this.ui;
+    const port = target.closest<HTMLElement>('[data-jn-port]');
+    if (port && this.publish) {
+      const from = ui.journey.graph.nodes.find((node) => node.id === port.dataset.jnPort);
+      const temp = canvas.querySelector<SVGPathElement>('.jn-temp');
+      if (!from || !temp) return;
+      const branch = port.dataset.branch === 'NO' ? 'NO' : port.dataset.branch === 'YES' ? 'YES' : undefined;
+      this.drag = {
+        kind: 'link',
+        from: from.id,
+        ...(branch ? { branch } : {}),
+        origin: portOf(from, branch),
+        temp,
+      };
+      event.preventDefault();
+      return;
+    }
+    const nodeElement = target.closest<HTMLElement>('.jn-node');
+    if (nodeElement?.dataset.jnNode) {
+      const node = ui.journey.graph.nodes.find((entry) => entry.id === nodeElement.dataset.jnNode);
+      if (!node || !this.publish) return;
+      this.drag = {
+        kind: 'node',
+        id: node.id,
+        x0: event.clientX,
+        y0: event.clientY,
+        nx: node.x,
+        ny: node.y,
+        moved: false,
+        el: nodeElement,
+      };
+      return;
+    }
+    if (target.closest('.jn-hit')) return;
+    const world = canvas.querySelector<HTMLElement>('.jn-world');
+    if (!world) return;
+    this.drag = {
+      kind: 'pan',
+      x0: event.clientX,
+      y0: event.clientY,
+      px: ui.panX,
+      py: ui.panY,
+      moved: false,
+      world,
+    };
+    canvas.classList.add('panning');
+  }
+
+  private pointerMove(event: PointerEvent): void {
+    const drag = this.drag;
+    if (!drag) return;
+    const ui = this.ui;
+    if (drag.kind === 'pan') {
+      const dx = event.clientX - drag.x0;
+      const dy = event.clientY - drag.y0;
+      if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+      drag.moved = true;
+      ui.panX = drag.px + dx;
+      ui.panY = drag.py + dy;
+      drag.world.style.transform = `translate(${String(ui.panX)}px,${String(ui.panY)}px) scale(${String(ui.zoom)})`;
+      return;
+    }
+    if (drag.kind === 'node') {
+      const dx = (event.clientX - drag.x0) / ui.zoom;
+      const dy = (event.clientY - drag.y0) / ui.zoom;
+      if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+      drag.moved = true;
+      drag.el.classList.add('dragging');
+      const x = Math.round(drag.nx + dx);
+      const y = Math.round(drag.ny + dy);
+      drag.el.style.left = `${String(x)}px`;
+      drag.el.style.top = `${String(y)}px`;
+      // Les connexions du nœud suivent, sans redessiner l'écran.
+      const graph = ui.journey.graph;
+      const moved = (node: JourneyNode): JourneyNode => (node.id === drag.id ? { ...node, x, y } : node);
+      for (const edge of graph.edges) {
+        if (edge.from !== drag.id && edge.to !== drag.id) continue;
+        const from = graph.nodes.find((node) => node.id === edge.from);
+        const to = graph.nodes.find((node) => node.id === edge.to);
+        if (!from || !to) continue;
+        const d = edgePath(moved(from), moved(to), edge.branch);
+        for (const path of this.host.root.querySelectorAll(`[data-jn-edge="${CSS.escape(edge.id)}"] path`))
+          path.setAttribute('d', d);
+      }
+      return;
+    }
+    const canvas =
+      drag.temp.closest<HTMLElement>('[data-jn-canvas]') ??
+      this.host.root.querySelector<HTMLElement>('[data-jn-canvas]');
+    if (!canvas) return;
+    const point = this.worldPoint(canvas, event.clientX, event.clientY);
+    drag.temp.setAttribute(
+      'd',
+      `M${String(drag.origin.x)} ${String(drag.origin.y)} L${String(point.x)} ${String(point.y)}`,
+    );
+    for (const element of this.host.root.querySelectorAll('.jn-node.target'))
+      element.classList.remove('target');
+    this.nodeAt(event.clientX, event.clientY)?.classList.add('target');
+  }
+
+  private nodeAt(clientX: number, clientY: number): HTMLElement | undefined {
+    const element = this.host.root.elementFromPoint(clientX, clientY);
+    return element?.closest<HTMLElement>('.jn-node') ?? undefined;
+  }
+
+  private pointerUp(event: PointerEvent): void {
+    const drag = this.drag;
+    if (!drag) return;
+    this.drag = undefined;
+    const ui = this.ui;
+    if (drag.kind === 'pan') {
+      this.host.root.querySelector('[data-jn-canvas]')?.classList.remove('panning');
+      if (!drag.moved && ui.selected) {
+        ui.selected = undefined;
+        this.host.paint();
+      }
+      return;
+    }
+    if (drag.kind === 'node') {
+      drag.el.classList.remove('dragging');
+      if (!drag.moved) return;
+      const x = drag.nx + (event.clientX - drag.x0) / ui.zoom;
+      const y = drag.ny + (event.clientY - drag.y0) / ui.zoom;
+      placeNode(ui, drag.id, x, y);
+      ui.selected = { kind: 'node', id: drag.id };
+      // Une position ne change pas la logique : pas de nouvelle vérification.
+      this.host.paint();
+      return;
+    }
+    drag.temp.setAttribute('d', '');
+    const target = this.nodeAt(event.clientX, event.clientY);
+    for (const element of this.host.root.querySelectorAll('.jn-node.target'))
+      element.classList.remove('target');
+    const to = target?.dataset.jnNode;
+    if (!to || to === drag.from) return;
+    const refused = connect(ui, drag.from, to, drag.branch);
+    if (refused) {
+      ui.error = refused;
+      this.host.paint();
+      return;
+    }
+    this.changed();
+  }
+
+  private cancelDrag(): void {
+    const drag = this.drag;
+    this.drag = undefined;
+    if (drag?.kind === 'link') drag.temp.setAttribute('d', '');
+    if (drag) this.host.paint();
+  }
+
+  private wheel(event: WheelEvent): void {
+    if (!(event.ctrlKey || event.metaKey)) return;
+    const canvas = (event.target as Element | null)?.closest<HTMLElement>('[data-jn-canvas]');
+    if (!canvas) return;
+    event.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    this.zoomBy(event.deltaY < 0 ? 1.1 : 1 / 1.1, {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    });
+  }
+
+  /** Zoome autour d'un point de la vue (le centre par défaut). */
+  private zoomBy(factor: number, around?: { x: number; y: number }): void {
+    const ui = this.ui;
+    const canvas = this.host.root.querySelector<HTMLElement>('[data-jn-canvas]');
+    const point = around ?? { x: (canvas?.clientWidth ?? 600) / 2, y: (canvas?.clientHeight ?? 400) / 2 };
+    const zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, ui.zoom * factor));
+    const wx = (point.x - ui.panX) / ui.zoom;
+    const wy = (point.y - ui.panY) / ui.zoom;
+    ui.zoom = zoom;
+    ui.panX = point.x - wx * zoom;
+    ui.panY = point.y - wy * zoom;
+    this.host.paint();
+  }
+
+  /** Ajuste la vue au diagramme entier. */
+  fit(): void {
+    const ui = this.ui;
+    const canvas = this.host.root.querySelector<HTMLElement>('[data-jn-canvas]');
+    if (!canvas || ui.journey.graph.nodes.length === 0) return;
+    const box = bounds(ui.journey.graph);
+    const width = Math.max(1, box.maxX - box.minX);
+    const height = Math.max(1, box.maxY - box.minY);
+    const zoom = Math.max(
+      ZOOM_MIN,
+      Math.min(1, (canvas.clientWidth - 80) / width, (canvas.clientHeight - 90) / height),
+    );
+    ui.zoom = Math.round(zoom * 100) / 100;
+    ui.panX = Math.round((canvas.clientWidth - width * ui.zoom) / 2 - box.minX * ui.zoom);
+    ui.panY = Math.round(Math.max(48, (canvas.clientHeight - height * ui.zoom) / 2) - box.minY * ui.zoom);
+    this.host.paint();
+  }
+}
