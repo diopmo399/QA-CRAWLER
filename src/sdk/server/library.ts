@@ -509,6 +509,67 @@ export async function newBlock(
   return blockNamed(projectDir, name);
 }
 
+/**
+ * DUPLIQUER un bloc : un nouveau bloc, version 1, avec les mêmes étapes, le même jeu de données, le même contrat
+ * déclaré et les mêmes déclarations de données (libellés, types, sens). Le bloc d'origine ne change pas ; aucun
+ * parcours ne référence la copie. La provenance dit d'où elle vient (bloc et version).
+ */
+export function duplicateBlock(
+  projectDir: string,
+  source: string,
+  input: { name: unknown; description?: string },
+): Promise<LibraryBlockView> {
+  return withLock(projectDir, async () => {
+    const { root, entries } = await flowEntries(projectDir);
+    const registry = await readRegistry(projectDir);
+    const entry = entries.find((candidate) => candidate.name === source);
+    if (!entry || entry.flow.reusable !== true) throw new LibraryError(`no block named "${source}"`, 404);
+    // Un bloc pas encore suivi par le registre (déposé dans le dossier des flows) : sa version présente.
+    const record = registry.blocks[source] ?? {
+      version: (await blockNamed(projectDir, source)).version,
+    };
+    const name = freeName(entries, input.name);
+    const steps = stepsOf(entry.flow);
+    const description =
+      input.description?.trim() ||
+      (typeof entry.flow.description === 'string' ? entry.flow.description : undefined);
+    const created = await newBlock(
+      projectDir,
+      root,
+      {
+        name,
+        ...(description ? { description } : {}),
+        reusable: true,
+        ...(typeof entry.flow.startAt === 'string' ? { startAt: entry.flow.startAt } : {}),
+        steps,
+      },
+      await testDataOf(entry),
+      {
+        kind: 'scenario',
+        name: source,
+        transformations: [`duplicated from the block "${source}" (v${String(record.version)})`],
+      },
+      'contract' in record && record.contract ? { contract: record.contract } : {},
+    );
+    // Les déclarations des données suivent la copie (la même définition, version comprise) ; l'historique
+    // dit d'où elle vient.
+    const after = await readRegistry(projectDir);
+    const copy = after.blocks[name];
+    if (!copy) return created;
+    if ('fields' in record && record.fields && Object.keys(record.fields).length > 0)
+      copy.fields = structuredClone(record.fields);
+    copy.history = [
+      {
+        version: 1,
+        ...(copy.createdAt ? { at: copy.createdAt } : {}),
+        change: `duplicated from the block "${source}" (v${String(record.version)})`,
+      },
+    ];
+    await commitFiles([registryFile(projectDir, after)]);
+    return blockNamed(projectDir, name);
+  });
+}
+
 /** Un scénario devient un bloc de la bibliothèque (ses étapes et ses données sont recopiées). */
 export function addScenarioToLibrary(
   projectDir: string,

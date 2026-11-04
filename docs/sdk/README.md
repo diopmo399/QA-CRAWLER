@@ -268,80 +268,82 @@ const reports = await qa.reports.list(project.id);
 const link = await qa.reports.link(project.id, 'recording', 'ouvrir-un-utilisateur');
 ```
 
-| Méthode                                                    | Route                                                            |
-| ---------------------------------------------------------- | ---------------------------------------------------------------- |
-| `recordings.start(projectId, input)`                       | `POST /api/projects/:id/recordings` (202)                        |
-| `recordings.list(projectId)`                               | `GET /api/projects/:id/recordings`                               |
-| `recordings.get(projectId, name)`                          | `GET /api/projects/:id/recordings/:name`                         |
-| `recordings.stop(projectId, name)`                         | `POST /api/projects/:id/recordings/:name/stop`                   |
-| `recordings.subscribe(projectId, name, cb)`                | `GET /api/projects/:id/recordings/:name/events` (SSE)            |
-| `recordings.flow(projectId, name)`                         | `GET /api/projects/:id/recordings/:name/flow`                    |
-| `recordings.studio(projectId, name)`                       | `GET /api/projects/:id/recordings/:name/studio`                  |
-| `recordings.pause/resume/undo(projectId, name)`            | `POST /api/projects/:id/recordings/:name/{pause,resume,undo}`    |
-| `recordings.checkpoint(projectId, name, label)`            | `POST /api/projects/:id/recordings/:name/checkpoint`             |
-| `recordings.resolve/ignore(projectId, name, …)`            | `POST /api/projects/:id/recordings/:name/{resolve,ignore}`       |
-| `recordings.removeStep(projectId, name, step)`             | `POST /api/projects/:id/recordings/:name/steps/remove`           |
-| `recordings.replay(projectId, name)`                       | `POST /api/projects/:id/recordings/:name/replay` (202)           |
-| `recordings.replayStatus(projectId, name)`                 | `GET /api/projects/:id/recordings/:name/replay`                  |
-| `groups.proposals/acceptProposals(…)`                      | `GET`/`POST /api/projects/:id/recordings/:name/groups/proposals` |
-| `groups.checks/addCheck(…)`                                | `GET`/`POST /api/projects/:id/recordings/:name/groups/checks`    |
-| `recordings.intents/reviewIntent(…)`                       | `GET`/`POST /api/projects/:id/recordings/:name/intents`          |
-| `recordings.rowSource/editRow(…)`                          | `GET`/`POST /api/projects/:id/recordings/:name/steps/row`        |
-| `recordings.restoreTarget(…)`                              | `POST /api/projects/:id/recordings/:name/steps/restore`          |
-| `corrections.start/get(projectId, name, …)`                | `POST`/`GET /api/projects/:id/recordings/:name/correction`       |
-| `corrections.pick/apply/resume/close(…)`                   | `POST /api/projects/:id/recordings/:name/correction/<action>`    |
-| `library.list/add(projectId, …)`                           | `GET`/`POST /api/projects/:id/library`                           |
-| `library.remove(projectId, name)`                          | `POST /api/projects/:id/library/:name/remove`                    |
-| `library.preview(projectId, scenario)`                     | `GET /api/projects/:id/library/preview?scenario=…`               |
-| `library.check(projectId, input)`                          | `POST /api/projects/:id/library/check`                           |
-| `library.declareContract(projectId, name, c)`              | `PUT /api/projects/:id/library/:name/contract`                   |
-| `library.validateVersion(projectId, name)`                 | `POST /api/projects/:id/library/:name/version`                   |
-| `library.insertWait(projectId, name, input)`               | `POST /api/projects/:id/library/:name/wait`                      |
-| `library.declareFields(projectId, name, fields, options?)` | `PUT /api/projects/:id/library/:name/fields`                     |
-| `library.addOutput(projectId, name, input)`                | `POST /api/projects/:id/library/:name/outputs`                   |
-| `journeys.preview(projectId, journey)`                     | `POST /api/projects/:id/journeys/preview`                        |
-| `journeys.traceability(projectId, journey, { run? })`      | `POST /api/projects/:id/journeys/traceability`                   |
-| `journeys.simulate(projectId, journey, options)`           | `POST /api/projects/:id/journeys/simulate`                       |
-| `library.drift(projectId)`                                 | `GET /api/projects/:id/library/drift`                            |
-| `library.details(projectId, name)`                         | `GET /api/projects/:id/library/:name`                            |
-| `library.planExtraction(projectId, rec, input)`            | `POST /api/projects/:id/recordings/:name/library/plan`           |
-| `library.publishExtraction(projectId, rec, input)`         | `POST /api/projects/:id/recordings/:name/library`                |
-| `library.compareSource(projectId, name)`                   | `GET /api/projects/:id/library/:name/source`                     |
-| `library.updateFromSource(projectId, name)`                | `POST /api/projects/:id/library/:name/source`                    |
-| `scenarios.checkComposition(projectId, input)`             | `POST /api/projects/:id/scenarios/compose/check` (`VIEW`)        |
-| `scenarios.compose(projectId, input)`                      | `POST /api/projects/:id/scenarios/compose` (201)                 |
-| `scenarios.insert(projectId, scenario, input)`             | `POST /api/projects/:id/scenarios/:name/insert`                  |
-| `journeys.list(projectId)`                                 | `GET /api/projects/:id/journeys`                                 |
-| `journeys.open(projectId, name)`                           | `GET /api/projects/:id/journeys/open?name=`                      |
-| `journeys.save(projectId, journey, options?)`              | `POST /api/projects/:id/journeys`                                |
-| `journeys.check(projectId, journey)`                       | `POST /api/projects/:id/journeys/check` (`VIEW`)                 |
-| `journeys.publish(projectId, name, options?)`              | `POST /api/projects/:id/journeys/publish`                        |
-| `journeys.remove(projectId, name)`                         | `POST /api/projects/:id/journeys/remove`                         |
-| `journeys.toBlock(projectId, name, input)`                 | `POST /api/projects/:id/journeys/to-block` (201)                 |
-| `scenarios.acceptBlocks(projectId, scenario)`              | `POST /api/projects/:id/scenarios/:name/accept`                  |
-| `assertions.list(projectId, name)`                         | `GET /api/projects/:id/recordings/:name/assertions`              |
-| `data.get(projectId, name)`                                | `GET /api/projects/:id/recordings/:name/data`                    |
-| `data.bind(projectId, name, input)`                        | `POST /api/projects/:id/recordings/:name/data/bindings`          |
-| `assertions.decide(projectId, name, id, input)`            | `POST /api/projects/:id/recordings/:name/assertions/:proposalId` |
-| `groups.list(projectId, name)`                             | `GET /api/projects/:id/recordings/:name/groups`                  |
-| `groups.edit(projectId, name, command)`                    | `POST /api/projects/:id/recordings/:name/groups`                 |
-| `generation.run(projectId, name, input)`                   | `POST /api/projects/:id/recordings/:name/generation`             |
-| `generation.view(projectId, name)`                         | `GET /api/projects/:id/recordings/:name/generation`              |
-| `generation.execute(projectId, name, input)`               | `POST /api/projects/:id/recordings/:name/test-runs` (202)        |
-| `generation.runOf(projectId, name, runId)`                 | `GET /api/projects/:id/recordings/:name/test-runs/:runId`        |
-| `generation.cancel(projectId, name, runId)`                | `POST …/test-runs/:runId/cancel` (409 une fois terminée)         |
-| `generation.reportLink(projectId, name, runId)`            | `POST …/test-runs/:runId/report-links` (rejeu YAML, Gherkin)     |
-| `generation.editFile(projectId, name, input)`              | `PUT /api/projects/:id/recordings/:name/generation/file`         |
-| `generation.restoreFile(projectId, name, input)`           | `POST /api/projects/:id/recordings/:name/generation/restore`     |
-| `generation.checkFile(projectId, name, input)`             | `POST /api/projects/:id/recordings/:name/generation/check`       |
-| `generation.original(projectId, name, path)`               | `GET /api/projects/:id/recordings/:name/generation/original`     |
-| `generation.preview(projectId, name, input)`               | `POST /api/projects/:id/recordings/:name/generation/preview`     |
-| `generation.runEvents(projectId, name, runId, …)`          | `GET …/test-runs/:runId/events` (flux SSE, reprise `?after=`)    |
-| `generation.runLogs(projectId, name, runId, fmt)`          | `GET …/test-runs/:runId/logs?format=json` ou `text`              |
-| `graph.exploration(id)`                                    | `GET /api/explorations/:id/graph` (409 avant la fin)             |
-| `graph.of(projectId, kind, name)`                          | `GET /api/projects/:id/reports/:kind/:name/graph`                |
-| `reports.list(projectId)`                                  | `GET /api/projects/:id/reports`                                  |
-| `reports.link(projectId, kind, name)`                      | `POST /api/projects/:id/reports/:kind/:name/links`               |
+| Méthode                                                      | Route                                                            |
+| ------------------------------------------------------------ | ---------------------------------------------------------------- |
+| `recordings.start(projectId, input)`                         | `POST /api/projects/:id/recordings` (202)                        |
+| `recordings.list(projectId)`                                 | `GET /api/projects/:id/recordings`                               |
+| `recordings.get(projectId, name)`                            | `GET /api/projects/:id/recordings/:name`                         |
+| `recordings.stop(projectId, name)`                           | `POST /api/projects/:id/recordings/:name/stop`                   |
+| `recordings.subscribe(projectId, name, cb)`                  | `GET /api/projects/:id/recordings/:name/events` (SSE)            |
+| `recordings.flow(projectId, name)`                           | `GET /api/projects/:id/recordings/:name/flow`                    |
+| `recordings.studio(projectId, name)`                         | `GET /api/projects/:id/recordings/:name/studio`                  |
+| `recordings.pause/resume/undo(projectId, name)`              | `POST /api/projects/:id/recordings/:name/{pause,resume,undo}`    |
+| `recordings.checkpoint(projectId, name, label)`              | `POST /api/projects/:id/recordings/:name/checkpoint`             |
+| `recordings.resolve/ignore(projectId, name, …)`              | `POST /api/projects/:id/recordings/:name/{resolve,ignore}`       |
+| `recordings.removeStep(projectId, name, step)`               | `POST /api/projects/:id/recordings/:name/steps/remove`           |
+| `recordings.replay(projectId, name)`                         | `POST /api/projects/:id/recordings/:name/replay` (202)           |
+| `recordings.replayStatus(projectId, name)`                   | `GET /api/projects/:id/recordings/:name/replay`                  |
+| `groups.proposals/acceptProposals(…)`                        | `GET`/`POST /api/projects/:id/recordings/:name/groups/proposals` |
+| `groups.checks/addCheck(…)`                                  | `GET`/`POST /api/projects/:id/recordings/:name/groups/checks`    |
+| `recordings.intents/reviewIntent(…)`                         | `GET`/`POST /api/projects/:id/recordings/:name/intents`          |
+| `recordings.rowSource/editRow(…)`                            | `GET`/`POST /api/projects/:id/recordings/:name/steps/row`        |
+| `recordings.restoreTarget(…)`                                | `POST /api/projects/:id/recordings/:name/steps/restore`          |
+| `corrections.start/get(projectId, name, …)`                  | `POST`/`GET /api/projects/:id/recordings/:name/correction`       |
+| `corrections.pick/apply/resume/close(…)`                     | `POST /api/projects/:id/recordings/:name/correction/<action>`    |
+| `library.list/add(projectId, …)`                             | `GET`/`POST /api/projects/:id/library`                           |
+| `library.remove(projectId, name)`                            | `POST /api/projects/:id/library/:name/remove`                    |
+| `library.preview(projectId, scenario)`                       | `GET /api/projects/:id/library/preview?scenario=…`               |
+| `library.check(projectId, input)`                            | `POST /api/projects/:id/library/check`                           |
+| `library.declareContract(projectId, name, c)`                | `PUT /api/projects/:id/library/:name/contract`                   |
+| `library.validateVersion(projectId, name)`                   | `POST /api/projects/:id/library/:name/version`                   |
+| `library.insertWait(projectId, name, input)`                 | `POST /api/projects/:id/library/:name/wait`                      |
+| `library.declareFields(projectId, name, fields, options?)`   | `PUT /api/projects/:id/library/:name/fields`                     |
+| `library.addOutput(projectId, name, input)`                  | `POST /api/projects/:id/library/:name/outputs`                   |
+| `journeys.preview(projectId, journey)`                       | `POST /api/projects/:id/journeys/preview`                        |
+| `journeys.traceability(projectId, journey, { run? })`        | `POST /api/projects/:id/journeys/traceability`                   |
+| `journeys.simulate(projectId, journey, options)`             | `POST /api/projects/:id/journeys/simulate`                       |
+| `library.drift(projectId)`                                   | `GET /api/projects/:id/library/drift`                            |
+| `library.details(projectId, name)`                           | `GET /api/projects/:id/library/:name`                            |
+| `library.activity(projectId, name)`                          | `GET /api/projects/:id/library/:name/activity`                   |
+| `library.duplicate(projectId, name, { name, description? })` | `POST /api/projects/:id/library/:name/duplicate`                 |
+| `library.planExtraction(projectId, rec, input)`              | `POST /api/projects/:id/recordings/:name/library/plan`           |
+| `library.publishExtraction(projectId, rec, input)`           | `POST /api/projects/:id/recordings/:name/library`                |
+| `library.compareSource(projectId, name)`                     | `GET /api/projects/:id/library/:name/source`                     |
+| `library.updateFromSource(projectId, name)`                  | `POST /api/projects/:id/library/:name/source`                    |
+| `scenarios.checkComposition(projectId, input)`               | `POST /api/projects/:id/scenarios/compose/check` (`VIEW`)        |
+| `scenarios.compose(projectId, input)`                        | `POST /api/projects/:id/scenarios/compose` (201)                 |
+| `scenarios.insert(projectId, scenario, input)`               | `POST /api/projects/:id/scenarios/:name/insert`                  |
+| `journeys.list(projectId)`                                   | `GET /api/projects/:id/journeys`                                 |
+| `journeys.open(projectId, name)`                             | `GET /api/projects/:id/journeys/open?name=`                      |
+| `journeys.save(projectId, journey, options?)`                | `POST /api/projects/:id/journeys`                                |
+| `journeys.check(projectId, journey)`                         | `POST /api/projects/:id/journeys/check` (`VIEW`)                 |
+| `journeys.publish(projectId, name, options?)`                | `POST /api/projects/:id/journeys/publish`                        |
+| `journeys.remove(projectId, name)`                           | `POST /api/projects/:id/journeys/remove`                         |
+| `journeys.toBlock(projectId, name, input)`                   | `POST /api/projects/:id/journeys/to-block` (201)                 |
+| `scenarios.acceptBlocks(projectId, scenario)`                | `POST /api/projects/:id/scenarios/:name/accept`                  |
+| `assertions.list(projectId, name)`                           | `GET /api/projects/:id/recordings/:name/assertions`              |
+| `data.get(projectId, name)`                                  | `GET /api/projects/:id/recordings/:name/data`                    |
+| `data.bind(projectId, name, input)`                          | `POST /api/projects/:id/recordings/:name/data/bindings`          |
+| `assertions.decide(projectId, name, id, input)`              | `POST /api/projects/:id/recordings/:name/assertions/:proposalId` |
+| `groups.list(projectId, name)`                               | `GET /api/projects/:id/recordings/:name/groups`                  |
+| `groups.edit(projectId, name, command)`                      | `POST /api/projects/:id/recordings/:name/groups`                 |
+| `generation.run(projectId, name, input)`                     | `POST /api/projects/:id/recordings/:name/generation`             |
+| `generation.view(projectId, name)`                           | `GET /api/projects/:id/recordings/:name/generation`              |
+| `generation.execute(projectId, name, input)`                 | `POST /api/projects/:id/recordings/:name/test-runs` (202)        |
+| `generation.runOf(projectId, name, runId)`                   | `GET /api/projects/:id/recordings/:name/test-runs/:runId`        |
+| `generation.cancel(projectId, name, runId)`                  | `POST …/test-runs/:runId/cancel` (409 une fois terminée)         |
+| `generation.reportLink(projectId, name, runId)`              | `POST …/test-runs/:runId/report-links` (rejeu YAML, Gherkin)     |
+| `generation.editFile(projectId, name, input)`                | `PUT /api/projects/:id/recordings/:name/generation/file`         |
+| `generation.restoreFile(projectId, name, input)`             | `POST /api/projects/:id/recordings/:name/generation/restore`     |
+| `generation.checkFile(projectId, name, input)`               | `POST /api/projects/:id/recordings/:name/generation/check`       |
+| `generation.original(projectId, name, path)`                 | `GET /api/projects/:id/recordings/:name/generation/original`     |
+| `generation.preview(projectId, name, input)`                 | `POST /api/projects/:id/recordings/:name/generation/preview`     |
+| `generation.runEvents(projectId, name, runId, …)`            | `GET …/test-runs/:runId/events` (flux SSE, reprise `?after=`)    |
+| `generation.runLogs(projectId, name, runId, fmt)`            | `GET …/test-runs/:runId/logs?format=json` ou `text`              |
+| `graph.exploration(id)`                                      | `GET /api/explorations/:id/graph` (409 avant la fin)             |
+| `graph.of(projectId, kind, name)`                            | `GET /api/projects/:id/reports/:kind/:name/graph`                |
+| `reports.list(projectId)`                                    | `GET /api/projects/:id/reports`                                  |
+| `reports.link(projectId, kind, name)`                        | `POST /api/projects/:id/reports/:kind/:name/links`               |
 
 **Enregistrement** : `RECORDING → PROCESSING → COMPLETED | FAILED` ; `STORED` désigne un
 enregistrement lu sur disque (écrit par la CLI, ou avant le démarrage du serveur). Le nom donné
@@ -553,6 +555,15 @@ capturée (`CAPTURED`), variable d'itération (`ITERATION`) ou lecture (`USED`).
   est notée `fixed: true` (sans `source`).
 - **Rétention** : sans `testData.traceValues: true`, les événements, leurs `valueId` et leurs `source` sont
   gardés sans les valeurs (`withheld: true`) : la traçabilité reste complète, seules les valeurs manquent.
+
+**Activité d'un bloc** (`library.activity`, `src/sdk/server/library-activity.ts`) : rien n'est exécuté. La dernière
+exécution réelle qui a rejoué le bloc (un scénario qui le rejoue, ou une étape « run Bloc › … », par exemple une
+exécution de simulation d'un parcours), lue parmi les 30 plus récentes, et les événements de sa trace pour ce
+bloc, avec la même politique de valeurs que le détail d'exécution. Sans exécution : `last` absent.
+
+**Dupliquer un bloc** (`library.duplicate`) : un nouveau bloc, version 1, avec les mêmes étapes, le même jeu de
+données, le même contrat déclaré et les mêmes déclarations de données ; l'historique et la provenance disent de
+quel bloc et de quelle version il vient. Le bloc d'origine ne change pas. Droit : publier.
 
 **Traçabilité d'un parcours** (`journeys.traceability(projectId, journey, { run? })`,
 `src/sdk/server/library-traceability.ts`) : rien n'est exécuté.
@@ -1329,6 +1340,16 @@ Les compteurs en direct (`applyEvent`) sont remplacés par les statistiques du r
 - Le Run Monitor suit les flows et les étapes, pas les groupes métier (absents des événements
   d'exploration).
 - La comparaison ne compare pas les captures d'écran de deux exécutions.
+- Catalogue de blocs :
+  - un bloc ne s'exécute pas seul : la fiche n'a pas d'« Exécuter » (ajouter le bloc à un parcours, puis
+    simuler le parcours) ;
+  - « Éditer » modifie le contrat du bloc ; ses étapes se modifient par les actions existantes (insérer une
+    attente, ajouter une sortie), pas dans la fiche ;
+  - les catégories d'un bloc sont son origine et ses groupes métier (aucune étiquette libre) ;
+  - deux noms de blocs qui ne diffèrent que par des chiffres partagent un dossier : le second est refusé (409) ;
+  - l'activité d'un bloc ne lit que les 30 exécutions les plus récentes ;
+  - la compatibilité avec le parcours ouvert est indicative (d'après les contrats) : la vérification du
+    parcours, par chemin, reste la référence.
 - Traçabilité :
   - un bloc répété plusieurs fois dans un parcours (hors boucle) : ses événements ne sont pas rattachés à une
     instance précise ;

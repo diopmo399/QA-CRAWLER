@@ -27,6 +27,8 @@ import {
   addScenarioToLibrary,
   checkScenarioBlock,
   blockDetails,
+  blockNamed,
+  duplicateBlock,
   checkCompositionOf,
   compareWithSource,
   composeScenario,
@@ -44,6 +46,7 @@ import {
   validateVersion,
   insertWaitInBlock,
 } from './library.js';
+import { blockActivity } from './library-activity.js';
 import { revisionOfText, type ExtractionSource } from './library-extract.js';
 import {
   checkJourney,
@@ -2440,6 +2443,25 @@ async function handleLibrary(
   }
   if (item !== undefined && action === undefined && method === 'GET') {
     json(await libraryCall(() => blockDetails(project.dir, decodeURIComponent(item))));
+    return;
+  }
+  if (item !== undefined && action === 'activity' && method === 'GET') {
+    // La dernière exécution réelle qui a rejoué le bloc et sa trace (rien n'est exécuté).
+    const block = await libraryCall(() => blockNamed(project.dir, decodeURIComponent(item)));
+    json(await blockActivity(project.id, path.join(project.dir, REPORTS_DIR), block));
+    return;
+  }
+  if (item !== undefined && action === 'duplicate' && method === 'POST') {
+    const body = await readJson(request);
+    json(
+      await libraryCall(() =>
+        duplicateBlock(project.dir, decodeURIComponent(item), {
+          name: body.name,
+          ...(typeof body.description === 'string' ? { description: body.description.slice(0, 500) } : {}),
+        }),
+      ),
+      201,
+    );
     return;
   }
   const loadSource = (recording: string): Promise<ExtractionSource | undefined> =>

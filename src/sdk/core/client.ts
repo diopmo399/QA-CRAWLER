@@ -69,7 +69,9 @@ import type {
   BlockSourceComparison,
   ExtractionInput,
   ExtractionPlan,
+  LibraryBlockActivity,
   LibraryBlockDetails,
+  LibraryDuplicateInput,
   OverviewView,
   ProjectDetail,
   ProjectSummary,
@@ -365,6 +367,10 @@ export interface QaCrawlerClient {
     drift(projectId: string): Promise<CompositionDrift[]>;
     /** Le détail d'un bloc : ses étapes en mots, ses groupes internes, ses données (sans valeur). */
     details(projectId: string, name: string): Promise<LibraryBlockDetails>;
+    /** La dernière exécution réelle qui a rejoué le bloc, et ce que sa trace a observé pour lui. */
+    activity(projectId: string, name: string): Promise<LibraryBlockActivity>;
+    /** Un nouveau bloc copié de celui-ci (étapes, données, contrat, déclarations), version 1. */
+    duplicate(projectId: string, name: string, input: LibraryDuplicateInput): Promise<LibraryBlockView>;
     /**
      * LE PLAN d'une publication de groupes métier d'un enregistrement (un bloc par groupe, ou un bloc
      * composé) : étapes, données, dépendances, contrat, validation. Rien n'est écrit.
@@ -1135,6 +1141,10 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
       drift: (projectId) => request('GET', `${project(projectId)}/library/drift`),
       details: (projectId, name) =>
         request('GET', `${project(projectId)}/library/${encodeURIComponent(name)}`),
+      activity: (projectId, name) =>
+        request('GET', `${project(projectId)}/library/${encodeURIComponent(name)}/activity`),
+      duplicate: (projectId, name, input) =>
+        request('POST', `${project(projectId)}/library/${encodeURIComponent(name)}/duplicate`, input),
       planExtraction: (projectId, name, input) =>
         request('POST', `${recording(projectId, name)}/library/plan`, input),
       publishExtraction: (projectId, name, input) =>

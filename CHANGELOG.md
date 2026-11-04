@@ -32,6 +32,24 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Catalogue de blocs et fiche détaillée** :
+  - **Catalogue** : cartes avec le statut réel du contrat, le nombre d'étapes, d'entrées et de sorties,
+    l'origine et les groupes métier, la date de modification si elle est connue, « Ouvrir » ; pagination (12 à
+    96 blocs par page, gardé par le navigateur) ; états chargement, erreur (Réessayer), aucun résultat.
+  - **Fiche à côté du catalogue** : ouverte depuis une carte, elle laisse la recherche, les critères, la page et
+    la sélection en place (gardées aussi en passant par le compositeur).
+  - **Actions de la fiche** : Prévisualiser (l'aperçu statique réel d'un parcours fait de ce seul bloc), Éditer
+    (le contrat), Dupliquer (`library.duplicate`), Ajouter au parcours. Pas d'« Exécuter » : un bloc ne se joue
+    pas seul.
+  - **Onglets** avec leurs nombres réels, dont un onglet Traçabilité : le graphe entrées → bloc → sorties du
+    contrat, et pour chaque donnée sa provenance, ses étapes, ses producteurs et consommateurs, en trois
+    couches séparées (déclarée, détectée, observée). Une donnée citée par `${testData:…}` reste une entrée ; une
+    valeur fixe du jeu n'est jamais dite « générée ».
+  - **Dernière exécution** et valeurs observées : la vraie exécution qui a rejoué le bloc (`library.activity`),
+    avec un lien vers son rapport.
+  - **Compatibilité avec le parcours ouvert**, avant l'ajout : chaque entrée fournie, ambiguë, prise dans le
+    jeu du bloc, facultative ou manquante, et une version déjà utilisée différente.
+
 - **Traçabilité des données entre blocs** :
   - **Événements de la trace** : chaque événement a un identifiant (`d1`, `d2`…) et une occurrence de valeur
     (`company.name@1`), commune à sa production et à toutes ses utilisations. Une utilisation pointe vers

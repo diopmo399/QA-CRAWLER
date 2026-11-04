@@ -4,6 +4,8 @@ import { fieldsText } from './dashboard-library-fields.js';
 import { newOutputForm, outputRequest, outputText, type OutputForm } from './dashboard-library-output.js';
 import { OUTPUT_SOURCES } from '../core/contracts.js';
 import { RECENT_MAX, type LibraryUi } from './dashboard-library.js';
+import { PAGE_SIZES } from './dashboard-library-catalog.js';
+import { journeyOfParts } from '../core/journey.js';
 import { SHEET_TABS, type SheetTab } from './dashboard-library-sheet.js';
 import { defaultWait, sanitizeWait } from '../core/wait.js';
 import { journeyText } from './dashboard-journey.js';
@@ -50,14 +52,22 @@ export class LibraryController {
     this.restoredFor = projectId;
     try {
       const raw = globalThis.localStorage.getItem(storageKey(projectId));
-      const saved = raw ? (JSON.parse(raw) as { recent?: unknown; layout?: unknown }) : {};
+      const saved = raw
+        ? (JSON.parse(raw) as { recent?: unknown; layout?: unknown; pageSize?: unknown })
+        : {};
       this.ui.recent = Array.isArray(saved.recent)
         ? saved.recent.filter((entry): entry is string => typeof entry === 'string').slice(0, RECENT_MAX)
         : [];
       if (saved.layout === 'grid' || saved.layout === 'list') this.ui.layout = saved.layout;
+      if (PAGE_SIZES.some((size) => size === saved.pageSize)) this.ui.pageSize = saved.pageSize as number;
     } catch {
       this.ui.recent = [];
     }
+  }
+
+  /** Les préférences du catalogue (récents, affichage, blocs par page), gardées par le navigateur. */
+  savePrefs(): void {
+    this.save();
   }
 
   private save(): void {
@@ -66,7 +76,7 @@ export class LibraryController {
     try {
       globalThis.localStorage.setItem(
         storageKey(projectId),
-        JSON.stringify({ recent: this.ui.recent, layout: this.ui.layout }),
+        JSON.stringify({ recent: this.ui.recent, layout: this.ui.layout, pageSize: this.ui.pageSize }),
       );
     } catch {
       // Stockage indisponible (navigation privée) : la préférence vaut pour la session.
@@ -92,7 +102,8 @@ export class LibraryController {
   open(block: string, tab: SheetTab = 'overview'): void {
     const ui = this.ui;
     if (!ui.blocks?.some((entry) => entry.name === block)) return;
-    ui.sheet = { block, tab };
+    // Depuis le catalogue (ou sa fiche ancrée) : la fiche reste à côté du catalogue.
+    ui.sheet = { block, tab, ...(ui.tab === 'catalog' ? { docked: true } : {}) };
     ui.confirmRemove = undefined;
     ui.contract = undefined;
     ui.error = undefined;
@@ -102,6 +113,79 @@ export class LibraryController {
     this.host.paint();
     this.focus(`#lib-tab-${tab}`);
     void this.loadDetails();
+    void this.loadActivity();
+  }
+
+  /** La dernière exécution réelle qui a rejoué le bloc, et ce que sa trace a observé (rien n'est exécuté). */
+  async loadActivity(): Promise<void> {
+    const sheet = this.ui.sheet;
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!sheet || !api || !projectId) return;
+    const block = sheet.block;
+    sheet.activityLoading = true;
+    sheet.activityError = undefined;
+    try {
+      const activity = await api.library.activity(projectId, block);
+      if (this.ui.sheet?.block !== block) return;
+      this.ui.sheet.activity = activity;
+    } catch (error) {
+      if (this.ui.sheet?.block !== block) return;
+      this.ui.sheet.activityError = message(error);
+    }
+    this.ui.sheet.activityLoading = false;
+    this.paintKeepingFocus(`#lib-tab-${this.ui.sheet.tab}`);
+  }
+
+  /** « Prévisualiser » : l'aperçu statique réel d'un parcours fait de ce seul bloc (rien n'est exécuté). */
+  private async preview(): Promise<void> {
+    const sheet = this.ui.sheet;
+    const api = this.host.api();
+    const projectId = this.projectId();
+    const block = this.ui.blocks?.find((entry) => entry.name === sheet?.block);
+    if (!sheet || !api || !projectId || !block || sheet.preview?.busy) return;
+    sheet.preview = { busy: true };
+    this.host.paint();
+    try {
+      const data = await api.journeys.preview(
+        projectId,
+        journeyOfParts(block.name, [{ block: block.name, version: block.version }]),
+      );
+      if (this.ui.sheet?.block === block.name) this.ui.sheet.preview = { data };
+    } catch (error) {
+      if (this.ui.sheet?.block === block.name) this.ui.sheet.preview = { error: message(error) };
+    }
+    this.paintKeepingFocus('[data-action="lib-preview-close"]');
+  }
+
+  /** « Dupliquer » : un nouveau bloc copié, puis sa fiche s'ouvre. */
+  async duplicate(): Promise<void> {
+    const sheet = this.ui.sheet;
+    const form = sheet?.duplicate;
+    const api = this.host.api();
+    const projectId = this.projectId();
+    if (!sheet || !form || !api || !projectId || form.busy) return;
+    const source = sheet.block;
+    form.busy = true;
+    form.error = undefined;
+    this.host.paint();
+    try {
+      const created = await api.library.duplicate(projectId, source, {
+        name: form.name.trim(),
+        ...(form.description.trim() ? { description: form.description.trim() } : {}),
+      });
+      await this.host.refresh();
+      this.open(created.name);
+      this.ui.notice =
+        this.host.state.t.locale === 'en' ? `“${created.name}” created.` : `« ${created.name} » créé.`;
+      this.host.paint();
+    } catch (error) {
+      if (this.ui.sheet?.duplicate) {
+        this.ui.sheet.duplicate.busy = false;
+        this.ui.sheet.duplicate.error = message(error);
+      }
+      this.paintKeepingFocus('[data-lib="dup.name"]');
+    }
   }
 
   async loadDetails(): Promise<void> {
@@ -437,6 +521,7 @@ export class LibraryController {
       }
       case 'lib-output-open':
         if (!sheet) return true;
+        sheet.tab = 'outputs';
         sheet.output = newOutputForm(sheet.details?.steps.length ?? 0);
         this.host.paint();
         this.focus('[data-lib="output.key"]');
@@ -480,6 +565,52 @@ export class LibraryController {
         this.focus(`#lib-tab-${tab}`);
         return true;
       }
+      case 'lib-page': {
+        const page = Number(target.dataset.page);
+        if (Number.isFinite(page) && page >= 1) ui.page = page;
+        this.host.paint();
+        this.focus(
+          `.lib-pager [data-page="${String(ui.page)}"][aria-current="page"], .lib-pager [data-action="lib-page"]`,
+        );
+        return true;
+      }
+      case 'lib-reload':
+        ui.error = undefined;
+        void this.host.refresh();
+        return true;
+      case 'lib-preview':
+        void this.preview();
+        return true;
+      case 'lib-preview-close':
+        if (sheet) sheet.preview = undefined;
+        this.host.paint();
+        this.focus('[data-action="lib-preview"]');
+        return true;
+      case 'lib-edit':
+        // Éditer : le contrat du bloc (entrées, sorties, conditions), comme le bouton de l'onglet Contrat.
+        // Le formulaire lui-même est ouvert par le tableau de bord (comme « Déclarer le contrat »).
+        if (sheet) sheet.tab = 'contract';
+        return false;
+      case 'lib-dup-open': {
+        if (!sheet) return true;
+        const text = this.host.state.t.locale === 'en' ? `${sheet.block} (copy)` : `${sheet.block} (copie)`;
+        sheet.duplicate = sheet.duplicate ? undefined : { name: text, description: '' };
+        this.host.paint();
+        this.focus(sheet.duplicate ? '[data-lib="dup.name"]' : '[data-action="lib-dup-open"]');
+        return true;
+      }
+      case 'lib-dup-cancel':
+        if (sheet) sheet.duplicate = undefined;
+        this.host.paint();
+        this.focus('[data-action="lib-dup-open"]');
+        return true;
+      case 'lib-trace-pick':
+        if (!sheet) return true;
+        sheet.traceKey = target.dataset.key;
+        sheet.tab = 'traceability';
+        this.host.paint();
+        this.focus(`[data-action="lib-trace-pick"][data-key="${CSS.escape(target.dataset.key ?? '')}"]`);
+        return true;
       case 'lib-layout':
         ui.layout = target.dataset.layout === 'list' ? 'list' : 'grid';
         this.save();
@@ -519,6 +650,8 @@ export class LibraryController {
   keydown(event: KeyboardEvent): boolean {
     const sheet = this.ui.sheet;
     if (!sheet || this.host.state.route.view !== 'library') return false;
+    // Une fiche ancrée au catalogue, cachée dans un autre onglet : Échap ne la ferme pas en secret.
+    if (sheet.docked && this.ui.tab !== 'catalog') return false;
     if (event.key === 'Escape') {
       this.close();
       return true;

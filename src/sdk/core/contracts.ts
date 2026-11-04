@@ -1776,6 +1776,35 @@ export interface LibraryBlockDetails {
   data: { key: string; strategy: string; detail?: string; dynamic: boolean }[];
 }
 
+/**
+ * L'ACTIVITÉ RÉELLE D'UN BLOC (`library.activity`) : la dernière exécution qui l'a rejoué (un scénario qui le
+ * rejoue, ou une étape « run Bloc › … », par exemple une exécution de simulation d'un parcours), et les
+ * événements de la trace des données rapportés pour ce bloc. Aucune exécution : `last` absent.
+ */
+export interface LibraryBlockActivity {
+  /** Le nombre d'exécutions récentes lues (les plus anciennes ne le sont pas). */
+  scanned: number;
+  last?: {
+    run: string;
+    createdAt: string;
+    verdict: ExecutionVerdict;
+    durationMs?: number;
+    scenarios?: string[];
+    simulation?: { journey: string; path: number };
+    environment?: { id: string; name: string };
+    /** Le rapport HTML du run (relatif au run). */
+    report?: string;
+  };
+  /** La trace de ce bloc dans cette exécution (même politique de valeurs que le détail d'exécution). */
+  events: (ExecutionDataTraceView & { flow: string })[];
+}
+
+/** DUPLIQUER un bloc : un nouveau bloc (version 1) avec les mêmes étapes, données, contrat et déclarations. */
+export interface LibraryDuplicateInput {
+  name: string;
+  description?: string;
+}
+
 export type LibraryAddInput =
   | { from: 'scenario'; scenario: string; name: string; description?: string; contract?: DeclaredContract }
   | { from: 'recording'; recording: string; groupId: string; name: string; description?: string };

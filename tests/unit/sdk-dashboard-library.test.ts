@@ -30,6 +30,9 @@ import { checkKey, declaredOf, emptyWizard, nameProblem } from '../../src/sdk/ui
 import { emptyRecordingsUi } from '../../src/sdk/ui/dashboard-recordings.js';
 import { emptyImportForm } from '../../src/sdk/ui/dashboard-requirements.js';
 import { activeNav, renderDashboard, type DashboardState } from '../../src/sdk/ui/dashboard-view.js';
+import { pageNumbers, pageOf } from '../../src/sdk/ui/dashboard-library-catalog.js';
+import { journeyCompat } from '../../src/sdk/ui/dashboard-library-insight.js';
+import type { ContractField, LibraryBlockActivity } from '../../src/sdk/core/contracts.js';
 
 /**
  * LA BIBLIOTHÈQUE DANS LE DASHBOARD (fonctions pures) : le catalogue (version, provenance, entrées et
@@ -223,26 +226,33 @@ describe('dashboard — scenario library', () => {
     expect(html).toContain('<h1>Bibliothèque de scénarios</h1>');
     expect(html).toContain('Demandes · 3 bloc(s) réutilisable(s)');
     expect(html).toContain('data-action="lib-panel-open"');
-    // Un contrat valide : une coche discrète ; à revalider : une pastille.
+    // La carte : nom, version, statut réel du contrat (une coche et son libellé quand il est valide).
     expect(html).toMatch(
-      /<h3><button class="lib-title" data-action="lib-open" data-block="Bloc connexion" aria-haspopup="dialog">Bloc connexion<\/button><\/h3><span class="lib-ver"[^>]*>v2<\/span><span class="lib-ok" title="Contrat valide">/,
+      /<h3><button class="lib-title" data-action="lib-open" data-block="Bloc connexion" aria-haspopup="dialog">Bloc connexion<\/button><\/h3><span class="lib-ver"[^>]*>v2<\/span><\/div>[^]*?<span class="lib-state ok"><span class="lib-ok" title="Contrat valide">/,
     );
-    expect(html).toContain('<span class="lib-kind standalone">Autonome</span><span>2 étape(s)</span>');
-    // L'origine, courte ; le détail au survol.
+    // Les nombres réels : étapes, entrées et sorties du contrat (jamais codés en dur).
+    expect(html).toMatch(
+      /data-block="Bloc connexion"[^]*?<p class="lib-counts"><span title="Étapes">[^]*?2 étapes<\/span><span title="Entrées">[^]*?0 entrée<\/span><span title="Sorties">[^]*?1 sortie<\/span><\/p>/,
+    );
+    // Les catégories réelles : l'origine (scénario, enregistrement) et les groupes métier.
     expect(html).toContain(
-      '<span class="lib-origin" title="Scénario « Connexion »">Scénario Connexion</span>',
+      '<span class="lib-tag origin lib-origin" title="Scénario « Connexion »">Scénario Connexion</span>',
     );
     expect(html).toContain(
-      '<span class="lib-origin" title="Groupe « Création » de l’enregistrement creer">Enregistrement creer</span>',
+      '<span class="lib-tag origin lib-origin" title="Groupe « Création » de l’enregistrement creer">Enregistrement creer</span>',
     );
-    // Le pied : la date, et l'utilisation seulement quand il y en a une.
-    expect(html).toMatch(/<small class="mu">modifié le [^<]+ · Utilisé dans 1 scénario\(s\)<\/small>/);
+    // Le pied : la date, l'utilisation seulement quand il y en a une, « Ouvrir » et l'ajout au parcours.
+    expect(html).toMatch(
+      /Modifié le [^<]+<\/small><small class="mu lib-used">Utilisé dans 1 scénario\(s\)<\/small>/,
+    );
     expect(html).not.toContain('Utilisé dans aucun scénario');
-    expect(html).toContain('<code class="lib-key">user.name</code>');
-    expect(html).toContain('Ni entrée ni sortie : il se joue seul.');
     expect(html).toContain(
-      'class="btn small lib-add" data-action="lib-part-add" data-block="Bloc seul" title="Ajouter au parcours"',
+      'data-action="lib-open" data-block="Bloc connexion" title="Ouvrir la fiche de « Bloc connexion »">Ouvrir</button>',
     );
+    expect(html).toContain(
+      'class="btn small ghost lib-add" data-action="lib-part-add" data-block="Bloc seul" title="Ajouter au parcours"',
+    );
+    expect(html).toContain('<p class="lib-found" role="status">3 blocs trouvés</p>');
     expect(html).toContain('<span class="lib-state warn">À revalider</span>');
     expect(html).toContain('Bloc &lt;x&gt;');
     expect(html).toContain('<ul class="plain lib-cards grid">');
@@ -300,7 +310,10 @@ describe('dashboard — scenario library', () => {
     expect(html).toContain(
       '<h3 class="lib-bucket-t">Origine non enregistrée <small class="mu">1</small></h3>',
     );
-    expect(html).toContain('<span class="lib-kind composite">Composé · 2 groupe(s)</span>');
+    // Un bloc composé : ses groupes métier sont ses catégories.
+    expect(html).toMatch(
+      /data-block="Parcours complet"[^]*?<span class="lib-tag">Création<\/span><span class="lib-tag">Recherche<\/span>/,
+    );
     expect(html).toContain('<option value="composite" >Composés</option>');
     // Les récents : seulement les blocs qui existent encore.
     expect(html).toMatch(/lib-recent[^]*data-action="lib-open" data-block="Bloc seul"/);
@@ -353,10 +366,15 @@ describe('dashboard — scenario library', () => {
       'Contrat',
       'Paramètres',
       'Dépendances',
+      'Traçabilité',
       'Versions',
       'Provenance',
     ])
-      expect(overview).toContain(`>${label}</button>`);
+      expect(overview).toMatch(new RegExp(`>${label}(<span class="lib-tc">\\(\\d+\\)</span>)?</button>`));
+    // Les nombres réels à côté des onglets : 2 étapes, 0 entrée, 1 sortie.
+    expect(overview).toContain('>Étapes<span class="lib-tc">(2)</span></button>');
+    expect(overview).toContain('>Entrées<span class="lib-tc">(0)</span></button>');
+    expect(overview).toContain('>Sorties<span class="lib-tc">(1)</span></button>');
     expect(overview).toContain('<dt>Type</dt><dd>Autonome</dd>');
     expect(overview).toContain('2 étape(s) · départ /login');
     expect(overview).toContain('1 assertion(s) métier déclarée(s), vérifiée(s) au rejeu');
@@ -1103,5 +1121,233 @@ describe('dashboard — scenario library', () => {
     expect(scenarios).not.toContain('data-action="lib-insert"');
     expect(scenarios).not.toContain('data-action="lib-from-scenario"');
     expect(scenarios).not.toContain('data-action="lib-accept"');
+  });
+});
+
+describe('dashboard — block catalogue (pages, states, docked sheet) and the block traceability', () => {
+  const field = (
+    over: Partial<ContractField> & Pick<ContractField, 'key' | 'direction' | 'origin'>,
+  ): ContractField => ({
+    id: `x:${over.direction}:${over.key}`,
+    type: 'text',
+    typeSource: 'DEFAULT',
+    required: over.direction === 'input',
+    version: 1,
+    detection: 'CONFIRMED',
+    evidence: [],
+    steps: [],
+    exposed: true,
+    ...over,
+  });
+
+  it('pages: bounds, numbers around the current page, the found range', () => {
+    const items = Array.from({ length: 30 }, (_, index) => index);
+    expect(pageOf(items, 3, 12)).toMatchObject({ page: 3, pages: 3, from: 25, to: 30 });
+    expect(pageOf(items, 9, 12).page).toBe(3);
+    expect(pageOf([], 1, 12)).toMatchObject({ page: 1, pages: 1, from: 0, to: 0 });
+    expect(pageNumbers(5, 10)).toEqual([1, 'gap', 4, 5, 6, 'gap', 10]);
+    expect(pageNumbers(1, 2)).toEqual([1, 2]);
+    const many = Array.from({ length: 30 }, (_, index) =>
+      block({ name: `Bloc ${String.fromCharCode(97 + (index % 26))}${String(index)}` }),
+    );
+    const html = renderDashboard(
+      base('library', {}, { blocks: many, tab: 'catalog', pageSize: 12, page: 3 }),
+    );
+    expect(html.match(/<li class="lib-card/g)).toHaveLength(6);
+    expect(html).toContain('<p class="lib-found" role="status">25–30 sur 30 blocs</p>');
+    expect(html).toContain('data-action="lib-page" data-page="3" aria-label="Page 3" aria-current="page"');
+    expect(html).toContain('<option value="12" selected>12 / page</option>');
+  });
+
+  it('states: loading, a read error with retry, no result', () => {
+    const loading = renderDashboard(base('library', {}, { blocks: undefined, tab: 'catalog' }));
+    expect(loading).toContain('Lecture du catalogue…');
+    const failed = renderDashboard(
+      base('library', {}, { blocks: undefined, tab: 'catalog', error: 'HTTP 500' }),
+    );
+    expect(failed).toContain('Le catalogue n’a pas pu être lu. HTTP 500');
+    expect(failed).toContain('data-action="lib-reload"');
+  });
+
+  it('a sheet opened from the catalogue sits beside it (not modal), the list compact, no composer panel', () => {
+    const html = renderDashboard(
+      base(
+        'library',
+        {},
+        { tab: 'catalog', sheet: { block: 'Bloc connexion', tab: 'overview', docked: true } },
+      ),
+    );
+    expect(html).toContain('class="lib-sheet lib-fiche docked" role="region" aria-labelledby="lib-fiche-t"');
+    expect(html).not.toContain('lib-sheet-bg');
+    expect(html).toContain(
+      '<div class="lib-split"><div class="lib-split-list"><ul class="plain lib-cards list compact">',
+    );
+    expect(html).toContain('<li class="lib-card open compact" data-block="Bloc connexion">');
+    expect(html).not.toContain('data-panel="props" data-open="1"');
+    // Les actions réelles de la fiche ; jamais « Exécuter » : un bloc ne se joue pas seul.
+    expect(html).toMatch(
+      /data-action="lib-preview"[^]*data-action="lib-edit"[^]*data-action="lib-dup-open"[^]*data-action="lib-part-add"/,
+    );
+    expect(html).not.toMatch(/>Exécuter</);
+    // Hors du catalogue, la fiche ancrée est gardée mais cachée (aucune fenêtre modale par-dessus le compositeur).
+    const composer = renderDashboard(
+      base(
+        'library',
+        {},
+        { tab: 'composer', sheet: { block: 'Bloc connexion', tab: 'overview', docked: true } },
+      ),
+    );
+    expect(composer).not.toContain('lib-fiche');
+  });
+
+  it('traceability: declared / detected / observed; a cited input is never generated, a fixed value is not generated', () => {
+    const traced = block({
+      name: 'Tracé',
+      steps: 3,
+      contract: {
+        source: 'DERIVED',
+        inputs: [{ key: 'company.id', required: true }],
+        outputs: [
+          { key: 'request.id', dynamic: true },
+          { key: 'request.label', dynamic: false },
+        ],
+        preconditions: [],
+        postconditions: [],
+        fields: {
+          inputs: [
+            field({
+              key: 'company.id',
+              direction: 'input',
+              origin: 'INPUT',
+              steps: [1],
+              evidence: ['lue par une référence explicite à l’étape 1 (citée)'],
+            }),
+          ],
+          outputs: [
+            field({
+              key: 'request.id',
+              direction: 'output',
+              origin: 'CAPTURED',
+              steps: [2],
+              capture: { source: 'champ id de la réponse POST /api/requests', onFailure: 'FAIL' },
+            }),
+            field({
+              key: 'request.label',
+              direction: 'output',
+              origin: 'DATA',
+              detection: 'PROBABLE',
+              steps: [3],
+            }),
+          ],
+          candidates: [],
+        },
+      },
+    });
+    const all = [...blocks, traced];
+    const sheetOf = (traceKey: string, activity?: LibraryBlockActivity): string =>
+      renderDashboard(
+        base(
+          'library',
+          {},
+          {
+            blocks: all,
+            sheet: { block: 'Tracé', tab: 'traceability', traceKey, ...(activity ? { activity } : {}) },
+          },
+        ),
+      );
+    const input = sheetOf('input:company.id');
+    expect(input).toContain('<dd>Entrée fournie par l’amont (jamais générée par ce bloc)</dd>');
+    expect(input).not.toContain('Générée par le bloc');
+    expect(input).toContain('Rien d’observé : aucune exécution réelle n’a rejoué ce bloc.');
+    expect(sheetOf('output:request.label')).toContain(
+      '<dd>Valeur fixe du jeu de données du bloc (non générée)</dd>',
+    );
+    expect(sheetOf('output:request.label')).toContain('<span class="lib-det probable">Probable</span>');
+    const activity: LibraryBlockActivity = {
+      scanned: 2,
+      last: { run: 'run-a', createdAt: at, verdict: 'PASSED', durationMs: 138_000, scenarios: ['Composé'] },
+      events: [
+        {
+          at,
+          key: 'request.id',
+          origin: 'CAPTURED',
+          withheld: true,
+          step: 7,
+          stepName: 'run Tracé › capture request.id',
+          block: 'Tracé',
+          flow: 'Composé',
+        },
+      ],
+    };
+    const observed = sheetOf('output:request.id', activity);
+    expect(observed).toContain(
+      'Capturée pendant le rejeu · source : champ id de la réponse POST /api/requests',
+    );
+    expect(observed).toMatch(
+      /<b>Capture<\/b><span class="mu small">étape 7 du scénario · capture request.id<\/span><small class="mu">non conservée \(rétention\)<\/small>/,
+    );
+    // La dernière exécution réelle, sur la vue d'ensemble.
+    const overview = renderDashboard(
+      base('library', {}, { blocks: all, sheet: { block: 'Tracé', tab: 'overview', activity } }),
+    );
+    expect(overview).toContain('<span class="lib-state ok">Succès</span>');
+    expect(overview).toContain('2 min 18 s');
+    expect(overview).toContain('data-action="open-run" data-project="prj_a" data-run="run-a"');
+  });
+
+  it('compatibility with the open journey: provided, ambiguous, own data, missing, optional, older version', () => {
+    const producer = block({
+      name: 'P1',
+      contract: {
+        source: 'DERIVED',
+        inputs: [],
+        outputs: [
+          { key: 'a', dynamic: true },
+          { key: 'b', dynamic: true },
+        ],
+        preconditions: [],
+        postconditions: [],
+      },
+    });
+    const producer2 = block({
+      name: 'P2',
+      contract: {
+        source: 'DERIVED',
+        inputs: [],
+        outputs: [{ key: 'b', dynamic: true }],
+        preconditions: [],
+        postconditions: [],
+      },
+    });
+    const consumer = block({
+      name: 'C',
+      version: 3,
+      data: [{ key: 'own', dynamic: false }],
+      contract: {
+        source: 'DERIVED',
+        inputs: [
+          { key: 'a', required: true },
+          { key: 'b', required: true },
+          { key: 'own', required: true },
+          { key: 'gone', required: true },
+          { key: 'maybe', required: false },
+        ],
+        outputs: [],
+        preconditions: [],
+        postconditions: [],
+      },
+    });
+    const journey = emptyJourneyUi();
+    journey.journey = journeyOfParts('J', [{ block: 'P1' }, { block: 'P2' }, { block: 'C', version: 2 }]);
+    const state = base('library', {}, { blocks: [producer, producer2, consumer], journey });
+    const compat = journeyCompat(state, consumer);
+    expect(compat.rows.map((row) => [row.key, row.status, row.blocks])).toEqual([
+      ['a', 'FROM', ['P1']],
+      ['b', 'AMBIGUOUS', ['P1', 'P2']],
+      ['own', 'DATA', []],
+      ['gone', 'MISSING', []],
+      ['maybe', 'OPTIONAL', []],
+    ]);
+    expect(compat.pinned).toBe(2);
   });
 });

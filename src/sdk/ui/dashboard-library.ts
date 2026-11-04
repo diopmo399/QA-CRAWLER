@@ -10,6 +10,14 @@ import {
   type JourneyUi,
 } from './dashboard-journey.js';
 import { blockSheet, type BlockSheet } from './dashboard-library-sheet.js';
+import {
+  catalogCard,
+  catalogText,
+  DEFAULT_PAGE_SIZE,
+  PAGE_SIZES,
+  pageOf,
+  pager,
+} from './dashboard-library-catalog.js';
 import { header, icon, visibleBrowserControl } from './dashboard-parts.js';
 import { wizardView, type WizardUi } from './dashboard-library-wizard.js';
 import type { DashboardState } from './dashboard-view.js';
@@ -47,6 +55,9 @@ export interface LibraryUi {
   kind: KindChoice;
   layout: LayoutChoice;
   groupBy: GroupChoice;
+  /** La page du catalogue (1…n) et le nombre de blocs par page. */
+  page: number;
+  pageSize: number;
   recent: string[];
   /** La fiche ouverte (panneau à onglets). */
   sheet?: BlockSheet;
@@ -94,6 +105,8 @@ export const emptyLibraryUi = (): LibraryUi => ({
   kind: 'ALL',
   layout: 'grid',
   groupBy: 'none',
+  page: 1,
+  pageSize: DEFAULT_PAGE_SIZE,
   recent: [],
   journey: emptyJourneyUi(),
   tab: 'composer',
@@ -184,52 +197,42 @@ export function originText(state: DashboardState, block: LibraryBlockView): stri
 }
 
 /** La carte compacte d'un bloc : de quoi le choisir sans ouvrir sa fiche. */
-function blockCard(state: DashboardState, block: LibraryBlockView, publish: boolean): string {
-  const l = state.t.lib;
+/** La carte d'un bloc : celle du catalogue (`dashboard-library-catalog`), avec son état dans le parcours. */
+function blockCard(
+  state: DashboardState,
+  block: LibraryBlockView,
+  publish: boolean,
+  compact = false,
+): string {
   const ui = state.lib;
-  const opened = ui.sheet?.block === block.name;
-  const kind = kindOf(block);
-  const when = block.updatedAt ?? block.createdAt;
-  const inJourney = ui.journey.journey.graph.nodes.filter((node) => node.block === block.name).length;
-  // Un contrat valide est l'état attendu : une coche discrète ; à revalider ou invalide se voit.
-  const status =
-    block.state === 'VALID'
-      ? `<span class="lib-ok" title="${esc(l.states.VALID)}">${icon('check')}<span class="sr">${esc(l.states.VALID)}</span></span>`
-      : stateBadge(state, block.state);
-  const origin = block.origin
-    ? block.origin.kind === 'recording'
-      ? l.originRecording(block.origin.name)
-      : l.originScenario(block.origin.name)
-    : l.unknownOrigin;
-  const io = (label: string, items: readonly { key: string; required?: boolean }[]): string =>
-    items.length > 0
-      ? `<span class="lib-io"><span class="lib-io-l">${esc(label)}</span>${items.map((item) => `<code class="lib-key${item.required === false ? ' opt' : ''}">${esc(item.key)}</code>`).join('')}</span>`
-      : '';
-  const ios = `${io(l.inputsLabel, block.contract.inputs)}${io(l.outputsLabel, block.contract.outputs)}`;
-  return `<li class="lib-card ${kind}${opened ? ' open' : ''}" data-block="${esc(block.name)}">
-<div class="lib-card-h"><h3><button class="lib-title" data-action="lib-open" data-block="${esc(block.name)}" aria-haspopup="dialog">${esc(block.name)}</button></h3><span class="lib-ver" title="${esc(l.versionLabel)}">${esc(l.version(block.version))}</span>${status}</div>
-${block.description ? `<p class="lib-desc">${esc(block.description)}</p>` : ''}
-<p class="lib-meta"><span class="lib-kind ${kind}">${esc(kind === 'composite' ? l.kindComposite(block.groups?.length ?? 0) : l.kindStandalone)}</span><span>${esc(l.steps(block.steps))}</span>${ui.groupBy === 'origin' ? '' : `<span class="lib-origin" title="${esc(originText(state, block))}">${esc(origin)}</span>`}</p>
-${ios ? `<div class="lib-ios">${ios}</div>` : `<p class="lib-noio">${esc(l.noIo)}</p>`}
-<div class="lib-card-f"><small class="mu">${[
-    ...(when ? [l.updatedOn(new Date(when).toLocaleDateString(state.t.locale))] : []),
-    ...(block.usedBy.length > 0 ? [l.usedIn(block.usedBy.length)] : []),
-  ]
-    .map(esc)
-    .join(' · ')}</small>${
-    publish
-      ? `<button class="btn small lib-add" data-action="lib-part-add" data-block="${esc(block.name)}" title="${esc(l.addToJourney)}">${icon('plus')}<span>${esc(l.addShort)}</span>${inJourney > 0 ? `<span class="lib-count" aria-label="${esc(l.inJourney(inJourney))}">${String(inJourney)}</span>` : ''}</button>`
-      : ''
-  }</div></li>`;
+  return catalogCard(state, block, {
+    publish,
+    opened: ui.sheet?.block === block.name,
+    inJourney: ui.journey.journey.graph.nodes.filter((node) => node.block === block.name).length,
+    compact,
+    origin: {
+      text: block.origin
+        ? block.origin.kind === 'recording'
+          ? state.t.lib.originRecording(block.origin.name)
+          : state.t.lib.originScenario(block.origin.name)
+        : state.t.lib.unknownOrigin,
+      title: originText(state, block),
+    },
+  });
 }
 
 /** Le catalogue, regroupé par origine si demandé (un enregistrement, un scénario, sans origine). */
-function catalogList(state: DashboardState, shown: readonly LibraryBlockView[], publish: boolean): string {
+function catalogList(
+  state: DashboardState,
+  shown: readonly LibraryBlockView[],
+  publish: boolean,
+  compact = false,
+): string {
   const l = state.t.lib;
   const ui = state.lib;
   const list = (blocks: readonly LibraryBlockView[]): string =>
-    `<ul class="plain lib-cards ${ui.layout}">${blocks.map((block) => blockCard(state, block, publish)).join('')}</ul>`;
-  if (ui.groupBy === 'none') return list(shown);
+    `<ul class="plain lib-cards ${compact ? 'list compact' : ui.layout}">${blocks.map((block) => blockCard(state, block, publish, compact)).join('')}</ul>`;
+  if (ui.groupBy === 'none' || compact) return list(shown);
   const groups = new Map<string, LibraryBlockView[]>();
   for (const block of shown) {
     const title = block.origin
@@ -329,12 +332,26 @@ export function libraryView(state: DashboardState): string {
                 .join('')}</span>`
             : ''
         }<small class="mu lib-shown" role="status">${esc(l.shown(shown.length, all.length))}</small></div>`;
+  // La page du catalogue (la fiche ouverte à côté garde la même page, la même recherche et les mêmes critères).
+  const c = catalogText(state);
+  const paged = pageOf(shown, ui.page, ui.pageSize);
+  const docked = sheetOpen && ui.tab === 'catalog' && ui.sheet?.docked === true;
+  // La pagination dès qu'un catalogue dépasse la plus petite page (le nombre par page reste réglable).
+  const pageable = shown.length > PAGE_SIZES[0];
   const catalog =
-    all.length === 0
-      ? `<div class="lib-blank"><p>${esc(l.empty)}</p>${publish ? `<button class="btn primary" data-action="lib-panel-open">${icon('plus')}<span>${esc(l.addBlock)}</span></button>` : ''}</div>`
-      : shown.length === 0
-        ? `<div class="lib-blank"><p class="mu">${esc(l.noMatch)}</p><button class="btn small ghost" data-action="lib-clear">${esc(l.clear)}</button></div>`
-        : catalogList(state, shown, publish);
+    ui.blocks === undefined
+      ? ui.error
+        ? `<div class="lib-blank"><p class="err" role="alert">${esc(c.error)} ${esc(ui.error)}</p><button class="btn small" data-action="lib-reload">${esc(c.retry)}</button></div>`
+        : `<div class="lib-blank" role="status"><span class="spin" aria-hidden="true"></span><p class="mu">${esc(c.loading)}</p></div>`
+      : all.length === 0
+        ? `<div class="lib-blank"><p>${esc(l.empty)}</p>${publish ? `<button class="btn primary" data-action="lib-panel-open">${icon('plus')}<span>${esc(l.addBlock)}</span></button>` : ''}</div>`
+        : shown.length === 0
+          ? `<div class="lib-blank"><p class="mu">${esc(l.noMatch)}</p><button class="btn small ghost" data-action="lib-clear">${esc(l.clear)}</button></div>`
+          : `<p class="lib-found" role="status">${esc(paged.pages > 1 ? c.range(paged.from, paged.to, shown.length) : c.found(shown.length))}</p>${
+              docked
+                ? `<div class="lib-split"><div class="lib-split-list">${catalogList(state, paged.items, publish, true)}${pageable ? pager(state, paged.page, paged.pages, ui.pageSize) : ''}</div>${blockSheet(state, { docked: true })}</div>`
+                : `${catalogList(state, paged.items, publish)}${pageable ? pager(state, paged.page, paged.pages, ui.pageSize) : ''}`
+            }`;
   const details = ui.details ?? [];
   // Le parcours tout juste créé se rejoue d'ici, avec ou sans navigateur visible.
   const composed =
@@ -379,19 +396,23 @@ export function libraryView(state: DashboardState): string {
       : ui.recentOpen
         ? 'open'
         : 'closed';
-  const propsState = ui.wide ? 'closed' : ui.propsOpen === false ? 'closed' : 'open';
+  // Dans l'onglet Catalogue, les propriétés du parcours n'ont rien à montrer : ni panneau ni rail, le
+  // catalogue (et la fiche ouverte à côté) prend la largeur.
+  const propsState = ui.wide || tab === 'catalog' ? 'closed' : ui.propsOpen === false ? 'closed' : 'open';
   const recentCard = recent[0];
   const recentCol = `<aside class="lib-recent-col" aria-labelledby="lib-rec-t"><div class="lib-col-h"><h3 id="lib-rec-t">${esc(l.recentTitle)}</h3><button type="button" class="btn small ghost icon-only" data-action="jn-panel" data-panel="recent" data-open="0" aria-label="${esc(jt.recentHide)}" title="${esc(jt.recentHide)}">${icon('back')}</button></div>${
     recent.length > 0
-      ? `<nav class="lib-recent" aria-label="${esc(l.recentTitle)}">${recent.map((block) => `<button class="chip" data-action="lib-open" data-block="${esc(block.name)}">${esc(block.name)}</button>`).join('')}</nav>${recentCard ? `<ul class="plain lib-cards mini">${blockCard(state, recentCard, publish)}</ul>` : ''}`
+      ? `<nav class="lib-recent" aria-label="${esc(l.recentTitle)}">${recent.map((block) => `<button class="chip" data-action="lib-open" data-block="${esc(block.name)}">${esc(block.name)}</button>`).join('')}</nav>${recentCard ? `<ul class="plain lib-cards mini">${blockCard(state, recentCard, publish, true)}</ul>` : ''}`
       : `<p class="mu small">${esc(l.recentEmpty)}</p>`
   }</aside><div class="lib-rail recent"><button type="button" class="btn small ghost icon-only" data-action="jn-panel" data-panel="recent" data-open="1" aria-label="${esc(jt.recentShow)}" title="${esc(jt.recentShow)}">${icon('chevron')}</button></div>`;
   const side =
-    propsState === 'open'
-      ? journeySide(state, publish)
-      : `<div class="lib-rail props"><button type="button" class="btn small ghost icon-only" data-action="jn-panel" data-panel="props" data-open="1" aria-label="${esc(jt.propsShow)}" title="${esc(jt.propsShow)}">${icon('back')}</button></div>`;
+    tab === 'catalog'
+      ? ''
+      : propsState === 'open'
+        ? journeySide(state, publish)
+        : `<div class="lib-rail props"><button type="button" class="btn small ghost icon-only" data-action="jn-panel" data-panel="props" data-open="1" aria-label="${esc(jt.propsShow)}" title="${esc(jt.propsShow)}">${icon('back')}</button></div>`;
   const top = `<div class="lib-top">${toolbar}${journeyActions(state, publish)}</div>`;
-  return `${header(esc(l.title), { sub: esc(l.sub(p.name, all.length)), actions })}<p class="mu lib-intro">${esc(l.intro)}</p>${sheetOpen ? '' : messages}<div class="jn" id="lib-composer" data-mode="${ui.journey.journey.mode}">${top}<div class="lib-shell recent-${recentState} props-${propsState}">${recentCol}<section class="lib-main"><div class="lib-tabs" role="tablist" aria-label="${esc(l.title)}">${tabs}</div><div class="lib-tabpanel" id="lib-tabpanel" role="tabpanel" aria-labelledby="lib-tab-${tab}">${main}</div></section>${side}</div></div>${wizardView(state)}${blockSheet(state)}`;
+  return `${header(esc(l.title), { sub: esc(l.sub(p.name, all.length)), actions })}<p class="mu lib-intro">${esc(l.intro)}</p>${sheetOpen ? '' : messages}<div class="jn" id="lib-composer" data-mode="${ui.journey.journey.mode}">${top}<div class="lib-shell recent-${recentState} props-${propsState}">${recentCol}<section class="lib-main"><div class="lib-tabs" role="tablist" aria-label="${esc(l.title)}">${tabs}</div><div class="lib-tabpanel" id="lib-tabpanel" role="tabpanel" aria-labelledby="lib-tab-${tab}">${main}</div></section>${side}</div></div>${wizardView(state)}${ui.sheet?.docked ? '' : blockSheet(state)}`;
 }
 
 /** L'insertion d'un bloc dans le scénario affiché (écran Scénarios). */

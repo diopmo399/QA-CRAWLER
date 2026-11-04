@@ -1218,6 +1218,7 @@ const fr = {
       })[text] ??
       text
         .replace(/^created from the scenario "(.+)"$/, 'créé à partir du scénario « $1 »')
+        .replace(/^duplicated from the block "(.+)" \(v(\d+)\)$/, 'copie du bloc « $1 » (v$2)')
         .replace(
           /^created from the group "(.*)" of the recording (.+)$/,
           'créé à partir du groupe « $1 » de l’enregistrement $2',

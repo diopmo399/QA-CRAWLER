@@ -11,6 +11,7 @@ import { dashboardStrings } from './dashboard-i18n.js';
 import { emptyAccessUi } from './dashboard-access.js';
 import { emptyRecordingsUi, newLiveRecording, type LiveRecording } from './dashboard-recordings.js';
 import { emptyLibraryUi, type LibraryUi } from './dashboard-library.js';
+import { PAGE_SIZES } from './dashboard-library-catalog.js';
 import { LibraryWizard, type WizardHost } from './dashboard-library-wizard.js';
 import { JourneyController, type JourneyHost } from './dashboard-journey-controller.js';
 import { activeRuns, emptyTestsUi, finishedRecordings } from './dashboard-tests.js';
@@ -1222,7 +1223,7 @@ export class QaCrawlerDashboard extends Base {
         this.wizard.close();
         return true;
       case 'lib-clear':
-        Object.assign(lib, { query: '', origin: 'ALL', state: 'ALL', usage: 'ALL', kind: 'ALL' });
+        Object.assign(lib, { query: '', origin: 'ALL', state: 'ALL', usage: 'ALL', kind: 'ALL', page: 1 });
         this.paint();
         return true;
       case 'lib-jump':
@@ -1251,9 +1252,13 @@ export class QaCrawlerDashboard extends Base {
         });
         return true;
       case 'lib-part-add':
-        // Une carte ou la fiche d'un bloc : le bloc rejoint le parcours du compositeur.
-        if (block) this.journeys.addBlockNamed(block);
+        // Une carte ou la fiche d'un bloc : le bloc rejoint le parcours du compositeur (la fiche se ferme).
+        if (block) {
+          lib.sheet = undefined;
+          this.journeys.addBlockNamed(block);
+        }
         return true;
+      case 'lib-edit':
       case 'lib-contract-edit': {
         const view = lib.blocks?.find((entry) => entry.name === block);
         if (view) {
@@ -1342,6 +1347,9 @@ export class QaCrawlerDashboard extends Base {
         .map((line) => line.trim())
         .filter(Boolean);
     switch (form.dataset.action) {
+      case 'lib-dup-save':
+        void this.library.duplicate();
+        return;
       case 'lib-insert': {
         const scenario = form.dataset.scenario ?? '';
         const revision = form.dataset.revision;
@@ -2599,7 +2607,17 @@ export class QaCrawlerDashboard extends Base {
       lib.kind = value as LibraryUi['kind'];
     else if (part === 'groupBy' && ['none', 'origin'].includes(value))
       lib.groupBy = value as LibraryUi['groupBy'];
-    else if (part === 'contract' && lib.contract && key && key in lib.contract && key !== 'block')
+    else if (part === 'pageSize' && PAGE_SIZES.some((size) => String(size) === value)) {
+      lib.pageSize = Number(value);
+      lib.page = 1;
+      this.library.savePrefs();
+      this.paint();
+      return;
+    } else if (part === 'dup' && key && lib.sheet?.duplicate) {
+      if (key === 'name') lib.sheet.duplicate.name = value;
+      if (key === 'description') lib.sheet.duplicate.description = value;
+      return;
+    } else if (part === 'contract' && lib.contract && key && key in lib.contract && key !== 'block')
       lib.contract[key as 'required' | 'optional' | 'outputs' | 'pre' | 'post'] = value;
     else if (part === 'insert' && key === 'block') lib.insert.block = value;
     else if (part === 'insert' && key === 'at') lib.insert.at = value === 'end' ? 'end' : 'start';
@@ -2614,8 +2632,11 @@ export class QaCrawlerDashboard extends Base {
       this.library.outputField(key, value);
       return;
     } else return;
-    // La recherche et les critères se voient tout de suite.
-    if (['query', 'origin', 'state', 'usage', 'sort', 'kind', 'groupBy'].includes(part)) this.paint();
+    // La recherche et les critères se voient tout de suite, depuis la première page.
+    if (['query', 'origin', 'state', 'usage', 'sort', 'kind', 'groupBy'].includes(part)) {
+      lib.page = 1;
+      this.paint();
+    }
   }
 
   private onChange(event: Event): void {
