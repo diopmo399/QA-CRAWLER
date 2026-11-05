@@ -1,0 +1,5 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:graph
+partner:
+  url: https://api.partner.example/v2

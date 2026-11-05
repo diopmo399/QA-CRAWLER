@@ -8,6 +8,7 @@ import type {
 } from '../core/cartography.js';
 import type { QaCrawlerClient } from '../core/client.js';
 import { API_TABS, type ApiTab } from './dashboard-cartography-apis.js';
+import { readIds } from './dashboard-cartography-graph.js';
 import { mapStrings } from './dashboard-cartography-i18n.js';
 import {
   CENTER_TABS,
@@ -407,12 +408,12 @@ export class CartographyController {
   }
 
   /** Le zoom autour du centre de la zone affichée (la vue garde ce qu'elle montrait au milieu). */
-  private zoomBy(factor: number): void {
+  private zoomBy(factor: number, at?: { x: number; y: number }): void {
     const ui = this.ui;
     const next = Math.min(2.5, Math.max(0.3, Math.round(ui.zoom * factor * 100) / 100));
     const box = this.canvas();
-    const cx = (box?.canvas.clientWidth ?? 0) / 2;
-    const cy = (box?.canvas.clientHeight ?? 0) / 2;
+    const cx = at?.x ?? (box?.canvas.clientWidth ?? 0) / 2;
+    const cy = at?.y ?? (box?.canvas.clientHeight ?? 0) / 2;
     ui.panX = Math.round(cx - ((cx - ui.panX) * next) / ui.zoom);
     ui.panY = Math.round(cy - ((cy - ui.panY) * next) / ui.zoom);
     ui.zoom = next;
@@ -425,6 +426,10 @@ export class CartographyController {
     const box = this.canvas();
     const content = box?.inner.firstElementChild as HTMLElement | null | undefined;
     if (!box || !content) return;
+    if (content.hasAttribute('data-lanes')) {
+      this.fitLanes(box.canvas, content, 0.5);
+      return;
+    }
     const width = content.getBoundingClientRect().width / ui.zoom + 32;
     const height = content.getBoundingClientRect().height / ui.zoom + 44;
     const cw = box.canvas.clientWidth;
@@ -435,6 +440,88 @@ export class CartographyController {
     ui.panX = Math.max(0, Math.round((cw - width * ui.zoom) / 2));
     ui.panY = ui.graphMode === 'full' ? Math.max(0, Math.round((ch - height * ui.zoom) / 2)) : 0;
     this.host.paint();
+  }
+
+  /**
+   * Le graphe en couloirs ajusté à la largeur de la zone, sans descendre sous un zoom lisible (le reste se
+   * parcourt en déplaçant la vue) ; la hauteur de la zone suit le contenu.
+   */
+  private fitLanes(canvas: HTMLElement, content: HTMLElement, least: number): void {
+    const ui = this.ui;
+    const width = content.offsetWidth + 32;
+    const height = content.offsetHeight + 44;
+    const cw = canvas.clientWidth;
+    if (width <= 0 || cw <= 0) return;
+    // En plein écran la zone a sa hauteur propre : le graphe y tient aussi en hauteur, si c'est lisible.
+    const scale = ui.fullscreen ? Math.min(cw / width, canvas.clientHeight / height) : cw / width;
+    ui.zoom = Math.min(1, Math.max(least, Math.floor(scale * 100) / 100));
+    ui.panX = Math.max(0, Math.round((cw - width * ui.zoom) / 2));
+    ui.panY = 0;
+    this.host.paint();
+  }
+
+  /** Après l'affichage : l'ajustement demandé (ouverture, changement de mode ou de vue), une seule fois. */
+  private fitSoon(): void {
+    const run = (): void => {
+      const ui = this.ui;
+      if (!ui.autoFit) return;
+      const box = this.canvas();
+      const content = box?.inner.firstElementChild as HTMLElement | null | undefined;
+      if (!box || !content?.hasAttribute('data-lanes')) return;
+      ui.autoFit = false;
+      this.fitLanes(box.canvas, content, 0.7);
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else run();
+  }
+
+  private toggleBundle(key: string): void {
+    if (!key) return;
+    const ui = this.ui;
+    ui.lnBundles = ui.lnBundles.includes(key)
+      ? ui.lnBundles.filter((k) => k !== key)
+      : [...ui.lnBundles, key];
+  }
+
+  /** Au survol d'une carte : elle, ses voisines et leurs faisceaux ressortent ; le reste s'atténue. */
+  pointerOver(event: PointerEvent): void {
+    const target = event.target as Element | null;
+    const graph =
+      target?.closest<HTMLElement>('[data-lanes]') ??
+      this.host.root.querySelector<HTMLElement>('[data-lanes].hov');
+    if (!graph) return;
+    const card = graph.contains(target) ? target?.closest<HTMLElement>('[data-lcard]') : null;
+    const id = card?.dataset.lcard;
+    if (graph.dataset.hover === (id ?? '')) return;
+    graph.dataset.hover = id ?? '';
+    for (const el of graph.querySelectorAll('.on')) el.classList.remove('on');
+    if (!card || !id) {
+      graph.classList.remove('hov');
+      return;
+    }
+    graph.classList.add('hov');
+    const ids = [id, ...(card.dataset.near ?? '').split(' ').filter(Boolean)];
+    for (const one of ids)
+      for (const el of graph.querySelectorAll(`[data-lcard="${one}"]`)) el.classList.add('on');
+    for (const el of graph.querySelectorAll<HTMLElement>('.ln-e[data-touch], .ln-badge[data-touch]'))
+      if ((el.dataset.touch ?? '').split(' ').includes(id)) el.classList.add('on');
+  }
+
+  /**
+   * La molette sur un graphe : zoom autour du pointeur avec Ctrl (ou ⌘, ou le pincement d'un pavé
+   * tactile), et sans touche en plein écran ; ailleurs la page défile normalement.
+   */
+  wheel(event: WheelEvent): void {
+    // Écoutée sur l'élément hôte : la cible réelle est la première du chemin (dans la racine fantôme).
+    const target = event.composedPath()[0];
+    const canvas = target instanceof Element ? target.closest<HTMLElement>('[data-map-canvas]') : null;
+    if (!canvas || !(event.ctrlKey || event.metaKey || this.ui.fullscreen) || event.deltaY === 0) return;
+    event.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    this.zoomBy(event.deltaY < 0 ? 1.1 : 1 / 1.1, {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    });
   }
 
   /** Déplacer la vue en glissant dans la zone du graphe (hors des boutons, nœuds et liens). */
@@ -481,9 +568,14 @@ export class CartographyController {
           ui.api = id;
           ui.apiSheet = undefined;
           ui.apiRename = undefined;
+          ui.lnCards = [];
+          ui.lnBundles = [];
+          ui.autoFit = true;
           this.resetGraph();
         }
-        void this.run(() => this.loadApiSheet());
+        void this.run(() => this.loadApiSheet()).then(() => {
+          this.fitSoon();
+        });
         return true;
       }
       case 'map-api-scope':
@@ -498,7 +590,14 @@ export class CartographyController {
       case 'map-api-tab': {
         const tab = target.dataset.tab as ApiTab;
         if (API_TABS.includes(tab)) ui.apiTab = tab;
+        if (tab === 'trace') {
+          ui.autoFit = true;
+          ui.zoom = 1;
+          ui.panX = 0;
+          ui.panY = 0;
+        }
         this.host.paint();
+        this.fitSoon();
         return true;
       }
       case 'map-api-rename-open':
@@ -522,6 +621,52 @@ export class CartographyController {
       case 'map-api-launch':
         void this.launch(ui.apiPicked);
         return true;
+      case 'map-ln-mode':
+        ui.apiGraphMode = target.dataset.mode === 'path' ? 'path' : 'full';
+        // La sélection utile est gardée d'un mode à l'autre ; le cadrage repart de la zone.
+        ui.zoom = 1;
+        ui.panX = 0;
+        ui.panY = 0;
+        ui.autoFit = ui.apiGraphMode === 'full';
+        this.host.paint();
+        this.fitSoon();
+        return true;
+      case 'map-ln-view':
+        ui.apiView = target.dataset.view === 'data' ? 'data' : 'architecture';
+        ui.autoFit = true;
+        this.host.paint();
+        this.fitSoon();
+        return true;
+      case 'map-ln-filters':
+        ui.showApiFilters = !ui.showApiFilters;
+        this.host.paint();
+        return true;
+      case 'map-ln-reset':
+        ui.apiFilters = { lanes: [], natures: [], statuses: [], depth: 0 };
+        this.host.paint();
+        return true;
+      case 'map-ln-bundle': {
+        // Premier clic : les relations du faisceau et leurs preuves ; second clic : dépliées dans le graphe.
+        const ids = readIds(target.dataset.ids);
+        const key = target.dataset.bundle ?? '';
+        if (ids.length === 0) return true;
+        const same = ui.graphSel?.kind === 'edge' && ui.graphSel.ids.join(' ') === ids.join(' ');
+        if (same && key) this.toggleBundle(key);
+        else ui.graphSel = { kind: 'edge', ids };
+        ui.relOpen = true;
+        this.host.paint();
+        return true;
+      }
+      case 'map-ln-expand':
+        this.toggleBundle(target.dataset.bundle ?? '');
+        this.host.paint();
+        return true;
+      case 'map-ln-card': {
+        const key = target.dataset.card ?? '';
+        ui.lnCards = ui.lnCards.includes(key) ? ui.lnCards.filter((k) => k !== key) : [...ui.lnCards, key];
+        this.host.paint();
+        return true;
+      }
       case 'map-g-mode':
         ui.graphMode = target.dataset.mode === 'full' ? 'full' : 'path';
         ui.graphSel = undefined;
@@ -539,7 +684,10 @@ export class CartographyController {
         return true;
       case 'map-g-full':
         ui.fullscreen = !ui.fullscreen;
+        // Le graphe en couloirs se recadre sur la nouvelle zone (plus grande ou rendue).
+        ui.autoFit = ui.tab === 'apis';
         this.host.paint();
+        this.fitSoon();
         this.host.root.querySelector<HTMLElement>('[data-action="map-g-full"]')?.focus();
         return true;
       case 'map-g-collapse':
@@ -553,7 +701,7 @@ export class CartographyController {
           ui.graphSel =
             ui.graphSel?.kind === 'node' && ui.graphSel.id === id ? undefined : { kind: 'node', id };
         } else {
-          const ids = (target.dataset.ids ?? '').split(' ').filter(Boolean);
+          const ids = readIds(target.dataset.ids);
           if (ids.length === 0) return true;
           const same = ui.graphSel?.kind === 'edge' && ui.graphSel.ids.join(' ') === ids.join(' ');
           ui.graphSel = same ? undefined : { kind: 'edge', ids };
@@ -994,6 +1142,22 @@ export class CartographyController {
         return true;
       case 'group-parallel':
         ui.grouped = checked;
+        this.host.paint();
+        return true;
+      case 'ln-filter': {
+        // Coché : montré ; décoché : masqué (l'affichage seulement, aucune relation n'est retirée).
+        const group = target.dataset.group as 'lanes' | 'natures' | 'statuses' | undefined;
+        if (!group || !['lanes', 'natures', 'statuses'].includes(group)) return true;
+        const list = ui.apiFilters[group];
+        ui.apiFilters = {
+          ...ui.apiFilters,
+          [group]: checked ? list.filter((v) => v !== value) : [...new Set([...list, value])],
+        };
+        this.host.paint();
+        return true;
+      }
+      case 'ln-depth':
+        ui.apiFilters = { ...ui.apiFilters, depth: Math.max(0, Math.min(10, Number(value) || 0)) };
         this.host.paint();
         return true;
       case 'impact-pick':

@@ -66,6 +66,8 @@ export interface MapIndex {
   mergedEvidence: number;
   /** Les fonctionnalités consommatrices de chaque API, calculées à la première demande. */
   apiUses?: Map<string, ApiFeatureUse[]>;
+  /** Les champs et colonnes de chaque conteneur (« source|Conteneur »), calculés à la première demande. */
+  members?: Map<string, string[]>;
 }
 
 export function buildIndex(model: CartographyModel): MapIndex {
@@ -908,6 +910,147 @@ export function queryApis(index: MapIndex, cov: CoverageContext, query: MapListQ
 }
 
 /** La fiche d'une API : fonctionnalités, scénarios, parcours d'intégration démontré, impact, criticité. */
+/** La source d'un nœud : le deuxième segment de son identifiant (« SORTE:source:… »). */
+const sourceOf = (id: string): string => id.split(':')[1] ?? '';
+
+function membersOf(index: MapIndex, source: string, container: string): string[] {
+  if (!index.members) {
+    const members = new Map<string, string[]>();
+    for (const node of index.nodes.values()) {
+      if (node.kind !== 'FIELD' && node.kind !== 'COLUMN') continue;
+      const owner = typeof node.detail.container === 'string' ? node.detail.container : '';
+      if (!owner) continue;
+      const key = `${sourceOf(node.id)}|${owner}`;
+      members.set(key, [...(members.get(key) ?? []), node.id]);
+    }
+    index.members = members;
+  }
+  return index.members.get(`${source}|${container}`) ?? [];
+}
+
+/** Les liens par lesquels un élément est rattaché à ce qui l'utilise (champs, DTO, tables, services). */
+const ATTACH_EDGES: ReadonlySet<MapEdgeKind> = new Set([
+  'INPUTS',
+  'DISPLAYS',
+  'SENDS',
+  'TRANSFORMS',
+  'READS',
+  'WRITES',
+  'DEPENDS_ON',
+]);
+const ATTACH_KINDS: ReadonlySet<string> = new Set([
+  'FIELD',
+  'DTO',
+  'ENTITY',
+  'COLUMN',
+  'SERVICE',
+  'COMPONENT',
+  'API',
+  'METHOD',
+]);
+const MEMBER_LIMIT = 24;
+
+/**
+ * Le graphe complet d'une API, borné : l'amont démontré (déjà calculé), l'aval de ses endpoints (méthode
+ * servie, appels, persistance), puis ce qui est rattaché à ces éléments (champs saisis, DTO lus, tables
+ * écrites, colonnes et propriétés de ces conteneurs). Aucun lien n'est créé : seuls des liens du scan.
+ */
+function apiGraph(
+  index: MapIndex,
+  api: ApiService,
+  entries: readonly string[],
+  up: ReadonlyMap<string, unknown>,
+  limit = MAX_SUBGRAPH,
+): MapSubgraph {
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  let truncated = false;
+  const add = (id: string): boolean => {
+    if (seen.has(id) || !index.nodes.has(id)) return false;
+    if (seen.size >= limit) {
+      truncated = true;
+      return false;
+    }
+    seen.add(id);
+    ordered.push(id);
+    return true;
+  };
+  for (const id of entries) add(id);
+  for (const id of up.keys()) add(id);
+  for (const call of api.calls) add(call.from);
+  // L'aval des endpoints servis : la méthode qui le sert, puis ses appels (profondeur bornée).
+  let frontier = [...entries];
+  for (let depth = 0; depth < MAX_DEPTH && frontier.length > 0; depth += 1) {
+    const next: string[] = [];
+    for (const id of frontier)
+      for (const edge of index.out.get(id) ?? []) {
+        const from = index.nodes.get(id);
+        const serving = edge.kind === 'DEPENDS_ON' && from?.kind === 'API';
+        if ((edge.kind === 'CALLS' || serving) && add(edge.to)) next.push(edge.to);
+      }
+    frontier = next;
+  }
+  // Ce qui est rattaché : un saut, par les seuls liens de rattachement.
+  for (const id of [...ordered]) {
+    for (const edge of [...(index.out.get(id) ?? []), ...(index.in.get(id) ?? [])]) {
+      if (!ATTACH_EDGES.has(edge.kind)) continue;
+      const other = edge.from === id ? edge.to : edge.from;
+      const kind = index.nodes.get(other)?.kind;
+      if (!kind || !ATTACH_KINDS.has(kind)) continue;
+      // Une méthode n'est rattachée que par son service (pas par un autre chemin de données).
+      if (kind === 'METHOD' && !(edge.kind === 'DEPENDS_ON' && edge.to === other)) continue;
+      if (kind === 'API' && edge.kind !== 'DEPENDS_ON') continue;
+      add(other);
+    }
+  }
+  // Les colonnes d'une table, les propriétés d'un DTO : les membres de ces conteneurs, bornés.
+  for (const id of [...ordered]) {
+    const node = index.nodes.get(id);
+    if (node?.kind !== 'ENTITY' && node?.kind !== 'DTO') continue;
+    const container =
+      node.kind === 'ENTITY' && typeof node.detail.entity === 'string' ? node.detail.entity : node.name;
+    for (const member of membersOf(index, sourceOf(id), container).slice(0, MEMBER_LIMIT)) add(member);
+  }
+  const edges: MapEdge[] = [];
+  for (const id of ordered)
+    for (const edge of index.out.get(id) ?? []) if (seen.has(edge.to)) edges.push(edge);
+  return {
+    nodes: ordered.map((id) => index.nodes.get(id)).filter((n): n is MapNode => n !== undefined),
+    edges,
+    depth: MAX_DEPTH,
+    limit,
+    truncated,
+  };
+}
+
+/** Les appels sortants (externes ou à classifier) faits depuis un nœud du graphe : tels que le scan les établit. */
+function outboundOf(index: MapIndex, graph: MapSubgraph): ApiSheet['outbound'] {
+  const inGraph = new Set(graph.nodes.map((n) => n.id));
+  const out: ApiSheet['outbound'] = [];
+  for (const api of index.model.apis ?? []) {
+    if (api.scope === 'INTERNAL' && api.endpoints.some((ep) => ep.node)) continue;
+    for (const call of api.calls) {
+      if (!inGraph.has(call.from)) continue;
+      const endpoint = api.endpoints.find((ep) => ep.id === call.endpoint);
+      out.push({
+        api: api.id,
+        name: api.name,
+        scope: api.scope,
+        ...(api.provider ? { provider: api.provider } : {}),
+        endpoint: call.endpoint ?? `${api.id}|?`,
+        ...((endpoint?.method ?? call.method) ? { method: endpoint?.method ?? call.method } : {}),
+        ...((endpoint?.path ?? call.path) ? { path: endpoint?.path ?? call.path } : {}),
+        from: call.from,
+        ...(call.client ? { client: call.client } : {}),
+        confidence: call.confidence,
+        how: call.how,
+        evidence: call.evidence,
+      });
+    }
+  }
+  return out;
+}
+
 export function apiSheet(index: MapIndex, cov: CoverageContext, id: string): ApiSheet | undefined {
   const api = (index.model.apis ?? []).find((entry) => entry.id === id);
   if (!api) return undefined;
@@ -937,6 +1080,7 @@ export function apiSheet(index: MapIndex, cov: CoverageContext, id: string): Api
     if (hit?.edge) chainEdges.push(hit.edge);
     cursor = hit?.next;
   }
+  const graph = apiGraph(index, api, entries, up);
   const demonstrated = features.filter((f) => f.confidence === 'CONFIRMED');
   const potential = features.filter((f) => f.confidence !== 'CONFIRMED');
   const scenariosOf = (uses: readonly ApiFeatureUse[]): string[] => [
@@ -979,13 +1123,8 @@ export function apiSheet(index: MapIndex, cov: CoverageContext, id: string): Api
     features,
     scenarios,
     path: { nodes: chain, edges: chainEdges },
-    graph: subgraph(
-      index,
-      [...new Set([...entries, ...chain.map((n) => n.id), ...api.calls.map((c) => c.from)])].filter((id) =>
-        index.nodes.has(id),
-      ),
-      { depth: 1, limit: 60 },
-    ),
+    graph,
+    outbound: outboundOf(index, graph),
     impact: {
       demonstrated: {
         features: demonstrated.map((f) => f.name),

@@ -24,6 +24,7 @@ import { can } from './dashboard-access.js';
 import { mapStrings, type MapStrings } from './dashboard-cartography-i18n.js';
 import { GRAPH_CSS, shortPath, traceView, type GraphSelection } from './dashboard-cartography-graph.js';
 import { apiKpis, apisTab, APIS_CSS, type ApiTab } from './dashboard-cartography-apis.js';
+import { LANES_CSS, NO_FILTERS, type GraphView, type LaneFilters } from './dashboard-cartography-lanes.js';
 import { header, icon } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
@@ -171,6 +172,15 @@ export interface CartographyUi {
   /** Le nom métier en cours de saisie (renommage ouvert). */
   apiRename?: string;
   apiPicked: string[];
+  /** Le graphe de l'API : parcours ou graphe complet (en couloirs), sa vue, ses critères d'affichage, ce qui est déplié. */
+  apiGraphMode: 'path' | 'full';
+  apiView: GraphView;
+  apiFilters: LaneFilters;
+  showApiFilters?: boolean;
+  lnCards: string[];
+  lnBundles: string[];
+  /** Ajuster le graphe à la zone après son prochain affichage (ouverture, changement de mode). */
+  autoFit?: boolean;
 }
 
 export const emptyCartographyUi = (): CartographyUi => ({
@@ -203,6 +213,11 @@ export const emptyCartographyUi = (): CartographyUi => ({
   apiScope: '',
   apiTab: 'summary',
   apiPicked: [],
+  apiGraphMode: 'full',
+  apiView: 'architecture',
+  apiFilters: { ...NO_FILTERS },
+  lnCards: [],
+  lnBundles: [],
 });
 
 // ── Petites pièces ────────────────────────────────────────────────────────────────────────────────
@@ -367,6 +382,7 @@ export function cartographyView(input: DashboardState): string {
       canRun: can(state, 'RUN'),
       environments: state.project?.environments ?? [],
       scenarios: ui.scenarios ?? [],
+      summary,
     });
   else content = impactTab(m, state, summary);
   return `<div class="map">${head}${tabs}${banners}${content}${evidencePanel(m, ui)}</div>`;
@@ -1148,7 +1164,7 @@ function evidencePanel(m: MapStrings, ui: CartographyUi): string {
   return `<aside class="map-ev" role="dialog" aria-label="${esc(e ? m.evidenceTitle(e.file, e.line) : m.evidence)}"><div class="card-h"><h2 class="mono">${esc(e ? `${e.source} · ${m.evidenceTitle(e.file, e.line)}` : m.evidence)}</h2><button class="btn small ghost icon-only" data-action="map-evidence-close" aria-label="${esc(m.closeEvidence)}">${icon('close')}</button></div>${code}</aside>`;
 }
 
-export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}
+export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}
 .map{display:flex;flex-direction:column;gap:14px}
 .map-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
 .map-head .hd{flex:1 1 460px;flex-direction:column;align-items:flex-start}

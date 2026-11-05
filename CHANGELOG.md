@@ -54,6 +54,16 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   endpoints, appelants, champs échangés, contrat OpenAPI, parcours d'intégration démontré,
   fonctionnalités et scénarios liés, impact, criticité justifiée ; renommage métier (`RENAME_API`) et
   classement manuel (`CLASSIFY_API`) ; routes `apis` et `api`.
+  Sa **Traçabilité (graphe)** s'ouvre sur le graphe complet de l'API, en couloirs (Frontend, BFF,
+  Backend, puis API externe, contrats et base de données empilés) : les nœuds d'un même conteneur forment
+  une carte (classe et méthodes, composant et champs, DTO et propriétés, table et colonnes) ; les
+  relations entre deux couloirs forment un faisceau orthogonal avec son compteur « N liens », vert pour un
+  flux interne, violet pour un appel externe, bleu pour la base, le statut étant montré à part (tirets,
+  icône). Un clic liste les relations du faisceau avec leurs preuves, un second les déplie. Le survol
+  d'une carte fait ressortir son voisinage. Vues Architecture et Données (flux de champs, champs envoyés
+  et reçus par l'API), critères d'affichage par couche, nature, statut et profondeur. La liste exhaustive des
+  relations reste accessible. La fiche d'API renvoie désormais tout l'amont démontré, l'aval de ses
+  endpoints, ce qui y est rattaché et ses appels sortants (`outbound`), dans une limite de 300 nœuds.
 
 - **Catalogue de blocs et fiche détaillée** :
   - **Catalogue** : cartes avec le statut réel du contrat, le nombre d'étapes, d'entrées et de sorties,

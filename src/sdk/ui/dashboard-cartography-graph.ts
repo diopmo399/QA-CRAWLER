@@ -30,6 +30,22 @@ const rankOf = (layer: string): number => {
 /** Les liens qui portent la donnée elle-même ; les autres (dépendance à un contrat) s'y rattachent. */
 const FLOW_KINDS = new Set(['SENDS', 'TRANSFORMS', 'READS', 'WRITES']);
 const CONF_RANK: Record<MapConfidence, number> = { UNKNOWN: 0, PROBABLE: 1, CONFIRMED: 2 };
+/**
+ * Des identifiants de relation dans un attribut : chacun encodé (un identifiant peut contenir des espaces,
+ * « POST /api/… »), séparés par une espace ; `readIds` les relit.
+ */
+export const idList = (ids: readonly string[]): string => ids.map((id) => encodeURIComponent(id)).join(' ');
+export const readIds = (raw: string | undefined): string[] =>
+  (raw ?? '')
+    .split(' ')
+    .filter(Boolean)
+    .map((id) => {
+      try {
+        return decodeURIComponent(id);
+      } catch {
+        return id;
+      }
+    });
 export const weakest = (
   values: readonly MapConfidence[],
   fallback: MapConfidence = 'UNKNOWN',
@@ -350,7 +366,7 @@ export function pathCards(ctx: PathContext, path: MainPath, tail?: TailCard): st
           ? `<span class="map-pa c-${tone2}"></span>${ctx.grouped && link.edges.length > 1 ? `<small>×${String(link.edges.length)}</small>` : ''}`
           : link.edges.map((e) => `<span class="map-pa c-${e.confidence.toLowerCase()}"></span>`).join('');
       parts.push(
-        `<li class="map-plink${lit ? ' hl' : ''}" aria-hidden="true"><button tabindex="-1" class="map-pl" data-action="map-g-select" data-kind="edge" data-ids="${esc(link.edges.map((e) => e.id).join(' '))}" title="${esc(link.edges.map((e) => `${m.g.relKinds[e.kind] ?? e.kind} · ${m.confidence[e.confidence] ?? e.confidence}`).join('\n'))}">${arrows}</button></li>`,
+        `<li class="map-plink${lit ? ' hl' : ''}" aria-hidden="true"><button tabindex="-1" class="map-pl" data-action="map-g-select" data-kind="edge" data-ids="${esc(idList(link.edges.map((e) => e.id)))}" title="${esc(link.edges.map((e) => `${m.g.relKinds[e.kind] ?? e.kind} · ${m.confidence[e.confidence] ?? e.confidence}`).join('\n'))}">${arrows}</button></li>`,
       );
     }
   });
@@ -483,7 +499,7 @@ export function fullGraphSvg(
           ? `<text class="map-g-cnt" x="${String((x1 + x2) / 2)}" y="${String((y1 + y2) / 2 - 4)}">${esc(m.g.links(edges.length))}</text>`
           : '';
       lines.push(
-        `<g class="map-g-eg${state}"><path class="map-g-e c-${conf.toLowerCase()}" d="${d}" marker-end="url(#map-arrow-${conf.toLowerCase()})"/><path class="map-g-hit" d="${d}" data-action="map-g-select" data-kind="edge" data-ids="${esc(ids.join(' '))}"><title>${esc(title)}</title></path>${label}</g>`,
+        `<g class="map-g-eg${state}"><path class="map-g-e c-${conf.toLowerCase()}" d="${d}" marker-end="url(#map-arrow-${conf.toLowerCase()})"/><path class="map-g-hit" d="${d}" data-action="map-g-select" data-kind="edge" data-ids="${esc(idList(ids))}"><title>${esc(title)}</title></path>${label}</g>`,
       );
     });
   }
@@ -530,8 +546,8 @@ function legend(ctx: TraceContext, edges: readonly MapEdge[]): string {
   return `<div class="map-legend2"><span class="lg c-confirmed">${icon('check')}${esc(m.g.legendConfirmed(count('CONFIRMED')))}</span><span class="lg c-probable">${icon('alert')}${esc(m.g.legendProbable(count('PROBABLE')))}</span><span class="lg c-unknown"><i></i>${esc(m.g.legendUnknown(count('UNKNOWN')))}</span><span class="lg flow"><i></i>${esc(m.g.legendFlow)}</span><label class="map-switch" title="${esc(m.g.groupHelp)}"><input type="checkbox" role="switch" data-map="group-parallel" ${ctx.grouped ? 'checked' : ''}><span class="tr" aria-hidden="true"></span>${esc(m.g.groupParallel)} ${icon('info')}</label></div>`;
 }
 
-function relationsTable(
-  ctx: TraceContext,
+export function relationsTable(
+  ctx: Pick<TraceContext, 'm' | 'selection' | 'conf' | 'evidence' | 'relationsOpen'>,
   edges: readonly MapEdge[],
   nodes: Map<string, MapNode>,
   scope: string,
@@ -547,7 +563,7 @@ function relationsTable(
   const rows = edges
     .map((e, i) => {
       const ev = e.evidence.find((x) => x.file) ?? e.evidence[0];
-      return `<tr class="${selected?.has(e.id) ? 'sel' : ''}"><td class="num"><button class="lnk" data-action="map-g-select" data-kind="edge" data-ids="${esc(e.id)}" aria-label="${esc(`${m.g.selEdge} ${String(i + 1)}`)}">${String(i + 1)}</button></td><td class="mono" title="${esc(e.from)}">${breakable(label(e.from))}</td><td class="mono" title="${esc(e.to)}">${breakable(label(e.to))}</td><td>${esc(m.g.relKinds[kindOf(e)] ?? m.edgeKinds[e.kind] ?? e.kind)}</td><td>${ctx.conf(e.confidence)}</td><td class="map-rel-ev" title="${esc(`${ev?.file ? `${ev.file}:${String(ev.line ?? '')} · ` : ''}${e.reason}`)}">${ev?.file ? `<code class="map-loc">${breakable(shortPath(ev.file, ev.line))}</code>` : `<small class="mu">${esc(m.g.noEvidenceFile)}</small>`}</td><td>${ctx.evidence(ev)}</td></tr>`;
+      return `<tr class="${selected?.has(e.id) ? 'sel' : ''}"><td class="num"><button class="lnk" data-action="map-g-select" data-kind="edge" data-ids="${esc(idList([e.id]))}" aria-label="${esc(`${m.g.selEdge} ${String(i + 1)}`)}">${String(i + 1)}</button></td><td class="mono" title="${esc(e.from)}">${breakable(label(e.from))}</td><td class="mono" title="${esc(e.to)}">${breakable(label(e.to))}</td><td>${esc(m.g.relKinds[kindOf(e)] ?? m.edgeKinds[e.kind] ?? e.kind)}</td><td>${ctx.conf(e.confidence)}</td><td class="map-rel-ev" title="${esc(`${ev?.file ? `${ev.file}:${String(ev.line ?? '')} · ` : ''}${e.reason}`)}">${ev?.file ? `<code class="map-loc">${breakable(shortPath(ev.file, ev.line))}</code>` : `<small class="mu">${esc(m.g.noEvidenceFile)}</small>`}</td><td>${ctx.evidence(ev)}</td></tr>`;
     })
     .join('');
   const head = `<tr><th class="num">${esc(m.g.colNum)}</th><th>${esc(m.g.colFrom)}</th><th>${esc(m.g.colTo)}</th><th>${esc(m.g.colType)}</th><th>${esc(m.g.colConfidence)}</th><th>${esc(m.g.colEvidence)}</th><th></th></tr>`;

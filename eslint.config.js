@@ -22,6 +22,8 @@ export default tseslint.config(
       'tests/fixtures/angular-app/',
       // Projet Front/BFF/Backend/contrat fictif analysé par la cartographie (dépendances absentes).
       'tests/fixtures/cartography/',
+      // Le mini-projet du graphe enrichi (API & Services), analysé de la même façon.
+      'tests/fixtures/cartography-graph/',
       // Les exemples importent les paquets compilés (dist) : ils se vérifient en les lançant.
       'examples/',
     ],

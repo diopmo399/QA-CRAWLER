@@ -730,14 +730,37 @@ export interface ApiScenarioUse {
   lastRun?: { run: string; verdict: string; at?: string };
 }
 
+/** Un appel sortant vers une API hors périmètre (externe ou à classifier), tel que le scan l'a établi. */
+export interface ApiOutbound {
+  api: string;
+  name: string;
+  scope: ApiScope;
+  /** L'hôte (externe) quand il est établi. */
+  provider?: string;
+  endpoint: string;
+  method?: string;
+  path?: string;
+  /** Le nœud appelant. */
+  from: string;
+  client?: string;
+  confidence: MapConfidence;
+  how: string;
+  evidence: Evidence[];
+}
+
 export interface ApiSheet {
   api: ApiService;
   features: ApiFeatureUse[];
   scenarios: ApiScenarioUse[];
   /** Le parcours d'intégration démontré : de l'appelant le plus en amont jusqu'à l'API (ordre des couches). */
   path: { nodes: MapNode[]; edges: MapEdge[] };
-  /** Le voisinage borné de l'API (appelants, endpoints) pour le graphe complet. */
+  /**
+   * Le graphe complet de l'API, borné : tout l'amont démontré (appelants jusqu'au frontal), l'aval de ses
+   * endpoints (méthodes, persistance) et ce qui y est rattaché (champs, DTO, tables et colonnes).
+   */
   graph: MapSubgraph;
+  /** Les appels sortants (API externes ou à classifier) faits depuis un nœud de ce graphe, avec leur preuve. */
+  outbound: ApiOutbound[];
   impact: {
     demonstrated: { features: string[]; scenarios: string[]; components: string[]; dtos: string[] };
     potential: { features: string[]; scenarios: string[]; components: string[]; dtos: string[] };

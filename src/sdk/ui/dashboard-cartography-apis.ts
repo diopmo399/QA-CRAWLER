@@ -1,13 +1,20 @@
-import type { ApiService, ApiSheet, Evidence, MapPage } from '../core/cartography.js';
+import type { ApiService, ApiSheet, Evidence, MapPage, MapSummary } from '../core/cartography.js';
 import type { ScenarioView } from '../core/contracts.js';
 import {
   breakable,
   chainPath,
-  fullGraphSvg,
   nodeText,
   pathCards,
+  relationsTable,
   type TailCard,
 } from './dashboard-cartography-graph.js';
+import {
+  laneFilters,
+  laneLegend,
+  laneModel,
+  lanesView,
+  laneSelection,
+} from './dashboard-cartography-lanes.js';
 import type { MapStrings } from './dashboard-cartography-i18n.js';
 import type { CartographyUi } from './dashboard-cartography.js';
 import { icon } from './dashboard-parts.js';
@@ -36,6 +43,7 @@ export interface ApiViewHelpers {
   canRun: boolean;
   environments: { id: string; name: string }[];
   scenarios: ScenarioView[];
+  summary?: MapSummary;
 }
 
 const SCOPE_ICON: Record<string, string> = { INTERNAL: 'code', EXTERNAL: 'cloud', UNCLASSIFIED: 'alert' };
@@ -179,16 +187,84 @@ function endpointsPane(m: MapStrings, h: ApiViewHelpers, sheet: ApiSheet): strin
   return `<div class="tbl-w"><table class="tbl map-tbl map-atbl"><thead><tr><th>${esc(m.a.colMethod)}</th><th>${esc(m.a.colPath)}</th><th>${esc(m.a.colRequest)}</th><th>${esc(m.a.colResponse)}</th><th>${esc(m.a.colContract)}</th><th>${esc(m.a.colConfidence)}</th><th>${esc(m.a.colEvidence)}</th></tr></thead><tbody>${rows}</tbody></table></div><h4>${esc(m.a.reasons)}</h4><ul class="map-why">${sheet.api.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`;
 }
 
-function tracePane(m: MapStrings, ui: CartographyUi, sheet: ApiSheet): string {
-  const focus = sheet.path.nodes.at(-1)?.id ?? sheet.api.calls[0]?.from ?? '';
-  const toolbar = `<div class="map-gtools"><div class="map-seg" role="tablist"><button role="tab" data-action="map-g-mode" data-mode="path" aria-selected="${String(ui.graphMode === 'path')}">${esc(m.g.mainPath)}</button><button role="tab" data-action="map-g-mode" data-mode="full" aria-selected="${String(ui.graphMode === 'full')}">${esc(m.g.fullGraph)}</button></div><span class="map-gbtns"><button class="btn small icon-only" data-action="map-g-full" aria-pressed="${String(ui.fullscreen)}" aria-label="${esc(ui.fullscreen ? m.g.exitFullscreen : m.g.fullscreen)}" title="${esc(ui.fullscreen ? m.g.exitFullscreen : m.g.fullscreen)}">${icon(ui.fullscreen ? 'minimize' : 'maximize')}</button><button class="btn small icon-only" data-action="map-g-fit" aria-label="${esc(m.g.fit)}" title="${esc(m.g.fit)}">${icon('fit')}</button><button class="btn small icon-only" data-action="map-g-zoom" data-dir="-1" aria-label="${esc(m.g.zoomOut)}" title="${esc(m.g.zoomOut)}">${icon('minus')}</button><output class="map-gzoom">${esc(m.g.zoomLevel(ui.zoom))}</output><button class="btn small icon-only" data-action="map-g-zoom" data-dir="1" aria-label="${esc(m.g.zoomIn)}" title="${esc(m.g.zoomIn)}">${icon('plus')}</button></span></div>`;
-  const content =
-    ui.graphMode === 'full'
-      ? `<div class="map-canvas full" data-map-canvas tabindex="0"><div class="map-canvas-in" style="transform:translate(${String(ui.panX)}px,${String(ui.panY)}px) scale(${String(ui.zoom)})">${fullGraphSvg(m, sheet.graph, focus, { grouped: ui.grouped, ...(ui.graphSel ? { selection: ui.graphSel } : {}) })}</div></div>`
-      : integrationPath(m, ui, sheet);
-  const edges = ui.graphMode === 'full' ? sheet.graph.edges : sheet.path.edges;
-  const count = (c: string): number => edges.filter((e) => e.confidence === c).length;
-  return `<div class="map-trace${ui.fullscreen ? ' full' : ''}" data-map-trace><div class="map-gtitle"><h3>${esc(m.a.tabs.trace)} · <b>${esc(sheet.api.name)}</b></h3>${toolbar}</div>${content}<div class="map-legend2"><span class="lg c-confirmed">${icon('check')}${esc(m.g.legendConfirmed(count('CONFIRMED')))}</span><span class="lg c-probable">${icon('alert')}${esc(m.g.legendProbable(count('PROBABLE')))}</span><span class="lg c-unknown"><i></i>${esc(m.g.legendUnknown(count('UNKNOWN')))}</span><span class="lg flow"><i></i>${esc(m.g.legendFlow)}</span></div></div>`;
+function tracePane(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, sheet: ApiSheet): string {
+  const full = ui.apiGraphMode === 'full';
+  const btn = (action: string, label: string, name: string, extra = ''): string =>
+    `<button class="btn small icon-only" data-action="${action}" aria-label="${esc(label)}" title="${esc(label)}"${extra}>${icon(name)}</button>`;
+  const activeFilters =
+    ui.apiFilters.lanes.length +
+    ui.apiFilters.natures.length +
+    ui.apiFilters.statuses.length +
+    (ui.apiFilters.depth ? 1 : 0);
+  const view = full
+    ? `<span class="map-gview">${esc(m.ln.view)} :<div class="map-seg ln-view" role="tablist" aria-label="${esc(m.ln.view)}">${(
+        ['architecture', 'data'] as const
+      )
+        .map(
+          (v) =>
+            `<button role="tab" data-action="map-ln-view" data-view="${v}" aria-selected="${String(ui.apiView === v)}">${icon(v === 'architecture' ? 'network' : 'data')}<span>${esc(m.ln.views[v] ?? v)}</span></button>`,
+        )
+        .join(
+          '',
+        )}</div></span><button class="btn small${ui.showApiFilters ? ' on' : ''}" data-action="map-ln-filters" aria-expanded="${String(Boolean(ui.showApiFilters))}">${icon('filter')}<span>${esc(m.ln.filters)}${activeFilters ? ` (${String(activeFilters)})` : ''}</span></button>`
+    : '';
+  const toolbar = `<div class="map-gtools"><div class="map-seg" role="tablist"><button role="tab" data-action="map-ln-mode" data-mode="path" aria-selected="${String(!full)}">${esc(m.g.mainPath)}</button><button role="tab" data-action="map-ln-mode" data-mode="full" aria-selected="${String(full)}">${esc(m.g.fullGraph)}</button></div>${view}<span class="map-gbtns">${btn('map-g-full', ui.fullscreen ? m.g.exitFullscreen : m.g.fullscreen, ui.fullscreen ? 'minimize' : 'maximize', ` aria-pressed="${String(ui.fullscreen)}"`)}${btn('map-g-fit', m.g.fit, 'scan')}${btn('map-g-zoom', m.g.zoomOut, 'minus', ' data-dir="-1"')}<output class="map-gzoom" aria-live="polite">${esc(m.g.zoomLevel(ui.zoom))}</output>${btn('map-g-zoom', m.g.zoomIn, 'plus', ' data-dir="1"')}</span></div>`;
+  const title = `<div class="map-gtitle"><h3>${esc(m.a.tabs.trace)} · <b>${esc(sheet.api.name)}</b></h3>${toolbar}</div>`;
+  if (!full) {
+    const edges = sheet.path.edges;
+    const count = (c: string): number => edges.filter((e) => e.confidence === c).length;
+    return `<div class="map-trace${ui.fullscreen ? ' full' : ''}" data-map-trace>${title}${integrationPath(m, ui, sheet)}<div class="map-legend2"><span class="lg c-confirmed">${icon('check')}${esc(m.g.legendConfirmed(count('CONFIRMED')))}</span><span class="lg c-probable">${icon('alert')}${esc(m.g.legendProbable(count('PROBABLE')))}</span><span class="lg c-unknown"><i></i>${esc(m.g.legendUnknown(count('UNKNOWN')))}</span><span class="lg flow"><i></i>${esc(m.g.legendFlow)}</span></div></div>`;
+  }
+  const model = laneModel(sheet, ui.apiView, ui.apiFilters);
+  // Une sélection de carte qui n'existe plus dans cette vue (critère d'affichage, autre vue) n'est pas montrée.
+  const selection =
+    ui.graphSel?.kind === 'node' && !model.cards.has(ui.graphSel.id) ? undefined : ui.graphSel;
+  const options = {
+    m,
+    ...(h.summary ? { summary: h.summary } : {}),
+    sheet,
+    model,
+    openCards: new Set(ui.lnCards),
+    openBundles: new Set(ui.lnBundles),
+    ...(selection ? { selection } : {}),
+  };
+  const drawn = lanesView(options);
+  const height = Math.min(760, Math.max(320, Math.round(drawn.height * ui.zoom) + 48));
+  const canvas = `<div class="map-canvas full lanes" data-map-canvas tabindex="0" style="--ln-h:${String(height)}px" aria-label="${esc(`${m.a.tabs.trace} · ${sheet.api.name}`)}"><div class="map-canvas-in" style="transform:translate(${String(ui.panX)}px,${String(ui.panY)}px) scale(${String(ui.zoom)})">${drawn.html}</div></div>`;
+  const notes = [
+    sheet.graph.truncated
+      ? `<p class="map-note warn-t small ln-note" role="note">${esc(m.p.truncated(sheet.graph.limit, sheet.graph.depth))}</p>`
+      : '',
+    model.hiddenCards
+      ? `<p class="map-note small mu ln-note" role="note">${esc(m.ln.hidden(model.hiddenCards))}</p>`
+      : '',
+    model.viewHidden
+      ? `<p class="map-note small mu ln-note" role="note">${esc(m.ln.viewHidden(model.viewHidden))}</p>`
+      : '',
+  ].join('');
+  // La liste exhaustive : toutes les relations (dessinées, internes aux cartes, masquées), ou la sélection.
+  const everything = [...new Map([...model.all, ...model.inner].map((e) => [e.id, e])).values()];
+  let listed = everything;
+  let scope = '';
+  if (selection?.kind === 'edge') {
+    const ids = new Set(selection.ids);
+    listed = everything.filter((e) => ids.has(e.id));
+    scope = m.g.relSelection;
+  } else if (selection?.kind === 'node') {
+    const nodes = new Set(model.cards.get(selection.id)?.nodes ?? []);
+    listed = everything.filter((e) => nodes.has(e.from) || nodes.has(e.to));
+    scope = m.g.relSelection;
+  }
+  const table = relationsTable(
+    { m, ...(selection ? { selection } : {}), conf: h.conf, evidence: h.evidence, relationsOpen: ui.relOpen },
+    listed,
+    model.nodes,
+    scope,
+  ).replace(
+    esc(m.g.relations(listed.length)),
+    esc(scope ? m.g.relations(listed.length) : m.ln.allRelations(listed.length, model.inner.length)),
+  );
+  return `<div class="map-trace ln-wrap${ui.fullscreen ? ' full' : ''}" data-map-trace>${title}${ui.showApiFilters ? laneFilters(m, sheet, ui.apiView, ui.apiFilters) : ''}${notes}${canvas}${laneLegend(m, model)}${laneSelection({ ...options, conf: h.conf, evidence: h.evidence, where: h.where })}${table}</div>`;
 }
 
 function featuresTable(m: MapStrings, h: ApiViewHelpers, sheet: ApiSheet): string {
@@ -246,7 +322,7 @@ function centerCard(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers): string
   ];
   let body: string;
   if (ui.apiTab === 'endpoints') body = endpointsPane(m, h, sheet);
-  else if (ui.apiTab === 'trace') body = tracePane(m, ui, sheet);
+  else if (ui.apiTab === 'trace') body = tracePane(m, ui, h, sheet);
   else if (ui.apiTab === 'features') body = featuresTable(m, h, sheet);
   else if (ui.apiTab === 'scenarios') body = scenariosTable(m, h, sheet);
   else if (ui.apiTab === 'impacts') body = impactsPane(m, ui, h, sheet);
@@ -286,7 +362,8 @@ export function apisTab(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers): st
   const bottom = sheet
     ? `<div class="map-bottom two"><section class="card map-afeat"><h2>${icon('cube')}<span>${esc(m.a.featuresTitle(sheet.features.length))}</span></h2>${featuresTable(m, h, sheet)}</section><section class="card map-ascen"><h2>${icon('play')}<span>${esc(m.a.scenariosTitle(sheet.scenarios.length))}</span></h2>${scenariosTable(m, h, sheet)}</section></div>`
     : '';
-  return `<div class="map-explorer map-apis">${catalogCard(m, ui, h)}${centerCard(m, ui, h)}${rightColumn(m, ui, h)}</div>${bottom}`;
+  // La traçabilité prend la largeur : les détails de l'API passent sous le graphe.
+  return `<div class="map-explorer map-apis${sheet && ui.apiTab === 'trace' ? ' trace' : ''}">${catalogCard(m, ui, h)}${centerCard(m, ui, h)}${rightColumn(m, ui, h)}</div>${bottom}`;
 }
 
 /** Les indicateurs de l'onglet, calculés par le serveur sur le catalogue réel. */

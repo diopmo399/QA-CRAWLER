@@ -1200,6 +1200,47 @@ changent pas) ; un appel « à classifier » se classe par `CLASSIFY_API` (`INTE
 | `cartography.api(projectId, id)`          | `GET …/cartography/api?id=`                                   | la fiche : API, fonctionnalités, scénarios, parcours, voisinage borné, impact, criticité                                |
 | `cartography.decide(projectId, decision)` | `POST …/cartography/decisions` (`RENAME_API`, `CLASSIFY_API`) | l'historique des décisions                                                                                              |
 
+#### Traçabilité (graphe) d'une API
+
+L'onglet **Traçabilité (graphe)** de la fiche s'ouvre sur le **graphe complet** de l'API (le **parcours
+principal** reste à un clic). La fiche renvoie, dans une limite de 300 nœuds signalée si elle est
+atteinte :
+
+- tout l'amont démontré (appelants jusqu'au frontal) ;
+- l'aval de ses endpoints (méthode servie, appels, persistance) ;
+- ce qui y est rattaché (champs saisis, DTO lus, tables écrites et leurs colonnes) ;
+- les appels sortants faits depuis ces nœuds (`outbound` : API externe ou à classifier, endpoint, preuve).
+
+Le graphe est dessiné **en couloirs** alignés : une colonne par couche (Frontend, BFF, Backend), puis
+une colonne où s'empilent les couloirs terminaux (API externe, cible à classifier, contrats, base de
+données). Une API externe peut donc être appelée par le BFF comme par le Backend, sans chaîne imposée.
+
+| Élément        | Ce qu'il représente                                                                                                                                                                                         |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Carte          | les nœuds d'un même conteneur (classe et ses méthodes, composant et ses champs, DTO et ses propriétés, table et ses colonnes, endpoint) ; deux homonymes de deux couches ou sources restent deux cartes     |
+| Statut         | la relation la plus sûre qui relie la carte dans la vue (confirmée, probable, non démontrée), en icône ; une carte de l'API elle-même est soulignée                                                         |
+| Faisceau       | les relations entre deux couloirs, en un tracé orthogonal avec son compteur « N liens » ; un clic liste chaque relation et sa preuve (« Voir le code »), un second clic les déplie, une par paire de cartes |
+| Nature         | la couleur : vert pour un flux interne, violet pour un appel d'API externe, bleu pour un accès à la base ; le statut est montré à part (trait plein, tirets, pointillés, ⚠ et nombre sur le compteur)       |
+| Liens internes | les relations entre cartes d'un même couloir, comptées dans l'en-tête du couloir ; un clic les liste, un second les dessine                                                                                 |
+
+- **Vues.** _Architecture_ montre les appels, dépendances, lectures et écritures. _Données_ montre les
+  flux de champs (transmission, mapping, lecture, écriture), avec sur l'API elle-même les champs envoyés
+  (→) et reçus (←). Changer de vue ou de mode garde la sélection.
+- **Critères d'affichage.** Par couche, par nature, par statut et par profondeur (sauts depuis l'API). Masquer
+  n'efface rien : la liste exhaustive « Toutes les relations » garde chaque relation de la vue, y compris
+  celles internes aux cartes.
+- **Interactions.** Le survol d'une carte fait ressortir ses voisines et leurs faisceaux. Le clic sur une
+  carte ouvre ses éléments : nom technique, nom métier, fichier et ligne, source, confiance, version du
+  scan. « +N autres » déplie une carte.
+- **Affichage.** Zoom (Ctrl + molette, ou la molette seule en plein écran ; boutons ; touches + et −),
+  recentrage, déplacement à la souris ou aux flèches, plein écran (Échap pour sortir). À l'ouverture, le
+  graphe est ajusté à la largeur de la zone sans descendre sous 70 % (le reste se parcourt en déplaçant
+  la vue).
+
+Le dessin est calculé dans la page, sans bibliothèque de disposition supplémentaire : ordre des cartes
+par barycentre (moins de croisements), troncs et voies écartés, couloirs du haut et du bas pour les
+faisceaux qui sautent une colonne ou reviennent en arrière.
+
 « Planifier » est affiché désactivé : la planification des scans de cartographie n'existe pas encore.
 
 **Limites.** Le corps d'une méthode n'est pas comparé entre deux scans (seule sa signature l'est).

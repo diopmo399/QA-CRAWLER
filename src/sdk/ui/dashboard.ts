@@ -316,6 +316,10 @@ export class QaCrawlerDashboard extends Base {
       if (!name || !this.state.envForm || name === 'writes') return;
       (this.state.envForm as unknown as Record<string, string>)[name] = target.value;
     });
+    // Le survol d'une carte du graphe en couloirs : son voisinage ressort (sans redessin).
+    this.root.addEventListener('pointerover', (event) => {
+      if (this.state.route.view === 'cartography') this.cartography.pointerOver(event as PointerEvent);
+    });
     this.root.addEventListener('pointerdown', (event) => {
       if (this.state.route.view === 'cartography' && this.cartography.pointerDown(event as PointerEvent))
         return;
@@ -326,7 +330,16 @@ export class QaCrawlerDashboard extends Base {
     this.root.addEventListener(
       'wheel',
       (event) => {
-        this.incidents.wheel(event as WheelEvent);
+        if (this.state.route.view !== 'cartography') this.incidents.wheel(event as WheelEvent);
+      },
+      { passive: false },
+    );
+    // La molette sur le graphe de la cartographie : écoutée sur l'élément hôte, non passif. Posé sur la
+    // seule racine fantôme, l'écouteur ne suffit pas à Chromium pour lui transmettre la molette réelle.
+    this.addEventListener(
+      'wheel',
+      (event) => {
+        if (this.state.route.view === 'cartography') this.cartography.wheel(event);
       },
       { passive: false },
     );
