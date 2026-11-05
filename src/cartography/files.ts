@@ -223,12 +223,14 @@ async function readRef(dirs: readonly string[], ref: string): Promise<string | u
  */
 export async function gitInfo(directory: string, stopAt: string): Promise<GitInfo> {
   const top = await realpath(stopAt).catch(() => path.resolve(stopAt));
-  let current = directory;
+  // Les deux chemins sont comparés résolus (noms courts de Windows, liens du dossier temporaire).
+  const start = await realpath(directory).catch(() => path.resolve(directory));
+  let current = start;
   for (let depth = 0; depth < 12; depth++) {
     const marker = path.join(current, '.git');
     const info = await lstat(marker).catch(() => undefined);
     if (info) {
-      const repoPath = path.relative(current, directory).split(path.sep).join('/');
+      const repoPath = path.relative(current, start).split(path.sep).join('/');
       const undetermined = (note: string): GitInfo => ({ status: 'UNDETERMINED', repoPath, note });
       let gitDir = marker;
       if (info.isFile()) {

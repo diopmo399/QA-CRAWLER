@@ -4,6 +4,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'n
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CartographyConfig, MapSource } from '../../src/sdk/core/cartography.js';
 import { gitInfo, readSource } from '../../src/cartography/files.js';
@@ -48,7 +49,7 @@ const source = (extra: Partial<MapSource> = {}): MapSource => ({
   path: '',
   include: [],
   enabled: true,
-  repoUrl: `file://${origin}`,
+  repoUrl: pathToFileURL(origin).href,
   ...extra,
 });
 const git = (dir: string, ...args: string[]): string =>
@@ -223,7 +224,13 @@ describe('preparing a remote repository (local file:// repositories)', () => {
       /invalid branch/,
     );
     expect(
-      await failure(prepareGitSource(source({ repoUrl: `file://${base}/absent` }), 'p-err', policy())),
+      await failure(
+        prepareGitSource(
+          source({ repoUrl: pathToFileURL(path.join(base, 'absent')).href }),
+          'p-err',
+          policy(),
+        ),
+      ),
     ).toMatch(/UNREACHABLE/);
     const dir = await workdirOf(policy(), 'p-err', 'front');
     expect(existsSync(dir)).toBe(false);
@@ -382,7 +389,10 @@ describe('scan: several repositories, local revisions, comparison', () => {
     await makeRepo(other, { 'src/app/a.component.ts': 'export class OtherA {}\n' });
     const config: CartographyConfig = {
       schema: 1,
-      sources: [source(), source({ id: 'back', name: 'Back', layer: 'BACKEND', repoUrl: `file://${other}` })],
+      sources: [
+        source(),
+        source({ id: 'back', name: 'Back', layer: 'BACKEND', repoUrl: pathToFileURL(other).href }),
+      ],
     };
     const { model } = await runScan({
       config,

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createQaCrawler,
@@ -85,7 +86,7 @@ describe('cartography with remote Git and local sources', () => {
           path: '',
           include: [],
           enabled: true,
-          repoUrl: `file://${path.join(roots, 'front')}`,
+          repoUrl: pathToFileURL(path.join(roots, 'front')).href,
           tokenEnv: 'QA_GIT_TOKEN',
         },
         {
@@ -128,8 +129,13 @@ describe('cartography with remote Git and local sources', () => {
       });
     expect((await error(save({ repoUrl: 'https://github.com/acme/app' }))).status).toBe(422);
     expect((await error(save({ repoUrl: 'https://u:p@github.com/a/b' }))).status).toBe(422);
-    expect((await error(save({ repoUrl: `file://${roots}/front`, commit: 'abc' }))).status).toBe(400);
-    expect((await error(save({ repoUrl: `file://${roots}/front`, tokenEnv: 'HOME' }))).status).toBe(400);
+    expect(
+      (await error(save({ repoUrl: pathToFileURL(path.join(roots, 'front')).href, commit: 'abc' }))).status,
+    ).toBe(400);
+    expect(
+      (await error(save({ repoUrl: pathToFileURL(path.join(roots, 'front')).href, tokenEnv: 'HOME' })))
+        .status,
+    ).toBe(400);
     expect((await error(save({}))).status).toBe(400);
   });
 
@@ -229,7 +235,7 @@ describe('a server without remote Git sources', () => {
               path: '',
               include: [],
               enabled: true,
-              repoUrl: `file://${roots}/front`,
+              repoUrl: pathToFileURL(path.join(roots, 'front')).href,
             },
           ],
         }),

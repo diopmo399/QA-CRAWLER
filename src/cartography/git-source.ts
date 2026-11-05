@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { lstat, mkdir, realpath, rm, stat } from 'node:fs/promises';
+import { lstat, mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
-import { devNull } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { GitProvider, MapSource } from '../sdk/core/cartography.js';
 import { SourceAccessError } from './files.js';
 
@@ -119,10 +119,15 @@ export function parseRepoUrl(
   if (url.search || url.hash)
     throw new GitSourceError('URL_REFUSED', 'the repository URL must not carry a query or a fragment');
   if (protocol === 'file') {
-    const local = decodeURIComponent(url.pathname);
+    let local: string;
+    try {
+      local = fileURLToPath(url);
+    } catch {
+      throw new GitSourceError('URL_REFUSED', 'a file:// repository must be an absolute path');
+    }
     if (!path.isAbsolute(local) || local.split(/[\\/]/).includes('..'))
       throw new GitSourceError('URL_REFUSED', 'a file:// repository must be an absolute path');
-    return { url: `file://${url.pathname.replace(/\/+$/, '')}`, protocol, host: '' };
+    return { url: url.href.replace(/\/+$/, ''), protocol, host: '' };
   }
   const host = url.hostname.toLowerCase();
   if (policy.allowedHosts.length === 0)
@@ -205,9 +210,23 @@ interface GitRun {
 }
 
 /** Les réglages imposés à chaque commande : rien d'hérité, rien d'exécuté, rien de suivi. */
-function hardening(protocols: readonly string[]): string[] {
+/**
+ * Une configuration globale vide et un dossier de hooks vide, propres au serveur : ni le fichier nul du
+ * système (refusé par git sous Windows) ni ceux de l'utilisateur ne sont lus.
+ */
+function supportOf(workRoot: string): { config: string; hooks: string } {
+  return { config: path.join(workRoot, '.qa-git', 'config'), hooks: path.join(workRoot, '.qa-git', 'hooks') };
+}
+
+async function ensureSupport(workRoot: string): Promise<void> {
+  const support = supportOf(workRoot);
+  await mkdir(support.hooks, { recursive: true });
+  await writeFile(support.config, '', { flag: 'a' });
+}
+
+function hardening(protocols: readonly string[], hooks: string): string[] {
   const settings = [
-    `core.hooksPath=${devNull}`,
+    `core.hooksPath=${hooks}`,
     'core.fsmonitor=false',
     'core.symlinks=false',
     'core.protectNTFS=true',
@@ -235,7 +254,7 @@ function gitEnv(workRoot: string, header?: string): NodeJS.ProcessEnv {
     HOME: workRoot,
     GIT_TERMINAL_PROMPT: '0',
     GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: devNull,
+    GIT_CONFIG_GLOBAL: supportOf(workRoot).config,
     GIT_ASKPASS: '',
     SSH_ASKPASS: '',
     GIT_LFS_SKIP_SMUDGE: '1',
@@ -267,6 +286,7 @@ function runGit(
   args: readonly string[],
   options: {
     env: NodeJS.ProcessEnv;
+    workRoot: string;
     protocols: readonly string[];
     timeout: number;
     signal?: AbortSignal;
@@ -276,7 +296,7 @@ function runGit(
   return new Promise((resolve, reject) => {
     execFile(
       'git',
-      [...hardening(options.protocols), ...args],
+      [...hardening(options.protocols, supportOf(options.workRoot).hooks), ...args],
       {
         env: options.env,
         timeout: options.timeout,
@@ -438,18 +458,22 @@ export async function prepareGitSource(
   const protocols = policy.protocols ?? ['https'];
   const timeout = policy.timeoutMs ?? DEFAULT_TIMEOUT;
   if (repo.protocol === 'file') {
-    const local = await realpath(decodeURIComponent(new URL(repo.url).pathname)).catch(() => undefined);
+    // La racine est contrôlée avant l'existence : un dossier hors des racines est refusé, présent ou non.
+    const candidate = path.resolve(fileURLToPath(new URL(repo.url)));
+    const real = await realpath(candidate).catch(() => undefined);
+    const parent = await realpath(path.dirname(candidate)).catch(() => path.dirname(candidate));
+    const target = real ?? path.join(parent, path.basename(candidate));
     const roots = await Promise.all(
       (policy.fileRoots ?? []).map((r) => realpath(r).catch(() => path.resolve(r))),
     );
-    if (!local) throw new GitSourceError('UNREACHABLE', 'the repository folder does not exist');
     if (
       !roots.some(
         (root) =>
-          !path.relative(root, local).startsWith('..') && !path.isAbsolute(path.relative(root, local)),
+          !path.relative(root, target).startsWith('..') && !path.isAbsolute(path.relative(root, target)),
       )
     )
       throw new GitSourceError('URL_REFUSED', 'the file:// repository is outside the allowed source roots');
+    if (!real) throw new GitSourceError('UNREACHABLE', 'the repository folder does not exist');
   } else await checkAddresses(repo.host, policy);
   if (source.branch !== undefined && !isBranchName(source.branch))
     throw new GitSourceError('FAILED', 'invalid branch name');
@@ -470,9 +494,11 @@ export async function prepareGitSource(
   const secrets = [token ?? '', header ?? '', header?.replace('Authorization: Basic ', '') ?? ''];
   const dir = await workdirOf(policy, projectKey, source.id);
   const env = gitEnv(policy.workRoot, header);
+  await ensureSupport(policy.workRoot);
   const git = (args: string[], maxBuffer?: number): Promise<GitRun> =>
     runGit(args, {
       env,
+      workRoot: policy.workRoot,
       protocols,
       timeout,
       ...(signal ? { signal } : {}),
@@ -546,8 +572,10 @@ export async function gitShow(
 ): Promise<string | undefined> {
   if (!isCommitId(revision) || path.isAbsolute(file) || file.split(/[\\/]/).includes('..')) return undefined;
   try {
+    await ensureSupport(policy.workRoot);
     const run = await runGit(['-C', dir, 'show', `${revision}:${file}`], {
       env: gitEnv(policy.workRoot),
+      workRoot: policy.workRoot,
       protocols: [],
       timeout: 15_000,
       maxBuffer: 4 * 1024 * 1024,
