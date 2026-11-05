@@ -229,6 +229,8 @@ function hardening(protocols: readonly string[], hooks: string): string[] {
     `core.hooksPath=${hooks}`,
     'core.fsmonitor=false',
     'core.symlinks=false',
+    // Sous Windows, les chemins de plus de 260 caractères (fréquents dans les projets Java) sont acceptés.
+    'core.longpaths=true',
     'core.protectNTFS=true',
     'core.protectHFS=true',
     'credential.helper=',
@@ -363,6 +365,11 @@ function classify(
     return target.branch
       ? new GitSourceError('BRANCH_NOT_FOUND', `the branch ${target.branch} does not exist in the repository`)
       : new GitSourceError('UNREACHABLE', 'the repository has no default branch');
+  if (/filename too long|file name too long|path too long/.test(text))
+    return new GitSourceError(
+      'FAILED',
+      `a file path of the repository is too long for this system (${clean(error.stderr, secrets)})`,
+    );
   if (
     /could not resolve host|connection refused|failed to connect|couldn't connect|does not appear to be a git repository|repository not found|returned error: 404|not found|no such file or directory|connection timed out|redirect/.test(
       text,

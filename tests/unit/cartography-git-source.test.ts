@@ -53,9 +53,13 @@ const source = (extra: Partial<MapSource> = {}): MapSource => ({
   ...extra,
 });
 const git = (dir: string, ...args: string[]): string =>
-  execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
-    env: { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: '1', HOME: base },
-  })
+  execFileSync(
+    'git',
+    ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.longpaths=true', ...args],
+    {
+      env: { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: '1', HOME: base },
+    },
+  )
     .toString()
     .trim();
 const failure = async (work: Promise<unknown>): Promise<string> =>
@@ -254,6 +258,26 @@ describe('preparing a remote repository (local file:// repositories)', () => {
     expect(await gitShow(root, 'f'.repeat(40), 'src/app/a.component.ts', policy())).toBeUndefined();
     await removeWorkdirs(policy(), 'p-show', ['front']);
     expect(existsSync(root)).toBe(false);
+  });
+
+  it('a file path longer than 260 characters is checked out (Windows limit)', async () => {
+    const deep = path.join(base, 'deep');
+    const file = [
+      ...Array.from({ length: 12 }, (_, i) => `package-segment-${String(i).padStart(2, '0')}`),
+      'VeryLongServiceName.java',
+    ].join('/');
+    await makeRepo(deep, { [file]: 'class VeryLongServiceName {}\n' });
+    const prepared = await prepareGitSource(
+      source({ repoUrl: pathToFileURL(deep).href }),
+      'p-long',
+      policy(),
+    );
+    const full = path.join(prepared.root, file);
+    expect(full.length).toBeGreaterThan(260);
+    expect(existsSync(full)).toBe(true);
+    expect(await gitShow(prepared.root, prepared.commit, file, policy())).toBe(
+      'class VeryLongServiceName {}\n',
+    );
   });
 
   it('a repository above the size limit is refused and removed', async () => {

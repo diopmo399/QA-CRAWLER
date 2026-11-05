@@ -41,7 +41,8 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 - **Cartographie : sources Git distantes.** Une source peut être un dépôt Git (`kind: 'GIT'`, `repoUrl`,
   `branch`, `commit`, `tokenEnv`) que le serveur prépare lui-même. Les hôtes sont autorisés par
   `--git-host`, en https seulement, et les adresses internes sont refusées. Git est lancé sans shell,
-  sans hooks, sans sous-modules, sans liens symboliques, sans redirection, avec délais et limites. Le
+  sans hooks, sans sous-modules, sans liens symboliques, sans redirection, avec délais et limites ; sous
+  Windows, les chemins de plus de 260 caractères sont acceptés. Le
   jeton est désigné par le nom d'une variable d'environnement, jamais stocké ni renvoyé. Chaque scan
   enregistre le commit réellement analysé.
 - La révision des sources locales est lue de façon fiable (worktree, sous-module, sous-dossier d'un

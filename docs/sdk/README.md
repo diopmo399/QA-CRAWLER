@@ -1322,7 +1322,8 @@ renvoyée, écrite dans la copie de travail ni montrée dans une erreur.
 
 Les commandes git sont lancées sans shell, sans configuration système ou utilisateur, sans assistant
 d'identifiants ni invite, sans hooks, sans sous-modules, sans suivre de redirection. Les liens
-symboliques sont extraits comme de simples fichiers. Chaque opération a un délai (120 s) et le dépôt une
+symboliques sont extraits comme de simples fichiers. Sous Windows, les chemins de plus de 260 caractères
+(fréquents dans les projets Java) sont acceptés (`core.longpaths`). Chaque opération a un délai (120 s) et le dépôt une
 taille maximale (512 Mo). Une copie de travail est réservée pendant sa préparation (scans concurrents),
 effacée si sa première préparation échoue, et supprimée quand la source est retirée de la configuration.
 
