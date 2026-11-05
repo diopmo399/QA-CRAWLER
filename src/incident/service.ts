@@ -320,7 +320,9 @@ export class IncidentService {
     const snapshot = live?.progress.snapshot();
     if (running && snapshot) running.live = snapshot;
     const triggerRun = this.triggerLive.get(id);
-    if (triggerRun && incident.investigation.trigger) {
+    // Comme pour l'IA : un run de découverte terminé n'est montré qu'une fois `absorbTriggerOutcome` passé,
+    // avec ses hypothèses et ses vérifications ; avant, le lecteur voit encore son dernier état actif.
+    if (triggerRun && incident.investigation.trigger && !TRIGGER_FINAL_STATES.includes(triggerRun.state)) {
       const at = incident.investigation.trigger.runs.findIndex((run) => run.id === triggerRun.id);
       if (at >= 0) incident.investigation.trigger.runs[at] = structuredClone(triggerRun);
     }
@@ -2287,7 +2289,9 @@ export class IncidentService {
         },
         onProgress: async (run) => {
           this.triggerLive.set(id, structuredClone(run));
-          await this.persistTriggerRun(id, actor, run);
+          // L'état final est écrit par `absorbTriggerOutcome`, en une fois avec les hypothèses et les
+          // vérifications : l'écrire ici montrerait un run fini sans ce qu'il a produit.
+          if (!TRIGGER_FINAL_STATES.includes(run.state)) await this.persistTriggerRun(id, actor, run);
         },
         ...(aiClient && this.deps.ai?.settings.mode !== 'DETERMINISTIC'
           ? { proposeWithAi: createAiSequenceProposer(aiClient, { signal: abort.signal }) }
