@@ -207,6 +207,8 @@ export function extractFacts(
       : ts.ScriptKind.TS;
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);
   const facts: FileFacts = { file, imports: [], enums: [], classes: [], routeArrays: [], dtos: [], nodes: 0 };
+  /** Les constantes du module (const API = '/api/x') : une URL d'appel HTTP peut y être rangée. */
+  const moduleValues = constantsOf(ts, source.statements);
   const lineOf = (node: TS.Node): number =>
     source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
   const count = (): void => {
@@ -584,6 +586,50 @@ export function extractFacts(
         if (controls) fact.forms.push({ property: propertyName, controls, line: lineOf(member) });
       }
     }
+    // Les valeurs des propriétés (url = `${…}/x`, ou this.url = … dans le constructeur) : une URL d'appel
+    // HTTP y est souvent rangée. Une propriété qui reçoit plus d'une valeur (initialisation, constructeur,
+    // autre méthode) n'a pas de valeur sûre : elle n'est pas utilisée.
+    const fieldValues = new Map<string, TS.Expression>();
+    const writes = new Map<string, number>();
+    const wrote = (propertyName: string, value?: TS.Expression): void => {
+      writes.set(propertyName, (writes.get(propertyName) ?? 0) + 1);
+      if (value) fieldValues.set(propertyName, value);
+    };
+    for (const member of node.members) {
+      if (
+        ts.isPropertyDeclaration(member) &&
+        member.initializer &&
+        !ts.isArrowFunction(member.initializer) &&
+        !ts.isFunctionExpression(member.initializer)
+      ) {
+        const propertyName = nameOf(member.name);
+        if (propertyName) wrote(propertyName, member.initializer);
+      }
+      const body =
+        (ts.isConstructorDeclaration(member) || ts.isMethodDeclaration(member)) && member.body
+          ? member.body
+          : undefined;
+      if (!body) continue;
+      const constructor = ts.isConstructorDeclaration(member);
+      const visitWrites = (child: TS.Node): void => {
+        if (
+          ts.isBinaryExpression(child) &&
+          child.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          ts.isPropertyAccessExpression(child.left) &&
+          child.left.expression.kind === ts.SyntaxKind.ThisKeyword
+        )
+          // Seule une affectation directe du constructeur donne une valeur ; les autres rendent la valeur incertaine.
+          wrote(
+            child.left.name.text,
+            constructor && ts.isExpressionStatement(child.parent) && child.parent.parent === body
+              ? child.right
+              : undefined,
+          );
+        ts.forEachChild(child, visitWrites);
+      };
+      ts.forEachChild(body, visitWrites);
+    }
+    for (const [propertyName, times] of writes) if (times > 1) fieldValues.delete(propertyName);
     // Formulaires assignés : this.form = this.fb.group({...})
     const assignForms = (body: TS.Node): void => {
       const visit = (child: TS.Node): void => {
@@ -630,7 +676,16 @@ export function extractFacts(
         ? member.parameters
         : (member.initializer as TS.ArrowFunction).parameters;
       fact.methods.push(
-        methodOf(methodName, parameters, body, lineOf(member), formNames, httpOwners, routerOwners),
+        methodOf(
+          methodName,
+          parameters,
+          body,
+          lineOf(member),
+          formNames,
+          httpOwners,
+          routerOwners,
+          fieldValues,
+        ),
       );
     }
     // RÈGLES : le même AST, les mêmes lectures (contrôles, validateurs, navigation, appels).
@@ -835,6 +890,7 @@ export function extractFacts(
     forms: Set<string>,
     httpOwners: Set<string>,
     routerOwners: Set<string>,
+    fieldValues: ReadonlyMap<string, TS.Expression> = new Map(),
   ): MethodFact => {
     const method: MethodFact = {
       name,
@@ -852,6 +908,18 @@ export function extractFacts(
       line,
     };
     const scope: FlowScope = { forms, formValues: new Map(), controlValues: new Map() };
+    /** const url = `${this.base}/x` ; this.http.post(url, …) : l'URL est relue dans la constante. */
+    const localValues = constantsOf(ts, [], body);
+    const resolveValue = (expression: TS.Expression): TS.Expression | undefined => {
+      if (ts.isIdentifier(expression))
+        return localValues.get(expression.text) ?? moduleValues.get(expression.text);
+      if (
+        ts.isPropertyAccessExpression(expression) &&
+        expression.expression.kind === ts.SyntaxKind.ThisKeyword
+      )
+        return fieldValues.get(expression.name.text);
+      return undefined;
+    };
     /** Paramètre d'un callback de subscribe → l'appel dont il reçoit la réponse. */
     const callbackSources = new Map<string, NonNullable<ValueExpressionFact['source']>>();
     const valueOf = (node: TS.Expression): ValueExpressionFact =>
@@ -992,7 +1060,7 @@ export function extractFacts(
           ownerName !== undefined && (httpOwners.has(ownerName) || /^(http|httpClient)$/i.test(ownerName));
         if (ownerName && http && HTTP_METHODS[methodName]) {
           // La requête (?x=…) n'est jamais gardée : inutile pour relier, et elle peut porter un secret.
-          const route = routeTemplate(node.arguments[0])?.replace(/\?.*$/, '');
+          const route = routeTemplate(node.arguments[0], resolveValue)?.replace(/\?.*$/, '');
           if (route !== undefined) {
             const call: HttpCallFact = {
               method: HTTP_METHODS[methodName],
@@ -1038,22 +1106,34 @@ export function extractFacts(
     return method;
   };
 
-  /** '/api/users' · `${this.base}/users/${id}` · this.base + '/users' → /api/users, {base}/users/{param} */
-  const routeTemplate = (node: TS.Expression | undefined): string | undefined => {
+  /**
+   * '/api/users' · `${this.base}/users/${id}` · this.base + '/users' → /api/users, {base}/users/{param}.
+   * Avec `resolve`, une constante locale, une constante du module ou une propriété de la classe est relue
+   * (profondeur bornée) : const url = `${this.base}/x` ; this.http.get(url) → {base}/x.
+   */
+  const routeTemplate = (
+    node: TS.Expression | undefined,
+    resolve?: (expression: TS.Expression) => TS.Expression | undefined,
+    depth = 0,
+  ): string | undefined => {
     if (!node) return undefined;
     const literal = stringOf(node);
     if (literal !== undefined) return literal;
+    if (ts.isParenthesizedExpression(node)) return routeTemplate(node.expression, resolve, depth);
+    const deeper = resolve && depth < 4 ? resolve(node) : undefined;
+    if (deeper) return routeTemplate(deeper, resolve, depth + 1);
     if (ts.isTemplateExpression(node)) {
       let route = node.head.text;
       node.templateSpans.forEach((span, index) => {
-        route += index === 0 && node.head.text === '' ? '{base}' : '{param}';
+        const inner = resolve && depth < 4 ? routeTemplate(span.expression, resolve, depth + 1) : undefined;
+        route += inner ?? (index === 0 && node.head.text === '' ? '{base}' : '{param}');
         route += span.literal.text;
       });
       return route;
     }
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-      const left = routeTemplate(node.left) ?? '{base}';
-      const right = routeTemplate(node.right) ?? '{param}';
+      const left = routeTemplate(node.left, resolve, depth + 1) ?? '{base}';
+      const right = routeTemplate(node.right, resolve, depth + 1) ?? '{param}';
       return left + right;
     }
     return undefined;
@@ -1142,4 +1222,38 @@ export function extractFacts(
   };
   visitTop(source);
   return facts;
+}
+
+/**
+ * Les constantes (`const x = …`) d'une liste d'instructions, ou de tout un corps de méthode : un nom
+ * déclaré deux fois (portées différentes) est écarté, sa valeur n'étant pas sûre.
+ */
+function constantsOf(
+  ts: TypeScriptModule,
+  statements: readonly TS.Statement[],
+  body?: TS.Node,
+): Map<string, TS.Expression> {
+  const values = new Map<string, TS.Expression>();
+  const twice = new Set<string>();
+  const take = (list: TS.VariableDeclarationList): void => {
+    if (!(list.flags & ts.NodeFlags.Const)) return;
+    for (const declaration of list.declarations) {
+      if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue;
+      const name = declaration.name.text;
+      if (values.has(name)) twice.add(name);
+      values.set(name, declaration.initializer);
+    }
+  };
+  for (const statement of statements) if (ts.isVariableStatement(statement)) take(statement.declarationList);
+  if (body) {
+    const visit = (node: TS.Node): void => {
+      // Les constantes des fonctions imbriquées (callbacks de pipe/subscribe) comptent aussi : un même nom
+      // déclaré à deux endroits est écarté plus bas.
+      if (ts.isVariableDeclarationList(node)) take(node);
+      ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(body, visit);
+  }
+  for (const name of twice) values.delete(name);
+  return values;
 }

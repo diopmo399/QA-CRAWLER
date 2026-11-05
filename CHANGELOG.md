@@ -39,6 +39,10 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   fonctionnalités atteintes, preuve) dans un tableau filtrable. Une source non lue n'est jamais présentée
   comme « sans changement ». Les fichiers lock des dépendances ne sont plus lus ; les fichiers
   trop gros pour être lus sont nommés, et les limites de lecture sont dites en clair.
+- **Cartographie : URL d'appel HTTP relues.** Une URL rangée dans une constante locale
+  (`const url = …; this.http.post(url, …)`), une constante du module ou une propriété de la classe est
+  maintenant relue : l'appel du Front est relié à l'endpoint du BFF au lieu d'être perdu. Une propriété
+  qui reçoit plusieurs valeurs, ou un paramètre, n'est jamais deviné.
 - **Cartographie : sources Git distantes.** Une source peut être un dépôt Git (`kind: 'GIT'`, `repoUrl`,
   `branch`, `commit`, `tokenEnv`) que le serveur prépare lui-même. Les hôtes sont autorisés par
   `--git-host`, en https seulement, et les adresses internes sont refusées. Git est lancé sans shell,
