@@ -766,6 +766,16 @@ export class CartographyController {
       case 'map-st-el':
         this.selectElement(target.dataset.id ?? '');
         return true;
+      case 'map-st-open': {
+        // Depuis l'impact : l'onglet touché s'ouvre dans Structure & Conditions.
+        const id = target.dataset.id ?? '';
+        ui.tab = 'structure';
+        ui.element = id;
+        void this.run(() => this.loadTab()).then(() => {
+          this.selectElement(id);
+        });
+        return true;
+      }
       case 'map-st-tab': {
         const tab = target.dataset.tab as StructTab;
         if (!STRUCT_TABS.includes(tab)) return true;

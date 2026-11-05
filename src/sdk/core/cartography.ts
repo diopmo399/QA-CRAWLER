@@ -527,6 +527,18 @@ export interface ImpactReport {
   changes: MapChange[];
   features: { feature: string; name: string; confidence: 'CONFIRMED' | 'PROBABLE'; via: string[] }[];
   scenarios: { scenario: string; confidence: 'CONFIRMED' | 'PROBABLE'; features: string[]; reason: string }[];
+  /** Page → onglet → fonctionnalité → élément touché : l'onglet le plus proche qui contient l'élément, le
+   * déclenche (confirmé si le chemin l'est) ou en lit la valeur (potentiel). Absent des rapports d'avant. */
+  tabs?: {
+    page?: string;
+    tab: string;
+    tabName: string;
+    feature?: string;
+    element: string;
+    elementName: string;
+    confidence: 'CONFIRMED' | 'PROBABLE';
+    how: 'CONTAINS' | 'TRIGGERS' | 'READS';
+  }[];
 }
 
 /** Ce que le tableau de bord lit en une fois. */
@@ -812,6 +824,8 @@ export interface ApiScenarioUse {
 export interface StructureItem {
   id: string;
   kind: 'ROUTE' | 'COMPONENT' | 'CONTAINER' | 'FIELD' | 'BUTTON';
+  /** Un conteneur qui est un groupe d'onglets ou un onglet. */
+  tab?: 'GROUP' | 'TAB';
   name: string;
   sub?: string;
   conditions: { aspect: 'VISIBLE' | 'ENABLED'; expression: string; whenTrue: boolean }[];
@@ -878,8 +892,37 @@ export interface ElementSheet {
   outbound: ApiOutbound[];
   features: ApiFeatureUse[];
   scenarios: ApiScenarioUse[];
+  /** Un onglet ou un groupe d'onglets : son contenu, ses dépendances et ses préconditions démontrées. */
+  tab?: TabSheet;
   scanId: string;
   scannedAt?: string;
+}
+
+/** Ce qu'un onglet contient et ce dont il dépend, d'après le code. */
+export interface TabSheet {
+  role: 'GROUP' | 'TAB';
+  library: string;
+  label?: string;
+  lazy?: string;
+  repeat?: string;
+  items?: string[];
+  route?: string;
+  routeUnresolved?: string;
+  /** Ce que le code montre pour atteindre l'onglet (écran, onglets parents, conditions), dans l'ordre. */
+  preconditions: string[];
+  /** Le flux du store qui choisit l'onglet actif d'un groupe ([selectedIndex], [activeId]…). */
+  selectedBy: { stream: string; reason: string; confidence: MapConfidence }[];
+  /** Les onglets dont celui-ci dépend (un store qu'ils modifient), et ceux qui dépendent de lui. */
+  dependsOn: { id: string; name: string; reason: string; confidence: MapConfidence }[];
+  usedBy: { id: string; name: string; reason: string; confidence: MapConfidence }[];
+  /** Les onglets du groupe. */
+  tabs: { id: string; name: string }[];
+  /** Les composants affichés (avec les autres endroits qui les affichent) ; champs, boutons, appels, stores. */
+  components: { id: string; name: string; reusedIn: string[] }[];
+  fields: number;
+  buttons: number;
+  apis: MapNode[];
+  stores: string[];
 }
 
 export interface ConditionRow {

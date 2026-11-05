@@ -135,7 +135,7 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
   // Un membre lu par une condition qui est un flux (`canActivate$ | async`, `store.status$ | async`).
   const states: UiState[] = [...structure.states];
   for (const el of structure.elements)
-    for (const cond of [el.visibleWhen, el.disabledWhen]) {
+    for (const cond of [el.visibleWhen, el.disabledWhen, el.tab?.selectedBy]) {
       if (!cond) continue;
       for (const m of membersOf(cond.expression)) {
         const stream = rx.streamOf(el.component, m.root, m.path);
@@ -184,6 +184,7 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
       })),
     dtos: graph.dtos.map((dto) => ({ name: dto.name, properties: dto.properties, loc: dto.location })),
     elements: structure.elements,
+    children: structure.children,
     states,
     handlers: structure.handlers,
     symbols: rx.symbols,

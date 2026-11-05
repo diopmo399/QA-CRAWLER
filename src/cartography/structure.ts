@@ -13,6 +13,7 @@ import type {
   MapStructure,
   StructureItem,
   StructureKpis,
+  TabSheet,
 } from '../sdk/core/cartography.js';
 import { apiScenarios, MAX_PAGE, outboundOf, type CoverageContext, type MapIndex } from './explorer.js';
 
@@ -63,15 +64,41 @@ function conditionsOf(index: MapIndex, id: string): StructureItem['conditions'] 
     }));
 }
 
-function itemOf(index: MapIndex, node: MapNode, depth: number): StructureItem {
+function itemOf(
+  index: MapIndex,
+  node: MapNode,
+  depth: number,
+  path: ReadonlySet<string> = new Set(),
+): StructureItem {
+  // Imbrication variable (onglets dans des onglets, composants dans des composants) : bornée, sans cycle.
+  const inside = new Set([...path, node.id]);
   const children =
-    depth > 8
+    depth > 12
       ? []
       : out(index, node.id, 'CONTAINS')
           .map((e) => index.nodes.get(e.to))
-          .filter((n): n is MapNode => n !== undefined)
-          .sort((a, b) => (a.evidence[0]?.line ?? 0) - (b.evidence[0]?.line ?? 0))
-          .map((n) => itemOf(index, n, depth + 1));
+          .filter((n): n is MapNode => n !== undefined && !inside.has(n.id))
+          .sort((a, b) =>
+            a.kind === 'COMPONENT' || b.kind === 'COMPONENT'
+              ? 0
+              : (a.evidence[0]?.line ?? 0) - (b.evidence[0]?.line ?? 0),
+          )
+          .map((n) => itemOf(index, n, depth + 1, inside));
+  const tab = node.detail.tab === 'GROUP' || node.detail.tab === 'TAB' ? node.detail.tab : undefined;
+  const tabSub = tab
+    ? [
+        typeof node.detail.repeat === 'string'
+          ? `${node.detail.repeat}${Array.isArray(node.detail.items) ? ` : ${node.detail.items.join(', ')}` : ''}`
+          : '',
+        node.detail.lazy === 'ROUTE' && typeof node.detail.route === 'string'
+          ? `route ${node.detail.route}`
+          : node.detail.lazy
+            ? 'chargé à la sélection'
+            : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : '';
   const sub =
     node.kind === 'FIELD'
       ? typeof node.detail.type === 'string'
@@ -85,8 +112,9 @@ function itemOf(index: MapIndex, node: MapNode, depth: number): StructureItem {
   return {
     id: node.id,
     kind: node.kind as StructureItem['kind'],
+    ...(tab ? { tab } : {}),
     name: node.label ?? node.name,
-    ...(sub ? { sub } : {}),
+    ...(sub || tabSub ? { sub: sub ?? tabSub } : {}),
     conditions: conditionsOf(index, node.id),
     children,
   };
@@ -105,10 +133,12 @@ export function structureOf(index: MapIndex, featureId?: string): MapStructure |
   );
   const roots: StructureItem[] = [];
   for (const component of components.sort((a, b) => a.name.localeCompare(b.name))) {
-    const item = itemOf(index, component, 0);
     const routes = into(index, component.id, 'DISPLAYS')
       .map((e) => index.nodes.get(e.from))
       .filter((n): n is MapNode => n?.kind === 'ROUTE');
+    // Un composant affiché dans un autre (onglet, conteneur) apparaît sous lui, pas à la racine.
+    if (!routes.length && into(index, component.id, 'CONTAINS').length) continue;
+    const item = itemOf(index, component, 0);
     roots.push(
       routes.length
         ? {
@@ -325,11 +355,14 @@ export function elementSheet(index: MapIndex, cov: CoverageContext, id: string):
       edges.push(...resolved.chain.edges);
     }
   }
+  const content = element.detail.tab ? contentOf(index, id) : undefined;
   const actions =
     element.kind === 'BUTTON'
       ? [actionOf(index, element, included, edges)]
-      : out(index, id, 'CONTAINS')
-          .map((e) => index.nodes.get(e.to))
+      : (content
+          ? [...content].map((n) => index.nodes.get(n))
+          : out(index, id, 'CONTAINS').map((e) => index.nodes.get(e.to))
+        )
           .filter((n): n is MapNode => n?.kind === 'BUTTON')
           .map((button) => {
             included.set(button.id, button);
@@ -376,6 +409,7 @@ export function elementSheet(index: MapIndex, cov: CoverageContext, id: string):
     outbound,
     features,
     scenarios: apiScenarios(cov, features),
+    ...(content ? { tab: tabSheetOf(index, element, content) } : {}),
     scanId: index.scanId,
     ...(index.model.scan.finishedAt ? { scannedAt: index.model.scan.finishedAt } : {}),
   };
@@ -481,4 +515,96 @@ export function actionRows(index: MapIndex, query: MapListQuery): MapPage<Action
   }
   rows.sort((a, b) => (a.component ?? '').localeCompare(b.component ?? '') || a.name.localeCompare(b.name));
   return page(rows, query);
+}
+
+/** Le contenu d'un onglet : éléments et composants imbriqués (borné, sans cycle). */
+function contentOf(index: MapIndex, id: string): Set<string> {
+  const seen = new Set<string>([id]);
+  const queue = [id];
+  while (queue.length > 0 && seen.size < 2000) {
+    const cur = queue.shift() ?? '';
+    for (const e of out(index, cur, 'CONTAINS'))
+      if (!seen.has(e.to)) {
+        seen.add(e.to);
+        queue.push(e.to);
+      }
+  }
+  return seen;
+}
+
+const tabNameOf = (n: MapNode): string =>
+  typeof n.detail.tabLabel === 'string'
+    ? n.detail.tabLabel
+    : typeof n.detail.repeat === 'string'
+      ? `${n.detail.repeat}${Array.isArray(n.detail.items) ? ` (${n.detail.items.join(', ')})` : ''}`
+      : (n.label ?? n.name);
+
+/** La fiche d'onglet : contenu, appels atteints, stores, dépendances entre onglets, préconditions. */
+function tabSheetOf(index: MapIndex, tab: MapNode, content: ReadonlySet<string>): TabSheet {
+  const nodes = [...content].map((id) => index.nodes.get(id)).filter((n): n is MapNode => n !== undefined);
+  // Les appels atteints : boutons et gestionnaires (déclenchement), cycle de vie des composants affichés.
+  const starts: string[] = [];
+  for (const n of nodes)
+    for (const e of index.out.get(n.id) ?? [])
+      if (e.kind === 'TRIGGERS' || (e.kind === 'CALLS' && n.kind === 'COMPONENT')) starts.push(e.to);
+  const seen = new Set(starts);
+  const queue = [...starts];
+  const apis = new Map<string, MapNode>();
+  const stores = new Set<string>();
+  while (queue.length > 0 && seen.size < 5000) {
+    const cur = queue.shift() ?? '';
+    const node = index.nodes.get(cur);
+    if (node?.kind === 'API' && (node.layer === 'BFF' || node.layer === 'BACKEND')) apis.set(node.id, node);
+    if (node?.detail.role === 'STORE') stores.add(String(node.detail.owner ?? node.name));
+    for (const e of index.out.get(cur) ?? [])
+      if (e.kind === 'CALLS' && e.confidence !== 'UNKNOWN' && !seen.has(e.to)) {
+        seen.add(e.to);
+        queue.push(e.to);
+      }
+  }
+  const link = (e: MapEdge, other: string) => {
+    const n = index.nodes.get(other);
+    return { id: other, name: n ? tabNameOf(n) : other, reason: e.reason, confidence: e.confidence };
+  };
+  const isTab = (other: string): boolean => index.nodes.get(other)?.detail.tab === 'TAB';
+  const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+  return {
+    role: tab.detail.tab === 'GROUP' ? 'GROUP' : 'TAB',
+    library: str(tab.detail.tabLibrary) ?? '',
+    ...(str(tab.detail.tabLabel) ? { label: str(tab.detail.tabLabel) } : {}),
+    ...(str(tab.detail.lazy) ? { lazy: str(tab.detail.lazy) } : {}),
+    ...(str(tab.detail.repeat) ? { repeat: str(tab.detail.repeat) } : {}),
+    ...(Array.isArray(tab.detail.items) ? { items: tab.detail.items } : {}),
+    ...(str(tab.detail.route) ? { route: str(tab.detail.route) } : {}),
+    ...(str(tab.detail.routeUnresolved) ? { routeUnresolved: str(tab.detail.routeUnresolved) } : {}),
+    preconditions: Array.isArray(tab.detail.preconditions) ? tab.detail.preconditions : [],
+    selectedBy: out(index, tab.id, 'CONTROLLED_BY')
+      .filter((e) => index.nodes.get(e.to)?.kind === 'STREAM')
+      .map((e) => ({
+        stream: index.nodes.get(e.to)?.name ?? e.to,
+        reason: e.reason,
+        confidence: e.confidence,
+      })),
+    dependsOn: out(index, tab.id, 'DEPENDS_ON')
+      .filter((e) => isTab(e.to))
+      .map((e) => link(e, e.to)),
+    usedBy: into(index, tab.id, 'DEPENDS_ON')
+      .filter((e) => isTab(e.from))
+      .map((e) => link(e, e.from)),
+    tabs: out(index, tab.id, 'CONTAINS')
+      .map((e) => index.nodes.get(e.to))
+      .filter((n): n is MapNode => n?.detail.tab === 'TAB')
+      .map((n) => ({ id: n.id, name: tabNameOf(n) })),
+    components: nodes
+      .filter((n) => n.kind === 'COMPONENT')
+      .map((n) => ({
+        id: n.id,
+        name: n.name,
+        reusedIn: Array.isArray(n.detail.reusedIn) ? n.detail.reusedIn : [],
+      })),
+    fields: nodes.filter((n) => n.kind === 'FIELD').length,
+    buttons: nodes.filter((n) => n.kind === 'BUTTON').length,
+    apis: [...apis.values()],
+    stores: [...stores],
+  };
 }

@@ -35,7 +35,8 @@ import { buildGraph } from './graph.js';
  * La version des analyseurs : à changer quand un analyseur produit d'autres faits. Les faits d'une autre
  * version (ou d'avant, sans version) ne sont jamais repris par un scan incrémental.
  */
-export const ANALYZERS = `cartography-2;${RXJS_ANALYZER}`;
+// 3 : onglets (groupes, libellés, chargement différé, routes) et composants affichés dans d'autres.
+export const ANALYZERS = `cartography-3;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;

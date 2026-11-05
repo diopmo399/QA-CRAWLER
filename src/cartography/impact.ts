@@ -270,10 +270,12 @@ export function computeImpact(
       ...(evidence ? { evidence } : {}),
     };
   });
+  const tabs = impactedTabs([to, from], changed, definite);
   return {
     from: from.scan.id,
     to: to.scan.id,
     sources: compareSources(from, to, changes),
+    ...(tabs.length ? { tabs } : {}),
     changes: enriched,
     features: [...features.values()]
       .map((entry) => ({ ...entry, confidence: definite(entry.confidence) }))
@@ -282,4 +284,119 @@ export function computeImpact(
       .map((entry) => ({ ...entry, confidence: definite(entry.confidence) }))
       .sort((a, b) => RANK[b.confidence] - RANK[a.confidence] || a.scenario.localeCompare(b.scenario)),
   };
+}
+
+/**
+ * Les onglets touchés : pour chaque élément modifié, l'onglet le plus imbriqué qui le contient (sûr), qui le
+ * déclenche par ses boutons et composants (selon le chemin), ou dont les conditions en lisent la valeur
+ * (potentiel). Rien n'est supposé : sans chemin dans le graphe, l'onglet n'est pas cité.
+ */
+function impactedTabs(
+  models: readonly CartographyModel[],
+  changed: ReadonlySet<string>,
+  definite: (c: MapConfidence) => 'CONFIRMED' | 'PROBABLE',
+): NonNullable<ImpactReport['tabs']> {
+  type Hit = NonNullable<ImpactReport['tabs']>[number] & { inside: ReadonlySet<string> };
+  const hits = new Map<string, Hit[]>();
+  for (const model of models) {
+    const nodes = new Map(model.nodes.map((n) => [n.id, n]));
+    const outOf = new Map<string, MapEdge[]>();
+    const inOf = new Map<string, MapEdge[]>();
+    for (const e of model.edges) {
+      outOf.set(e.from, [...(outOf.get(e.from) ?? []), e]);
+      inOf.set(e.to, [...(inOf.get(e.to) ?? []), e]);
+    }
+    const pageOf = (id: string): string | undefined => {
+      let cursor: string | undefined = id;
+      for (let guard = 0; cursor && guard < 40; guard += 1) {
+        const route = (inOf.get(cursor) ?? []).find(
+          (e) => e.kind === 'DISPLAYS' && nodes.get(e.from)?.kind === 'ROUTE',
+        );
+        if (route) return nodes.get(route.from)?.name;
+        cursor = (inOf.get(cursor) ?? []).find((e) => e.kind === 'CONTAINS' || e.kind === 'DISPLAYS')?.from;
+      }
+      return undefined;
+    };
+    for (const tab of model.nodes) {
+      if (tab.kind !== 'CONTAINER' || tab.detail.tab !== 'TAB') continue;
+      // Contenu (CONTAINS), déclenchement (bouton, cycle de vie → appels), lecture (conditions → flux).
+      const reach = new Map<string, { confidence: MapConfidence; how: 'CONTAINS' | 'TRIGGERS' | 'READS' }>();
+      const visit = (
+        start: string[],
+        how: 'CONTAINS' | 'TRIGGERS' | 'READS',
+        kinds: ReadonlySet<string>,
+        base: MapConfidence,
+      ): void => {
+        const queue = start.map((id) => [id, base] as const);
+        while (queue.length > 0 && reach.size < 5000) {
+          const [cur, confidence] = queue.shift() ?? ['', 'UNKNOWN'];
+          for (const e of outOf.get(cur) ?? []) {
+            if (!kinds.has(e.kind) || reach.has(e.to)) continue;
+            // Un flux atteint par déclenchement ne mène pas à ses sources de données.
+            if (how === 'TRIGGERS' && nodes.get(cur)?.kind === 'STREAM' && e.kind !== 'CALLS') continue;
+            const next = weakest(confidence, e.confidence);
+            if (next === 'UNKNOWN') continue;
+            reach.set(e.to, { confidence: how === 'READS' ? 'PROBABLE' : next, how });
+            queue.push([e.to, next]);
+          }
+        }
+      };
+      visit([tab.id], 'CONTAINS', new Set(['CONTAINS']), 'CONFIRMED');
+      const content = [tab.id, ...reach.keys()];
+      const starts = content.flatMap((id) =>
+        (outOf.get(id) ?? [])
+          .filter((e) => e.kind === 'TRIGGERS' || (e.kind === 'CALLS' && nodes.get(id)?.kind === 'COMPONENT'))
+          .map((e) => e.from),
+      );
+      visit(
+        [...new Set(starts)],
+        'TRIGGERS',
+        new Set(['TRIGGERS', 'CALLS', 'DEPENDS_ON', 'READS', 'WRITES']),
+        'CONFIRMED',
+      );
+      visit(
+        content,
+        'READS',
+        new Set(['VISIBLE_WHEN', 'ENABLED_WHEN', 'CONTROLLED_BY', 'DEPENDS_ON']),
+        'PROBABLE',
+      );
+      const inside = new Set(content);
+      const owner = typeof tab.detail.component === 'string' ? tab.detail.component : '';
+      const feature = model.features.find(
+        (f) =>
+          f.status !== 'REJECTED' &&
+          f.nodes.some((n) => n.endsWith(`:${owner}`) && n.startsWith('COMPONENT:')),
+      );
+      for (const id of changed) {
+        const hit = reach.get(id);
+        if (!hit || hit.confidence === 'UNKNOWN') continue;
+        const list = hits.get(id) ?? [];
+        if (list.some((h) => h.tab === tab.id)) continue;
+        const page = pageOf(tab.id);
+        const element = nodes.get(id);
+        list.push({
+          ...(page ? { page } : {}),
+          tab: tab.id,
+          tabName:
+            typeof tab.detail.tabLabel === 'string'
+              ? tab.detail.tabLabel
+              : typeof tab.detail.repeat === 'string'
+                ? tab.detail.repeat
+                : tab.name,
+          ...(feature ? { feature: feature.name } : {}),
+          element: id,
+          elementName: element?.label ?? element?.name ?? id,
+          confidence: definite(hit.confidence),
+          how: hit.how,
+          inside,
+        });
+        hits.set(id, list);
+      }
+    }
+  }
+  // Un onglet parent n'est pas cité quand un onglet qu'il contient l'est déjà pour le même élément.
+  return [...hits.values()]
+    .flatMap((list) => list.filter((h) => !list.some((other) => other !== h && h.inside.has(other.tab))))
+    .map(({ inside: _inside, ...entry }) => entry)
+    .sort((a, b) => RANK[b.confidence] - RANK[a.confidence] || a.tabName.localeCompare(b.tabName));
 }

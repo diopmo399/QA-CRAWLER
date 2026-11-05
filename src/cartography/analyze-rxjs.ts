@@ -1466,12 +1466,14 @@ function resolve(
             loc: b.loc,
           });
         const sym = symbols.get(cur);
-        if (sym?.kind === 'STREAM' && (out.get(cur) ?? []).length === 0)
+        // Un flux qui reçoit des émissions et que l'écran consomme (async, subscribe) est un état d'interface :
+        // la chaîne s'y termine normalement. Sans aucun consommateur, l'émission ne sert à rien de démontrable.
+        if (sym?.kind === 'STREAM' && (out.get(cur) ?? []).length === 0 && consumption(cur).how === 'NONE')
           ends.push({
             from: start,
             at: cur,
             code: 'SUBJECT_NO_CONSUMER',
-            message: `${cur} reçoit des émissions, mais aucun traitement (pipe, subscribe, flux dérivé) n’y appelle de service`,
+            message: `${cur} reçoit des émissions, mais n’est ni souscrit ni traité (pipe, subscribe, flux dérivé, pipe async)`,
             loc: sym.loc,
           });
         if (

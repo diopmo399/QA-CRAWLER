@@ -962,7 +962,7 @@ export function buildGraph(input: GraphInput): GraphOutput {
             el.loc,
             'STATIC_CODE',
             'CONFIRMED',
-            `${el.kind === 'BUTTON' ? 'bouton' : 'conteneur'} <${el.tag}> du gabarit de ${el.component}`,
+            `${el.kind === 'BUTTON' ? 'bouton' : el.tab ? (el.tab.role === 'GROUP' ? 'groupe d’onglets' : 'onglet') : 'conteneur'} <${el.tag}> du gabarit de ${el.component}`,
             el.id,
           ),
           {
@@ -970,6 +970,17 @@ export function buildGraph(input: GraphInput): GraphOutput {
             tag: el.tag,
             ...(el.handler ? { handler: el.handler } : {}),
             ...(el.submit ? { submit: true } : {}),
+            ...(el.tab
+              ? {
+                  tab: el.tab.role,
+                  tabLibrary: el.tab.library,
+                  ...(el.tab.label ? { tabLabel: el.tab.label } : {}),
+                  ...(el.tab.lazy ? { lazy: el.tab.lazy } : {}),
+                  ...(el.tab.repeat ? { repeat: el.tab.repeat } : {}),
+                  ...(el.tab.items ? { items: el.tab.items } : {}),
+                  ...(el.tab.route ? { route: el.tab.route } : {}),
+                }
+              : {}),
           },
           {
             parent: el.parent
@@ -1091,6 +1102,35 @@ export function buildGraph(input: GraphInput): GraphOutput {
           }
         }
         // Le bouton déclenche son gestionnaire (suivi à travers stores et flux), et les appels directs.
+        // Un groupe d'onglets ou un lien d'onglet déclenche aussi son gestionnaire (changement d'onglet).
+        if (
+          el.kind === 'CONTAINER' &&
+          el.tab &&
+          el.handler &&
+          nodes.has(`METHOD:${src}:${el.component}#${el.handler}`)
+        )
+          edge(
+            id,
+            `METHOD:${src}:${el.component}#${el.handler}`,
+            'TRIGGERS',
+            'CONFIRMED',
+            `changement d’onglet → ${el.handler}()`,
+            [ev(src, el.loc, 'STATIC_CODE', 'CONFIRMED')],
+          );
+        // L'onglet actif choisi par un flux (`[selectedIndex]="store.selected$ | async"`).
+        if (el.tab?.selectedBy)
+          for (const m of membersOf(el.tab.selectedBy.expression)) {
+            const state = ui.states?.find((st) => st.component === el.component && st.member === m.root);
+            if (state?.kind === 'STREAM' && state.stream)
+              edge(
+                id,
+                `STREAM:${src}:${state.stream}`,
+                'CONTROLLED_BY',
+                'CONFIRMED',
+                `l’onglet actif est choisi par ${el.tab.selectedBy.expression}`,
+                [ev(src, el.tab.selectedBy.loc, 'TEMPLATE', 'CONFIRMED')],
+              );
+          }
         if (el.kind === 'BUTTON' && el.handler && nodes.has(`METHOD:${src}:${el.component}#${el.handler}`))
           edge(
             id,
@@ -1115,6 +1155,102 @@ export function buildGraph(input: GraphInput): GraphOutput {
               ],
             );
         }
+      }
+    }
+    // Les composants affichés par d'autres (dans un onglet, un conteneur, ou à la racine du gabarit), et les
+    // onglets routés : l'arbre les imbrique (CONTAINS), la fonctionnalité de la page les atteint (DISPLAYS).
+    if (ui) {
+      const bySelector = new Map(
+        ui.components.filter((c) => c.selector).map((c) => [c.selector ?? '', c.name] as const),
+      );
+      const names = new Set(ui.components.map((c) => c.name));
+      for (const child of ui.children ?? []) {
+        const name = child.tag
+          ? bySelector.get(child.tag)
+          : child.className && names.has(child.className)
+            ? child.className
+            : undefined;
+        if (!name || name === child.component) continue;
+        const target = `COMPONENT:${src}:${name}`;
+        const holder = child.container
+          ? `CONTAINER:${src}:${child.container}`
+          : `COMPONENT:${src}:${child.component}`;
+        const where = child.container ? nodes.get(holder)?.name : undefined;
+        const later =
+          child.lazy === 'TEMPLATE'
+            ? ' — instancié à la sélection (gabarit différé)'
+            : child.lazy === 'DEFER'
+              ? ' — chargé plus tard (@defer)'
+              : child.lazy === 'OUTLET'
+                ? ' — créé par ngComponentOutlet'
+                : '';
+        const proof = [ev(src, child.loc, 'TEMPLATE', 'CONFIRMED', child.tag ?? child.className)];
+        edge(
+          holder,
+          target,
+          'CONTAINS',
+          'CONFIRMED',
+          `<${child.tag ?? child.className ?? name}> affiché${where ? ` dans « ${where} »` : ''}${later}`,
+          proof,
+        );
+        edge(
+          `COMPONENT:${src}:${child.component}`,
+          target,
+          'DISPLAYS',
+          'CONFIRMED',
+          `${child.component} affiche ${name}${later}`,
+          proof,
+        );
+      }
+      // Un onglet routé (`routerLink="history"`) : la route enfant de la page, puis son composant.
+      for (const el of ui.elements ?? []) {
+        const link = el.tab?.route;
+        if (!link) continue;
+        const id = `CONTAINER:${src}:${el.id}`;
+        const routes = [...nodes.values()].filter(
+          (n) => n.kind === 'ROUTE' && n.id.startsWith(`ROUTE:${src}:`),
+        );
+        const pathOf = (n: MapNode): string => `/${String(n.detail.path ?? '').replace(/^\/+|\/+$/g, '')}`;
+        const pages = routes.filter((r) => edges.has(`DISPLAYS:${r.id}->COMPONENT:${src}:${el.component}`));
+        const clean = link.replace(/^\.\//, '').replace(/\/+$/, '');
+        const exact = routes.filter((r) =>
+          clean.startsWith('/')
+            ? pathOf(r) === clean
+            : pages.some((p) => pathOf(r) === `${pathOf(p).replace(/\/$/, '')}/${clean}`),
+        );
+        const loose = exact.length
+          ? exact
+          : routes.filter((r) => pathOf(r).endsWith(`/${clean.replace(/^\//, '')}`));
+        const detail = nodes.get(id)?.detail;
+        if (loose.length !== 1) {
+          if (detail)
+            detail.routeUnresolved =
+              loose.length === 0
+                ? `aucune route ne correspond à routerLink="${link}"`
+                : `routerLink="${link}" correspond à ${String(loose.length)} routes`;
+          continue;
+        }
+        const route = loose[0] as MapNode;
+        const shown = [...edges.values()].find((e) => e.kind === 'DISPLAYS' && e.from === route.id)?.to;
+        if (!shown) continue;
+        const confidence: MapConfidence = exact.length ? 'CONFIRMED' : 'PROBABLE';
+        const proof = [ev(src, el.loc, 'TEMPLATE', confidence, `routerLink="${link}"`)];
+        edge(
+          id,
+          shown,
+          'CONTAINS',
+          confidence,
+          `onglet routé : routerLink="${link}" → route ${route.name}`,
+          proof,
+        );
+        edge(
+          `COMPONENT:${src}:${el.component}`,
+          shown,
+          'DISPLAYS',
+          confidence,
+          `${el.component} affiche la route ${route.name} (onglet routé, router-outlet)`,
+          proof,
+        );
       }
     }
     // Vue alimentation : une propriété lue par map()/filter() d'un flux alimenté par une réponse HTTP est
@@ -1237,6 +1373,188 @@ export function buildGraph(input: GraphInput): GraphOutput {
     }
   }
 
+  // ── Onglets : dépendances par stores partagés, composants réutilisés, préconditions d'accès ───────
+  {
+    const outOf = new Map<string, MapEdge[]>();
+    const inOf = new Map<string, MapEdge[]>();
+    for (const e of edges.values()) {
+      outOf.set(e.from, [...(outOf.get(e.from) ?? []), e]);
+      inOf.set(e.to, [...(inOf.get(e.to) ?? []), e]);
+    }
+    const isTab = (n: MapNode | undefined): boolean => n?.kind === 'CONTAINER' && n.detail.tab === 'TAB';
+    const tabName = (n: MapNode): string =>
+      typeof n.detail.tabLabel === 'string'
+        ? n.detail.tabLabel
+        : typeof n.detail.repeat === 'string'
+          ? `${n.name} (généré par ${n.detail.repeat})`
+          : n.name;
+    /** Le contenu d'un onglet : éléments et composants imbriqués (borné, sans cycle). */
+    const contentOf = (id: string): Set<string> => {
+      const seen = new Set<string>([id]);
+      const queue = [id];
+      while (queue.length > 0 && seen.size < 2000) {
+        const cur = queue.shift() ?? '';
+        for (const e of outOf.get(cur) ?? [])
+          if (e.kind === 'CONTAINS' && !seen.has(e.to)) {
+            seen.add(e.to);
+            queue.push(e.to);
+          }
+      }
+      return seen;
+    };
+    /** Les flux qu'un contenu modifie (déclenchement : bouton, gestionnaire, cycle de vie), et par où. */
+    const writesOf = (content: ReadonlySet<string>): Map<string, string> => {
+      const starts: string[] = [];
+      for (const id of content)
+        for (const e of outOf.get(id) ?? [])
+          if (e.kind === 'TRIGGERS' || (e.kind === 'CALLS' && nodes.get(id)?.kind === 'COMPONENT'))
+            starts.push(e.to);
+      const via = new Map<string, string>();
+      const seen = new Set(starts);
+      const queue = starts.map((s) => [s, s] as const);
+      while (queue.length > 0 && seen.size < 5000) {
+        const [cur, from] = queue.shift() ?? ['', ''];
+        for (const e of outOf.get(cur) ?? []) {
+          if (e.kind !== 'CALLS' || e.confidence === 'UNKNOWN' || seen.has(e.to)) continue;
+          seen.add(e.to);
+          if (nodes.get(e.to)?.kind === 'STREAM' && !via.has(e.to))
+            via.set(e.to, cur.includes('#') ? cur : from);
+          queue.push([e.to, nodes.get(cur)?.kind === 'METHOD' ? cur : from]);
+        }
+      }
+      return via;
+    };
+    /** Les flux lus par les conditions de l'onglet et de son contenu (avec leurs sources), et lesquels
+     * pilotent l'activation de l'onglet lui-même. */
+    const readsOf = (
+      tab: string,
+      content: ReadonlySet<string>,
+    ): { all: Set<string>; enabling: Set<string> } => {
+      const all = new Set<string>();
+      const enabling = new Set<string>();
+      for (const id of content)
+        for (const c of outOf.get(id) ?? []) {
+          if (c.kind !== 'VISIBLE_WHEN' && c.kind !== 'ENABLED_WHEN') continue;
+          const queue = (outOf.get(c.to) ?? []).filter((e) => e.kind === 'CONTROLLED_BY').map((e) => e.to);
+          const seen = new Set<string>();
+          while (queue.length > 0 && seen.size < 500) {
+            const cur = queue.shift() ?? '';
+            if (seen.has(cur) || nodes.get(cur)?.kind !== 'STREAM') continue;
+            seen.add(cur);
+            all.add(cur);
+            if (id === tab && c.kind === 'ENABLED_WHEN') enabling.add(cur);
+            for (const e of outOf.get(cur) ?? []) if (e.kind === 'DEPENDS_ON') queue.push(e.to);
+          }
+        }
+      return { all, enabling };
+    };
+    const tabs = [...nodes.values()].filter(isTab);
+    const contents = new Map(tabs.map((t) => [t.id, contentOf(t.id)]));
+    const writes = new Map(tabs.map((t) => [t.id, writesOf(contents.get(t.id) ?? new Set())]));
+    for (const reader of tabs) {
+      const reads = readsOf(reader.id, contents.get(reader.id) ?? new Set());
+      for (const writer of tabs) {
+        if (writer === reader) continue;
+        // Un onglet et un onglet qu'il contient ne sont pas deux onglets voisins.
+        if (contents.get(writer.id)?.has(reader.id) || contents.get(reader.id)?.has(writer.id)) continue;
+        for (const [stream, by] of writes.get(writer.id) ?? []) {
+          if (!reads.all.has(stream)) continue;
+          const fromResponse = (outOf.get(stream) ?? []).some(
+            (e) => e.kind === 'DEPENDS_ON' && nodes.get(e.to)?.detail.httpMethod !== undefined,
+          );
+          const effect = reads.enabling.has(stream) ? 'son activation dépend de' : 'il lit';
+          edge(
+            reader.id,
+            writer.id,
+            'DEPENDS_ON',
+            'PROBABLE',
+            `« ${tabName(reader)} » : ${effect} ${nodes.get(stream)?.name ?? stream}, que « ${tabName(writer)} » modifie par ${by.replace(/^METHOD:[^:]+:/, '').replace('#', '.')}()${fromResponse ? ' (valeur venant d’une réponse du serveur)' : ''} — l’ordre réel des actions n’est pas démontré`,
+            [
+              ...(reader.evidence[0] ? [reader.evidence[0]] : []),
+              ...(writer.evidence[0] ? [writer.evidence[0]] : []),
+            ],
+          );
+          break;
+        }
+      }
+    }
+    // Composants réutilisés : affichés à plusieurs endroits (onglets, conteneurs).
+    for (const n of nodes.values()) {
+      if (n.kind !== 'COMPONENT') continue;
+      const holders = (inOf.get(n.id) ?? [])
+        .filter((e) => e.kind === 'CONTAINS')
+        .map((e) => nodes.get(e.from));
+      const where = [
+        ...new Set(
+          holders
+            .filter((h): h is MapNode => h !== undefined)
+            .map((h) => (isTab(h) ? `onglet « ${tabName(h)} »` : h.name)),
+        ),
+      ];
+      if (where.length > 1) n.detail.reusedIn = where;
+    }
+    // Préconditions d'un onglet : ce que le code montre pour l'atteindre (écran, onglets parents, conditions).
+    const pageOf = (component: string, depth = 0): string | undefined => {
+      if (depth > 8) return undefined;
+      const route = (inOf.get(component) ?? []).find(
+        (e) => e.kind === 'DISPLAYS' && nodes.get(e.from)?.kind === 'ROUTE',
+      );
+      if (route) return nodes.get(route.from)?.name;
+      const parent = (inOf.get(component) ?? []).find(
+        (e) => e.kind === 'DISPLAYS' && nodes.get(e.from)?.kind === 'COMPONENT',
+      );
+      return parent ? pageOf(parent.from, depth + 1) : undefined;
+    };
+    const conditionsOf = (id: string, kind: 'VISIBLE_WHEN' | 'ENABLED_WHEN'): string[] =>
+      (outOf.get(id) ?? [])
+        .filter((e) => e.kind === kind)
+        .map((e) => nodes.get(e.to)?.detail.expression)
+        .filter((x): x is string => typeof x === 'string');
+    for (const tab of tabs) {
+      const chain: MapNode[] = [];
+      let cursor: string | undefined = tab.id;
+      let page: string | undefined;
+      for (let guard = 0; cursor && guard < 30; guard += 1) {
+        const n = nodes.get(cursor);
+        if (!n) break;
+        if (n.kind === 'COMPONENT' && page === undefined) page = pageOf(n.id);
+        chain.unshift(n);
+        cursor = (inOf.get(cursor) ?? []).find((e) => e.kind === 'CONTAINS')?.from;
+      }
+      const steps: string[] = [
+        page
+          ? `ouvrir l’écran ${page}`
+          : `accès non démontré : ${String(tab.detail.component)} n’est affiché par aucune route lue`,
+      ];
+      for (const n of chain) {
+        for (const expr of conditionsOf(n.id, 'VISIBLE_WHEN'))
+          steps.push(`condition d’affichage vraie : ${expr}`);
+        if (!isTab(n)) continue;
+        const name = tabName(n);
+        steps.push(
+          typeof n.detail.repeat === 'string'
+            ? `sélectionner un onglet généré par ${n.detail.repeat}${Array.isArray(n.detail.items) ? ` (${n.detail.items.join(', ')})` : ''}`
+            : `sélectionner l’onglet « ${name} »`,
+        );
+        for (const expr of conditionsOf(n.id, 'ENABLED_WHEN'))
+          steps.push(`onglet « ${name} » activé : ${expr} doit être faux`);
+        for (const dep of (outOf.get(n.id) ?? []).filter(
+          (e) => e.kind === 'DEPENDS_ON' && isTab(nodes.get(e.to)),
+        ))
+          steps.push(
+            `préalable possible dans « ${tabName(nodes.get(dep.to) as MapNode)} » : ${dep.reason.split(' — ')[0] ?? dep.reason}`,
+          );
+      }
+      if (typeof tab.detail.lazy === 'string')
+        steps.push(
+          tab.detail.lazy === 'ROUTE'
+            ? 'le contenu est la route de l’onglet (router-outlet)'
+            : 'le contenu n’est instancié qu’à la sélection de l’onglet',
+        );
+      tab.detail.preconditions = steps;
+    }
+  }
+
   // ── Fonctionnalités ───────────────────────────────────────────────────────────────────────────
   const out = new Map<string, MapEdge[]>();
   for (const e of edges.values()) out.set(e.from, [...(out.get(e.from) ?? []), e]);
@@ -1303,11 +1621,21 @@ export function buildGraph(input: GraphInput): GraphOutput {
     if (start === 'FRONTEND') {
       for (const route of pick('FRONTEND', ['ROUTE'])) add(route, `Écran « ${title} » (${route.name})`);
       const fields = pick('FRONTEND', ['FIELD']).filter((n) => n.parent?.startsWith('COMPONENT:'));
-      for (const component of pick('FRONTEND', ['COMPONENT']))
+      // Le composant de l'écran est son formulaire ; les composants qu'il affiche (onglets…) sont nommés.
+      const displayed = new Set(
+        pick('FRONTEND', ['ROUTE']).flatMap((r) =>
+          (out.get(r.id) ?? []).filter((e) => e.kind === 'DISPLAYS').map((e) => e.to),
+        ),
+      );
+      for (const component of pick('FRONTEND', ['COMPONENT'])) {
+        const count = fields.filter((f) => f.parent === component.id).length;
         add(
           component,
-          `Formulaire (${String(fields.filter((f) => f.parent === component.id).length)} champs)`,
+          displayed.has(component.id) || displayed.size === 0
+            ? `Formulaire (${String(count)} champ${count > 1 ? 's' : ''})`
+            : `Composant ${component.name}${count ? ` (${String(count)} champ${count > 1 ? 's' : ''})` : ''}`,
         );
+      }
       // Les étapes du frontal dans l'ordre du parcours : action du composant, store, flux, service, appel HTTP.
       // D'abord celles qui mènent à un appel HTTP ; une étape atteinte seulement par un lien non démontré
       // (flux jamais souscrit, Observable perdu) n'est pas une étape du parcours.

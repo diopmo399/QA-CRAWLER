@@ -528,11 +528,29 @@ export function laneModel(sheet: LaneInput, view: GraphView, filters: LaneFilter
   };
 }
 
-/** La condition telle qu'elle s'énonce : « [disabled]="!x" » se lit « activé si x » (négation simple retirée). */
+/**
+ * La condition telle qu'elle s'énonce : « [disabled]="!x" » se lit « activé si x », et « [disabled]="!(x | async)" »
+ * « activé si x | async » (négation de tête retirée quand la parenthèse couvre toute l'expression).
+ */
 export function shownExpression(c: { expression: string; whenTrue: boolean }): string {
   if (c.whenTrue) return c.expression;
-  const simple = /^!\s*([\w$.?]+)$/.exec(c.expression.trim());
-  return simple?.[1] ?? `!(${c.expression})`;
+  const text = c.expression.trim();
+  const simple = /^!\s*([\w$.?]+)$/.exec(text);
+  if (simple?.[1]) return simple[1];
+  const grouped = /^!\s*\((.*)\)$/s.exec(text)?.[1];
+  if (grouped !== undefined && wholeGroup(grouped)) return grouped.trim();
+  return `!(${c.expression})`;
+}
+
+/** Les parenthèses du texte s'équilibrent sans jamais se refermer avant la fin. */
+function wholeGroup(inner: string): boolean {
+  let depth = 0;
+  for (const ch of inner) {
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    if (depth < 0) return false;
+  }
+  return depth === 0;
 }
 
 // ── Disposition ─────────────────────────────────────────────────────────────────────────────────

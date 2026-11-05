@@ -1,5 +1,5 @@
 import type { ReadFile } from './files.js';
-import type { UiCondition, UiElement, UiHandler, UiState } from './facts.js';
+import type { UiChild, UiCondition, UiElement, UiHandler, UiState, UiTab } from './facts.js';
 
 /**
  * LA STRUCTURE D'UN GABARIT ANGULAR : conteneurs (sections, blocs conditionnels), boutons et leurs
@@ -60,6 +60,50 @@ interface Frame {
   name?: string;
   submitHandler?: string;
   ifExpression?: string;
+  /** Bloc @for : l'expression parcourue. */
+  forExpr?: string;
+  /** Contenu différé : gabarit d'onglet, @defer. */
+  lazy?: 'TEMPLATE' | 'DEFER';
+  /** Élément qui porte le libellé de l'onglet englobant (gabarit de libellé, lien ngbNavLink). */
+  tabLabel?: boolean;
+}
+
+/** Les balises de bibliothèques : ce ne sont pas des composants de l'application. */
+const LIBRARY_TAG = /^(mat|p|ngb|ng|cdk|router|mdc|ion|nz|dx|kendo|ejs)-/;
+const hasAttr = (attrs: string, name: string): boolean =>
+  new RegExp(`(?:^|\\s)[\\[(*]*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\])]*(?=\\s|=|$)`).test(attrs);
+/** Une valeur liée écrite comme un littéral (`[label]="'Profil'"`) ou une valeur d'attribut simple. */
+const literalAttr = (attrs: string, name: string): string | undefined => {
+  const plain = attr(attrs, name);
+  if (plain !== undefined) return plain.trim() || undefined;
+  const bound = attr(attrs, `[${name}]`);
+  const literal = bound ? /^\s*'([^']*)'\s*$|^\s*"([^"]*)"\s*$/.exec(bound) : null;
+  return literal ? (literal[1] ?? literal[2]) : undefined;
+};
+
+/**
+ * Le rôle d'onglet d'un élément : par la balise ou la directive d'une bibliothèque connue (Angular Material,
+ * ng-bootstrap, PrimeNG), par le rôle ARIA, ou par le nom d'un composant maison (`app-tabs`, `app-tab`).
+ */
+export function tabRoleOf(tag: string, attrs: string): Pick<UiTab, 'role' | 'library'> | undefined {
+  if (tag === 'mat-tab-group' || tag === 'mat-tab-nav-bar' || hasAttr(attrs, 'mat-tab-nav-bar'))
+    return { role: 'GROUP', library: 'material' };
+  if (tag === 'mat-tab') return { role: 'TAB', library: 'material' };
+  if (hasAttr(attrs, 'mat-tab-link'))
+    return { role: 'TAB', library: hasAttr(attrs, 'routerLink') ? 'route' : 'material' };
+  if (hasAttr(attrs, 'ngbNav')) return { role: 'GROUP', library: 'ngb' };
+  if (hasAttr(attrs, 'ngbNavItem')) return { role: 'TAB', library: 'ngb' };
+  if (tag === 'p-tabview' || tag === 'p-tabs') return { role: 'GROUP', library: 'primeng' };
+  if (tag === 'p-tabpanel') return { role: 'TAB', library: 'primeng' };
+  const role = attr(attrs, 'role');
+  if (role === 'tablist') return { role: 'GROUP', library: 'custom' };
+  if (role === 'tabpanel') return { role: 'TAB', library: 'custom' };
+  if (tag.includes('-') && !LIBRARY_TAG.test(tag)) {
+    if (/(^|-)(tabs|tab-group|tabset|tab-set|tab-view|tab-container)$/.test(tag))
+      return { role: 'GROUP', library: 'custom' };
+    if (/(^|-)(tab|tab-item|tab-panel|tab-pane)$/.test(tag)) return { role: 'TAB', library: 'custom' };
+  }
+  return undefined;
 }
 
 /** Le gabarit d'un composant : en ligne (`template:`) ou dans son fichier (`templateUrl:`). */
@@ -94,6 +138,8 @@ export function parseTemplate(
   html: string,
   file: string,
   offsetLine: number,
+  /** Reçoit les composants affichés dans ce gabarit (balises, ngComponentOutlet). */
+  children?: (UiChild & { holder?: UiElement })[],
 ): UiElement[] {
   // Les interpolations sont masquées (même longueur) : leurs accolades ne ferment aucun bloc.
   const text = html.replace(/\{\{[\s\S]*?\}\}/g, (m) => ' '.repeat(m.length));
@@ -106,6 +152,22 @@ export function parseTemplate(
     for (let i = stack.length - 1; i >= 0; i -= 1) {
       const c = stack[i]?.container;
       if (c) return c;
+    }
+    return undefined;
+  };
+  const nearestTab = (role: UiTab['role']): UiElement | undefined => {
+    for (let i = stack.length - 1; i >= 0; i -= 1) {
+      const c = stack[i]?.container;
+      if (c?.tab?.role === role) return c;
+    }
+    return undefined;
+  };
+  /** Le contenu courant n'est instancié que plus tard (gabarit d'onglet, @defer). */
+  const lazyHere = (): 'TEMPLATE' | 'DEFER' | undefined => {
+    for (let i = stack.length - 1; i >= 0; i -= 1) {
+      const frame = stack[i];
+      if (frame?.lazy) return frame.lazy;
+      if (frame?.container?.tab) return undefined;
     }
     return undefined;
   };
@@ -141,6 +203,15 @@ export function parseTemplate(
     const element = frame.container;
     if (!element) return;
     const id = attr(frame.attrs, 'id');
+    // Un groupe d'onglets sans nom prend celui de ses onglets (stable tant que leurs libellés le sont).
+    if (frame.name === undefined && element.tab?.role === 'GROUP') {
+      const labels = elements
+        .filter((child) => child.parent === `pending:${String(frame.start)}` && child.tab?.role === 'TAB')
+        .map((child) => child.name || child.tab?.label || child.tab?.repeat || '')
+        .filter(Boolean);
+      if (labels.length)
+        frame.name = `Onglets : ${labels.slice(0, 3).join(', ')}${labels.length > 3 ? '…' : ''}`;
+    }
     element.name = frame.name ?? (id ? id : element.visibleWhen ? element.visibleWhen.expression : frame.tag);
     element.id = makeId('CONTAINER', element.name);
     // Les enfants déjà enregistrés pointaient vers l'identifiant provisoire : ils sont rattachés.
@@ -175,6 +246,19 @@ export function parseTemplate(
               if (title) owner.name = title;
               break;
             }
+          }
+        }
+        // Le libellé d'un onglet écrit dans un gabarit de libellé ou un lien d'onglet.
+        if (
+          frame.tabLabel ||
+          (frame.container?.tab && frame.container.tab.label === undefined && frame.tag === 'a')
+        ) {
+          const text = strip(inner);
+          const tab = frame.tabLabel ? nearestTab('TAB') : frame.container;
+          if (text && tab?.tab && tab.tab.label === undefined) {
+            tab.tab.label = text;
+            const owner = frame.tabLabel ? stack.find((f) => f.container === tab) : frame;
+            if (owner) owner.name = text;
           }
         }
         if (frame.tag === 'button') {
@@ -231,6 +315,52 @@ export function parseTemplate(
       }
       const ngIf = attr(attrs, '*ngIf');
       const hidden = attr(attrs, '[hidden]');
+      // Contenu différé d'un onglet, et libellé écrit dans un gabarit dédié.
+      if (tag === 'ng-template' || hasAttr(attrs, 'ngbNavContent')) {
+        if (
+          hasAttr(attrs, 'matTabContent') ||
+          hasAttr(attrs, 'ngbNavContent') ||
+          attr(attrs, 'pTemplate') === 'content'
+        ) {
+          frame.lazy = 'TEMPLATE';
+          const tab = nearestTab('TAB');
+          if (tab?.tab) tab.tab.lazy = 'TEMPLATE';
+        } else if (tag === 'ng-template') frame.lazy = 'TEMPLATE';
+      }
+      if (
+        hasAttr(attrs, 'mat-tab-label') ||
+        hasAttr(attrs, 'ngbNavLink') ||
+        attr(attrs, 'pTemplate') === 'header'
+      )
+        frame.tabLabel = true;
+      if (hasAttr(attrs, 'ngTemplateOutlet') || hasAttr(attrs, 'ngComponentOutlet')) {
+        const tab = nearestTab('TAB');
+        if (tab?.tab && !tab.tab.lazy) tab.tab.lazy = 'OUTLET';
+        const outlet = attr(attrs, '*ngComponentOutlet') ?? attr(attrs, '[ngComponentOutlet]');
+        const name = outlet ? /^\s*([A-Za-z_$][\w$]*)/.exec(outlet)?.[1] : undefined;
+        const holder = nearestContainer();
+        if (name && children)
+          children.push({
+            component,
+            className: name,
+            lazy: 'OUTLET',
+            loc: loc(at),
+            ...(holder ? { holder } : {}),
+          });
+      }
+      // Un composant de l'application affiché ici (balise personnalisée, hors bibliothèques et onglets).
+      const tabRole = tabRoleOf(tag, attrs);
+      if (children && tag.includes('-') && !LIBRARY_TAG.test(tag) && !tabRole) {
+        const holder = nearestContainer();
+        const lazy = lazyHere();
+        children.push({
+          component,
+          tag,
+          loc: loc(at),
+          ...(lazy ? { lazy } : {}),
+          ...(holder ? { holder } : {}),
+        });
+      }
       if (!condition && ngIf)
         condition = { expression: (ngIf.split(';')[0] ?? ngIf).trim(), how: 'ngIf', at };
       else if (!condition && hidden) condition = { expression: hidden.trim(), how: 'hidden', at };
@@ -243,6 +373,54 @@ export function parseTemplate(
         continue;
       }
       if (selfClose || VOID.has(tag)) continue;
+      if (tabRole) {
+        stack.push(frame);
+        openContainer(frame, condition);
+        const tab: UiTab = { ...tabRole };
+        const label =
+          literalAttr(attrs, 'label') ?? literalAttr(attrs, 'header') ?? literalAttr(attrs, 'title');
+        if (label) {
+          tab.label = label;
+          frame.name = label;
+        }
+        const repeat = attr(attrs, '*ngFor');
+        const forBlock = [...stack].reverse().find((f) => f.type === 'block' && f.forExpr);
+        const iterable = repeat ? / of ([^;]+)/.exec(repeat)?.[1] : forBlock?.forExpr;
+        if (iterable) {
+          tab.repeat = iterable.trim();
+          frame.name ??= tab.repeat;
+        }
+        const route = attr(attrs, 'routerLink') ?? literalAttr(attrs, 'routerLink');
+        if (route) {
+          tab.route = route.trim();
+          tab.lazy = 'ROUTE';
+        }
+        const selected = ['selectedIndex', 'activeId', 'activeIndex', 'value']
+          .map((name) => attr(attrs, `[${name}]`) ?? attr(attrs, `[(${name})]`))
+          .find((value) => value !== undefined);
+        if (tabRole.role === 'GROUP' && selected)
+          tab.selectedBy = { expression: selected.trim(), how: 'selected', loc: loc(at) };
+        const element = frame.container;
+        if (element) {
+          element.tab = tab;
+          const disabled = attr(attrs, '[disabled]');
+          if (disabled) element.disabledWhen = { expression: disabled.trim(), how: 'disabled', loc: loc(at) };
+          const handler = methodOf(
+            [
+              '(selectedTabChange)',
+              '(selectedIndexChange)',
+              '(navChange)',
+              '(activeIdChange)',
+              '(onChange)',
+              '(click)',
+            ]
+              .map((name) => attr(attrs, name))
+              .find((value) => value !== undefined),
+          );
+          if (handler) element.handler = handler;
+        }
+        continue;
+      }
       if (condition || CONTAINER_TAGS.has(tag)) {
         stack.push(frame);
         openContainer(frame, condition);
@@ -270,6 +448,12 @@ export function parseTemplate(
         frame.condition = { expression: lastIf, how: 'else', at };
       } else if (kind === 'case' && blockExpr) {
         frame.condition = { expression: blockExpr.trim(), how: 'case', at };
+      } else if (kind === 'for' && blockExpr) {
+        frame.forExpr = / of ([^;]+)/.exec(blockExpr)?.[1]?.trim();
+      } else if (kind === 'defer') {
+        frame.lazy = 'DEFER';
+        const tab = nearestTab('TAB');
+        if (tab?.tab && !tab.tab.lazy) tab.tab.lazy = 'DEFER';
       }
       stack.push(frame);
       continue;
@@ -377,6 +561,7 @@ function methodsOf(body: string): { name: string; at: number; text: string }[] {
 
 export interface TemplateFacts {
   elements: UiElement[];
+  children: UiChild[];
   states: UiState[];
   handlers: UiHandler[];
   warnings: string[];
@@ -388,6 +573,7 @@ export function analyzeTemplates(files: readonly ReadFile[], knownCalls: Readonl
   const elements: UiElement[] = [];
   const states: UiState[] = [];
   const handlers: UiHandler[] = [];
+  const children: UiChild[] = [];
   const warnings: string[] = [];
   for (const file of files) {
     if (!file.path.endsWith('.ts') || !file.text.includes('@Component')) continue;
@@ -398,12 +584,54 @@ export function analyzeTemplates(files: readonly ReadFile[], knownCalls: Readonl
       const component = m[2] ?? '';
       const decoratorAt = m.index + m[0].indexOf(decorator);
       const template = templateOf(file, decorator, decoratorAt, byPath);
+      const shown: (UiChild & { holder?: UiElement })[] = [];
       const found = template
-        ? parseTemplate(component, template.html, template.file, template.offsetLine)
+        ? parseTemplate(component, template.html, template.file, template.offsetLine, shown)
         : [];
       elements.push(...found);
       const bodyAt = m.index + m[0].length;
       const body = file.text.slice(bodyAt);
+      // Les composants affichés : rattachés à leur conteneur ; ngComponentOutlet résolu par la propriété.
+      for (const { holder, ...child } of shown) {
+        let className = child.className;
+        if (className) {
+          const assigned = new RegExp(
+            `\\b${className.replace(/[$]/g, '\\$')}\\s*(?::[^=;]+)?=\\s*([A-Z][\\w$]*)\\s*[;\\n]`,
+          ).exec(body)?.[1];
+          className = /^[A-Z]/.test(className) ? className : assigned;
+          if (!className) continue;
+        }
+        children.push({
+          ...child,
+          ...(className ? { className } : {}),
+          ...(holder?.id ? { container: holder.id } : {}),
+        });
+      }
+      // Les onglets générés par une boucle : les libellés écrits dans le tableau de la classe.
+      for (const el of found) {
+        const repeat = el.tab?.repeat;
+        if (!el.tab || !repeat || !/^[A-Za-z_$][\w$.]*$/.test(repeat)) continue;
+        const name = repeat.replace(/^this\./, '');
+        const array = new RegExp(`\\b${name.replace(/[$]/g, '\\$')}\\s*(?::[^=;]+)?=\\s*\\[`).exec(body);
+        if (!array) continue;
+        const open = array.index + array[0].length - 1;
+        let depth = 0;
+        let end = open;
+        for (let i = open; i < Math.min(body.length, open + 8000); i += 1) {
+          if (body[i] === '[') depth += 1;
+          else if (body[i] === ']') {
+            depth -= 1;
+            if (depth === 0) {
+              end = i;
+              break;
+            }
+          }
+        }
+        const items = [
+          ...body.slice(open, end).matchAll(/\b(?:label|title|header)\s*:\s*['"`]([^'"`]+)['"`]/g),
+        ].map((x) => x[1] ?? '');
+        if (items.length) el.tab.items = items.slice(0, 30);
+      }
       const types = fieldTypes(body);
       const methods = methodsOf(body);
       const lineOf = (at: number) => lineAt(file.text, bodyAt + at);
@@ -516,5 +744,5 @@ export function analyzeTemplates(files: readonly ReadFile[], knownCalls: Readonl
         warnings.push(`template of ${component} not found: structure not analysed`);
     }
   }
-  return { elements, states, handlers, warnings };
+  return { elements, children, states, handlers, warnings };
 }

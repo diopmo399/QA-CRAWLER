@@ -712,9 +712,19 @@ export function impactView(
         `<li><label class="map-pickrow"><input type="checkbox" data-map="impact-pick" data-scenario="${esc(s.scenario)}" ${ui.impactPicked.includes(s.scenario) ? 'checked' : ''}> <b>${esc(s.scenario)}</b> ${h.conf(s.confidence)}</label><small class="mu">${esc(s.reason)}</small></li>`,
     )
     .join('');
+  // Page → onglet → fonctionnalité → élément touché (l'onglet le plus proche, et comment il est atteint).
+  const tabRows = (report.tabs ?? [])
+    .map(
+      (t) =>
+        `<tr><td>${esc(t.page ?? '—')}</td><td><button class="lnk" data-action="map-st-open" data-id="${esc(t.tab)}">${esc(t.tabName)}</button></td><td>${esc(t.feature ?? '—')}</td><td><code>${esc(t.elementName)}</code><br><small class="mu">${esc(m.sd.tabHow[t.how] ?? t.how)}</small></td><td>${h.conf(t.confidence)}</td></tr>`,
+    )
+    .join('');
+  const tabsCard = tabRows
+    ? `<section class="card" id="sd-imp-tabs" tabindex="-1"><h2>${icon('layers')}<span>${esc(m.sd.tabsTouched((report.tabs ?? []).length))}</span></h2><div class="tbl-wrap"><table class="map-table"><thead><tr><th>${esc(m.sd.tabCols.page)}</th><th>${esc(m.sd.tabCols.tab)}</th><th>${esc(m.sd.tabCols.feature)}</th><th>${esc(m.sd.tabCols.element)}</th><th>${esc(m.sd.tabCols.status)}</th></tr></thead><tbody>${tabRows}</tbody></table></div></section>`
+    : '';
   const identical =
     report.from === report.to ? `<p class="map-note warn-t" role="note">${esc(m.sd.identical)}</p>` : '';
-  return `${head}${identical}<div class="map-impact sd-impw">${row3}${table}<div class="sd-imp-r2"><section class="card" id="sd-imp-features" tabindex="-1"><h2>${esc(m.impacted(report.features.length))}</h2>${features ? `<ul class="map-imp-l">${features}</ul>` : `<p class="mu small">—</p>`}</section><section class="card" id="sd-imp-scenarios" tabindex="-1"><h2>${esc(m.toReplay(report.scenarios.length))}</h2>${scenarios ? `<ul class="map-imp-l">${scenarios}</ul>` : `<p class="mu small">—</p>`}${extras.launch}</section></div></div>`;
+  return `${head}${identical}<div class="map-impact sd-impw">${row3}${table}${tabsCard}<div class="sd-imp-r2"><section class="card" id="sd-imp-features" tabindex="-1"><h2>${esc(m.impacted(report.features.length))}</h2>${features ? `<ul class="map-imp-l">${features}</ul>` : `<p class="mu small">—</p>`}</section><section class="card" id="sd-imp-scenarios" tabindex="-1"><h2>${esc(m.toReplay(report.scenarios.length))}</h2>${scenarios ? `<ul class="map-imp-l">${scenarios}</ul>` : `<p class="mu small">—</p>`}${extras.launch}</section></div></div>`;
 }
 
 export const SCAN_CSS = `

@@ -9,6 +9,7 @@ import type {
   MapPage,
   MapStructure,
   StructureItem,
+  TabSheet,
 } from '../core/cartography.js';
 import type { ApiViewHelpers } from './dashboard-cartography-apis.js';
 import { breakable, shortPath } from './dashboard-cartography-graph.js';
@@ -47,7 +48,12 @@ const KIND_ICON: Record<string, string> = {
   FIELD: 'text',
   BUTTON: 'pointer',
   CONDITION: 'diamond',
+  TAB: 'layers',
+  TAB_GROUP: 'layers',
 };
+/** La sorte affichée : un conteneur qui est un onglet ou un groupe d'onglets est dit comme tel. */
+const kindKey = (kind: string, tab: unknown): string =>
+  tab === 'TAB' ? 'TAB' : tab === 'GROUP' ? 'TAB_GROUP' : kind;
 
 /** Les indicateurs de l'écran : comptes du scan (pages, conteneurs, champs, boutons, API, conditions). */
 export function structureKpis(m: MapStrings, structure: MapStructure | undefined): string {
@@ -79,9 +85,10 @@ function treeItem(m: MapStrings, ui: CartographyUi, item: StructureItem, q: stri
         `<small class="st-cond ${c.aspect === 'ENABLED' ? 'en' : 'vi'}" title="${esc(condText(m, c))}">${esc(condText(m, c))}</small>`,
     )
     .join('');
-  const label = `<span class="st-ic k-${item.kind.toLowerCase()}">${icon(KIND_ICON[item.kind] ?? 'layers')}</span><span class="st-tx"><b>${esc(item.name)}</b>${item.sub ? ` <small class="mu">(${esc(item.sub)})</small>` : ''}${badges ? `<br>${badges}` : ''}</span>`;
+  const key = kindKey(item.kind, item.tab);
+  const label = `<span class="st-ic k-${key.toLowerCase()}">${icon(KIND_ICON[key] ?? 'layers')}</span><span class="st-tx"><b>${esc(item.name)}</b>${item.sub ? ` <small class="mu">(${esc(item.sub)})</small>` : ''}${badges ? `<br>${badges}` : ''}</span>`;
   const row = selectable
-    ? `<button class="st-row${ui.element === item.id ? ' sel' : ''}" data-action="map-st-el" data-id="${esc(item.id)}" data-nav="struct" title="${esc(m.st.kinds[item.kind] ?? item.kind)}">${label}</button>`
+    ? `<button class="st-row${ui.element === item.id ? ' sel' : ''}" data-action="map-st-el" data-id="${esc(item.id)}" data-nav="struct" title="${esc(m.st.kinds[key] ?? item.kind)}">${label}</button>`
     : `<span class="st-row st-static">${label}</span>`;
   const children = closed ? '' : item.children.map((child) => treeItem(m, ui, child, q)).join('');
   return `<li>${toggle}${row}${children ? `<ul>${children}</ul>` : ''}</li>`;
@@ -312,7 +319,8 @@ function rightSheet(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers): string
   const sheet = ui.elementSheet && ui.elementSheet.element.id === ui.element ? ui.elementSheet : undefined;
   if (!sheet) return '<aside class="st-right"></aside>';
   const el = sheet.element;
-  const kind = m.st.kinds[el.kind] ?? el.kind;
+  const elKey = kindKey(el.kind, el.detail.tab);
+  const kind = m.st.kinds[elKey] ?? el.kind;
   const component = typeof el.detail.component === 'string' ? el.detail.component : (el.parent ?? '');
   const tabs = `<div class="tabs st-stabs" role="tablist">${SHEET_TABS.map((t) => `<button role="tab" data-action="map-st-sheet" data-tab="${t}" aria-selected="${String(ui.sheetTab === t)}">${esc(m.st.sheetTabs[t] ?? t)}</button>`).join('')}</div>`;
   const show = (tab: SheetTab): boolean => ui.sheetTab === 'details' || ui.sheetTab === tab;
@@ -332,17 +340,47 @@ function rightSheet(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers): string
         ),
       )}</p>${typeof el.detail.handler === 'string' ? `<p class="small">${esc(m.st.handler)} : <code>${esc(el.detail.handler)}()</code></p>` : ''}${sheet.children.length ? `<p class="small mu">${esc(m.st.children(sheet.children.length))} : ${sheet.children.map((c) => esc(c.label ?? c.name)).join(', ')}</p>` : ''}</section>`,
     );
+  // Un onglet : bibliothèque, chargement, préconditions démontrées, dépendances, contenu, stores.
+  const tab = sheet.tab;
+  if (tab && ui.sheetTab === 'details') {
+    const t = m.st.tab;
+    const linkList = (list: TabSheet['dependsOn']) =>
+      `<ul class="st-list">${list.map((d) => `<li><button class="lnk" data-action="map-st-el" data-id="${esc(d.id)}" data-nav="struct">${esc(d.name)}</button> ${h.conf(d.confidence)}<br><small class="mu">${esc(d.reason)}</small></li>`).join('')}</ul>`;
+    parts.push(
+      `<section class="st-sec st-tab"><h4>${icon('layers')}${esc(t.title)}</h4><p class="small">${esc(t.library[tab.library] ?? tab.library)} · ${esc(tab.lazy ? (t.lazy[tab.lazy] ?? tab.lazy) : t.eager)}${tab.repeat ? ` · ${esc(t.generated(tab.repeat, (tab.items ?? []).join(', ')))}` : ''}${tab.route ? ` · <code>routerLink="${esc(tab.route)}"</code>` : ''}</p>${tab.routeUnresolved ? `<p class="small warn-t">${esc(tab.routeUnresolved)}</p>` : ''}${tab.role === 'TAB' ? `<p class="small mu">${esc(t.content(tab.fields, tab.buttons))}</p>` : ''}${
+        tab.tabs.length
+          ? `<p class="small"><b>${esc(t.tabs(tab.tabs.length))}</b> : ${tab.tabs.map((x) => `<button class="lnk" data-action="map-st-el" data-id="${esc(x.id)}" data-nav="struct">${esc(x.name)}</button>`).join(', ')}</p>`
+          : ''
+      }${tab.selectedBy.map((s) => `<p class="small"><b>${esc(t.selectedBy)}</b> <code>${esc(s.stream)}</code> ${h.conf(s.confidence)}<br><small class="mu">${esc(s.reason)}</small></p>`).join('')}${
+        tab.preconditions.length
+          ? `<h4>${esc(t.preconditions)}</h4><ol class="st-list st-pre">${tab.preconditions.map((p) => `<li class="small">${esc(p)}</li>`).join('')}</ol>`
+          : ''
+      }${tab.dependsOn.length ? `<h4>${esc(t.dependsOn)}</h4>${linkList(tab.dependsOn)}` : ''}${tab.usedBy.length ? `<h4>${esc(t.usedBy)}</h4>${linkList(tab.usedBy)}` : ''}${
+        tab.role === 'TAB' && !tab.dependsOn.length && !tab.usedBy.length
+          ? `<p class="small mu">${esc(t.none)}</p>`
+          : ''
+      }${
+        tab.components.length
+          ? `<h4>${esc(t.components)}</h4><ul class="st-list">${tab.components.map((c) => `<li class="small"><code>${esc(c.name)}</code>${c.reusedIn.length > 1 ? ` <small class="mu">— ${esc(t.reused(c.reusedIn.join(', ')))}</small>` : ''}</li>`).join('')}</ul>`
+          : ''
+      }${tab.stores.length ? `<h4>${esc(t.stores)}</h4><p class="small">${tab.stores.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p>` : ''}</section>`,
+    );
+  }
   if (show('conditions')) {
     parts.push(
       `<section class="st-sec"><h4>${icon('eye')}${esc(m.st.displayConditions)}</h4>${visible.length ? visible.map((c) => conditionBlock(m, h, c)).join('') : `<p class="small mu">${esc(m.st.alwaysVisible)}</p>`}</section>`,
     );
-    if (el.kind === 'BUTTON')
+    if (el.kind === 'BUTTON' || tab)
       parts.push(
         `<section class="st-sec"><h4>${icon('checkCircle')}${esc(m.st.enableConditions)}</h4>${enabled.length ? enabled.map((c) => conditionBlock(m, h, c)).join('') : `<p class="small mu">${esc(m.st.alwaysEnabled)}</p>`}</section>`,
       );
   }
   if (show('apis')) {
-    const endpoints = [...new Map(sheet.actions.flatMap((a) => a.endpoints).map((e) => [e.id, e])).values()];
+    const endpoints = [
+      ...new Map(
+        [...sheet.actions.flatMap((a) => a.endpoints), ...(tab?.apis ?? [])].map((e) => [e.id, e]),
+      ).values(),
+    ];
     const items = [
       ...endpoints.map(
         (e) =>
@@ -369,7 +407,7 @@ function rightSheet(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers): string
     parts.push(
       `<section class="st-sec"><h4>${icon('play')}${esc(m.st.scenariosTitle(sheet.scenarios.length))}</h4>${sheet.scenarios.length ? `<ul class="st-list">${sheet.scenarios.map((s) => `<li>${h.chip(s.verified ? 'VERIFIED' : s.executed ? 'EXECUTED' : 'ASSOCIATED', m.p.scenarioState[s.verified ? 'verified' : s.executed ? 'executed' : 'associated'] ?? '')} ${esc(s.scenario)}</li>`).join('')}</ul>` : `<p class="small mu">${esc(m.st.noScenarios)}</p>`}</section>`,
     );
-  return `<aside class="st-right"><section class="card st-sheet"><div class="st-shead"><span class="st-ic big k-${el.kind.toLowerCase()}">${icon(KIND_ICON[el.kind] ?? 'layers')}</span><div><h2>${esc(kind)} : ${esc(el.label ?? el.name)}</h2><p class="mu small">${esc(component)}</p>${h.chip('CONFIRMED', m.st.detected)}</div></div>${tabs}${parts.join('')}</section></aside>`;
+  return `<aside class="st-right"><section class="card st-sheet"><div class="st-shead"><span class="st-ic big k-${elKey.toLowerCase()}">${icon(KIND_ICON[elKey] ?? 'layers')}</span><div><h2>${esc(elKey === 'TAB_GROUP' && el.name.startsWith('Onglets :') ? el.name : `${kind} : ${el.label ?? el.name}`)}</h2><p class="mu small">${esc(component)}</p>${h.chip('CONFIRMED', m.st.detected)}</div></div>${tabs}${parts.join('')}</section></aside>`;
 }
 
 /** L'onglet entier : arbre, centre (graphe, conditions, actions), fiche de l'élément. */
@@ -399,7 +437,7 @@ export const STRUCTURE_CSS = `
 .st-cond{display:inline-block;margin-top:2px;font-family:var(--qa-font-mono,ui-monospace,monospace);font-size:11px;color:#15803d;overflow-wrap:anywhere}.st-cond.en{color:#b45309}
 .st-ic{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;flex:none}
 .st-ic .ico{width:14px;height:14px}.st-ic.big{width:34px;height:34px;border-radius:10px}.st-ic.big .ico{width:20px;height:20px}
-.k-route{color:#15803d;background:#e8f5ec}.k-component{color:#7c3aed;background:#f3edfd}.k-container{color:#7c3aed;background:#f3edfd}.k-field{color:#0e7490;background:#e6f4f7}.k-button{color:#be123c;background:#fdecef}.k-condition{color:#b45309;background:#fdf3e4}.k-entity{color:#c2850c;background:#fdf7e8}.k-api{color:#2563eb;background:#eef4fd}.k-method,.k-service{color:#15803d;background:#eef8f0}
+.k-route{color:#15803d;background:#e8f5ec}.k-component{color:#7c3aed;background:#f3edfd}.k-container{color:#7c3aed;background:#f3edfd}.k-field{color:#0e7490;background:#e6f4f7}.k-button{color:#be123c;background:#fdecef}.k-tab,.k-tab_group{color:#0f766e;background:#e6f6f3}.st-list.st-pre{list-style:decimal;padding-left:18px}.st-sec.st-tab h4{margin:12px 0 6px}.k-condition{color:#b45309;background:#fdf3e4}.k-entity{color:#c2850c;background:#fdf7e8}.k-api{color:#2563eb;background:#eef4fd}.k-method,.k-service{color:#15803d;background:#eef8f0}
 .st-legend{display:flex;flex-direction:column;gap:6px;margin-top:12px;padding-top:10px;border-top:1px solid var(--qa-color-border);font-size:12px}.st-legend>span{display:grid;grid-template-columns:20px 1fr 20px 1fr;gap:6px 6px;align-items:center}
 .st-ctabs{margin-bottom:10px;flex-wrap:wrap}.st-ctabs button{display:inline-flex;gap:6px;align-items:center}.st-ctabs .ico{width:15px;height:15px}
 .st-gtitle h3{display:flex;gap:8px;align-items:center;margin:0;font-size:15px}

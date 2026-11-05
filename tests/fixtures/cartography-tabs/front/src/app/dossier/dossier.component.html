@@ -1,0 +1,31 @@
+<h1>Dossier</h1>
+<mat-tab-group [selectedIndex]="tabs.selected$ | async" (selectedTabChange)="onTab($event)">
+  <mat-tab label="Identité">
+    <app-identity-form></app-identity-form>
+  </mat-tab>
+  <mat-tab [disabled]="!(dossier.validated$ | async)">
+    <ng-template mat-tab-label>Documents</ng-template>
+    <ng-template matTabContent>
+      <app-documents></app-documents>
+    </ng-template>
+  </mat-tab>
+  <mat-tab label="Administration" *ngIf="users.isAdmin$ | async">
+    <mat-tab-group>
+      <mat-tab label="Droits">
+        <app-address></app-address>
+      </mat-tab>
+      <mat-tab label="Journal">
+        @defer {
+          <app-audit></app-audit>
+        }
+      </mat-tab>
+    </mat-tab-group>
+  </mat-tab>
+  <mat-tab *ngFor="let t of extraTabs" [label]="t.label">
+    <app-address></app-address>
+  </mat-tab>
+</mat-tab-group>
+<nav mat-tab-nav-bar>
+  <a mat-tab-link routerLink="history">Historique</a>
+</nav>
+<router-outlet></router-outlet>

@@ -1324,8 +1324,48 @@ jusqu'à ses appels HTTP. L'analyse lit l'AST TypeScript, sans rien exécuter :
 
 Les faits d'une source portent la version des analyseurs : un scan incrémental relit une source inchangée
 dont les faits viennent d'une autre version (ou d'avant), pour que les nouvelles relations apparaissent.
-Limites : les formulaires dynamiques construits à l'exécution, `ngComponentOutlet` et les URL chargées au
-démarrage ne sont pas résolus ; les signaux Angular ne sont pas suivis comme des flux.
+Limites : les formulaires dynamiques construits à l'exécution et les URL chargées au démarrage ne sont pas
+résolus ; `ngComponentOutlet` ne l'est que lorsque la classe affichée est nommée dans le composant ; les
+signaux Angular ne sont pas suivis comme des flux.
+
+#### Onglets Angular
+
+Les onglets sont lus dans les gabarits, sans exécuter le code. Un groupe d'onglets et chacun de ses
+onglets sont des conteneurs de la structure (`detail.tab` vaut `GROUP` ou `TAB`) :
+
+| Bibliothèque     | Groupe                                                     | Onglet                                          | Libellé lu                                          |
+| ---------------- | ---------------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------- |
+| Angular Material | `mat-tab-group`, `mat-tab-nav-bar`                         | `mat-tab`, `a mat-tab-link`                     | `label`, `ng-template mat-tab-label`, texte du lien |
+| ng-bootstrap     | `ngbNav`                                                   | `ngbNavItem`                                    | texte de `ngbNavLink`                               |
+| PrimeNG          | `p-tabView`, `p-tabs`                                      | `p-tabPanel`                                    | `header`, `pTemplate="header"`                      |
+| maison           | `app-tabs` (et `-tab-group`, `-tabset`…), `role="tablist"` | `app-tab` (et `-tab-panel`…), `role="tabpanel"` | `label`, `title`, `header`                          |
+
+- **Hiérarchie** : écran → groupe → onglet → conteneur → composant affiché → champ ou bouton → store →
+  service → API. Un groupe dans un onglet donne des onglets imbriqués (profondeur bornée, cycles écartés).
+  Un composant affiché par sa balise est relié à l'onglet qui le contient ; un même composant affiché dans
+  plusieurs onglets est signalé comme réutilisé.
+- **Onglets générés** : `*ngFor` et `@for` donnent un onglet généré par l'expression parcourue ; si le
+  tableau est écrit dans la classe, ses libellés (`label`, `title`, `header`) sont listés.
+- **Conditions** : `*ngIf`/`@if` (affichage), `[disabled]` (activation), et la sélection
+  (`[selectedIndex]`, `[activeId]`, `[activeIndex]`, `[value]`) reliée au flux du store qui la porte ;
+  `(selectedTabChange)` et équivalents sont des déclencheurs.
+- **Chargement à la demande** : `matTabContent`, `ngbNavContent`, `pTemplate="content"` (instancié à la
+  sélection), `@defer`, `ngTemplateOutlet`/`ngComponentOutlet` et les onglets routés (`routerLink`, résolu
+  vers la route enfant de l'écran ; sûr quand le chemin exact existe, probable quand seul un suffixe unique
+  correspond, sinon dit non résolu).
+- **Dépendances entre onglets** : un onglet dont les conditions lisent un flux qu'un autre onglet modifie
+  (par une méthode du store que ses boutons ou ses composants appellent) en dépend. Le lien est probable :
+  le code ne prouve pas l'ordre réel des actions.
+- **Préconditions** : la fiche d'un onglet liste ce que le code montre pour l'atteindre (écran, onglets
+  parents à sélectionner, conditions d'affichage et d'activation, chargement à la sélection). Aucune
+  navigation n'est inventée.
+- **Impact** : le rapport d'impact cite, pour chaque élément modifié, la page, l'onglet le plus imbriqué
+  et la fonctionnalité : sûr quand l'onglet le contient, selon le chemin quand il le déclenche, potentiel
+  quand une de ses conditions en lit la valeur (`ImpactReport.tabs`).
+
+La version des analyseurs passe à `cartography-3` : les faits des scans précédents sont relus. Limites :
+les onglets créés entièrement en TypeScript (sans gabarit) et les libellés calculés à l'exécution ne sont
+pas lus.
 
 #### Sources locales et dépôts Git distants
 

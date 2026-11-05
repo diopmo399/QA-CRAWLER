@@ -28,6 +28,8 @@ export default tseslint.config(
       'tests/fixtures/cartography-conditions/',
       // Les stores et flux RxJS maison analysés par la cartographie (dépendances absentes).
       'tests/fixtures/cartography-rxjs/',
+      // Les onglets Angular analysés par la cartographie (dépendances absentes).
+      'tests/fixtures/cartography-tabs/',
       // Les exemples importent les paquets compilés (dist) : ils se vérifient en les lançant.
       'examples/',
     ],

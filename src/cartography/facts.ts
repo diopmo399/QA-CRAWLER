@@ -147,7 +147,7 @@ export interface UiCondition {
   expression: string;
   /** if : bloc `@if` ; ngIf : `*ngIf` ; hidden : `[hidden]` (visible quand l'expression est fausse) ;
    * else : branche `@else` (visible quand l'expression est fausse) ; disabled : `[disabled]`. */
-  how: 'if' | 'ngIf' | 'hidden' | 'else' | 'case' | 'disabled';
+  how: 'if' | 'ngIf' | 'hidden' | 'else' | 'case' | 'disabled' | 'selected';
   loc: Loc;
 }
 
@@ -167,6 +167,40 @@ export interface UiElement {
   /** La méthode du composant appelée par le bouton (`(click)`, ou `(ngSubmit)` du formulaire). */
   handler?: string;
   submit?: boolean;
+  /** Un groupe d'onglets ou un onglet (Angular Material, ng-bootstrap, PrimeNG, composant maison). */
+  tab?: UiTab;
+  loc: Loc;
+}
+
+/** Ce qui fait d'un conteneur un groupe d'onglets ou un onglet, tel que le gabarit le montre. */
+export interface UiTab {
+  role: 'GROUP' | 'TAB';
+  /** material, ngb, primeng, custom (balise ou rôle ARIA), route (lien d'onglet vers une route). */
+  library: 'material' | 'ngb' | 'primeng' | 'custom' | 'route';
+  /** Le libellé quand il est écrit dans le gabarit (attribut, gabarit de libellé, lien). */
+  label?: string;
+  /** Contenu instancié seulement à la sélection : gabarit différé, @defer, outlet, route. */
+  lazy?: 'TEMPLATE' | 'DEFER' | 'OUTLET' | 'ROUTE';
+  /** Onglets générés par une boucle : l'expression, et les libellés lus dans le tableau de la classe. */
+  repeat?: string;
+  items?: string[];
+  /** routerLink d'un onglet routé. */
+  route?: string;
+  /** Groupe : l'expression qui choisit l'onglet actif (`[selectedIndex]`, `[activeId]`…). */
+  selectedBy?: UiCondition;
+}
+
+/** Un composant affiché dans le gabarit d'un autre (balise, ngComponentOutlet), et où. */
+export interface UiChild {
+  /** Le composant parent. */
+  component: string;
+  /** La balise (`app-history`) ou la classe (ngComponentOutlet). */
+  tag?: string;
+  className?: string;
+  /** Le conteneur (onglet…) qui l'affiche ; absent : à la racine du gabarit. */
+  container?: string;
+  /** Affiché seulement plus tard (gabarit différé, @defer, outlet). */
+  lazy?: 'TEMPLATE' | 'DEFER' | 'OUTLET';
   loc: Loc;
 }
 
@@ -206,6 +240,8 @@ export interface UiFacts {
   elements?: UiElement[];
   states?: UiState[];
   handlers?: UiHandler[];
+  /** Les composants affichés dans d'autres (onglets compris). */
+  children?: UiChild[];
   /** Les stores, flux RxJS et appels traversés (absents des scans d'avant : rien n'est supposé). */
   symbols?: UiSymbol[];
   links?: UiLink[];

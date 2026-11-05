@@ -103,6 +103,8 @@ describe('gabarit Angular : conteneurs, boutons et conditions', () => {
   it('la négation simple est retirée à l’affichage ; une expression composée reste entière', () => {
     expect(shownExpression({ expression: '!state.canValidate', whenTrue: false })).toBe('state.canValidate');
     expect(shownExpression({ expression: 'a && b', whenTrue: false })).toBe('!(a && b)');
+    expect(shownExpression({ expression: '!(x.ok$ | async)', whenTrue: false })).toBe('x.ok$ | async');
+    expect(shownExpression({ expression: '!(a) && (b)', whenTrue: false })).toBe('!(!(a) && (b))');
     expect(shownExpression({ expression: 'x', whenTrue: true })).toBe('x');
   });
 });

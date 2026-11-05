@@ -32,6 +32,13 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Cartographie : onglets Angular.** Les groupes et onglets Angular Material, ng-bootstrap, PrimeNG et
+  maison (y compris générés par `*ngFor`/`@for`, imbriqués, routés) sont lus dans les gabarits, avec leurs
+  libellés, conditions d'affichage et d'activation, la sélection pilotée par un store, et leur chargement à
+  la demande. Les composants affichés sont reliés à leur onglet (réutilisations signalées), les appels
+  déclenchés depuis un onglet sont listés, une dépendance entre onglets par un store partagé est présentée
+  comme probable, et la fiche d'un onglet donne les préconditions démontrées pour l'atteindre. L'analyse
+  d'impact cite les onglets touchés (sûr ou potentiel). Version des analyseurs : `cartography-3`.
 - **Cartographie : stores et flux RxJS maison.** Le frontal est suivi à travers les stores détectés par
   leur comportement (Subject, BehaviorSubject…), les émissions, les flux calculés et leurs traitements
   (switchMap…), les façades, les classes de base et les clients HTTP maison, jusqu'au BFF. La souscription
