@@ -237,6 +237,10 @@ import {
   mapIssues,
   mapApis,
   mapApi,
+  mapActions,
+  mapConditions,
+  mapElement,
+  mapStructure,
   mapNeighbours,
   mapSummary,
   queryNumber,
@@ -4413,6 +4417,18 @@ async function handleCartography(
           return;
         case 'api':
           json(await mapApi(project, id));
+          return;
+        case 'structure':
+          json(await mapStructure(project, params.get('feature') ?? undefined));
+          return;
+        case 'element':
+          json(await mapElement(project, id));
+          return;
+        case 'conditions':
+          json(await mapConditions(project, listQuery(params)));
+          return;
+        case 'actions':
+          json(await mapActions(project, listQuery(params)));
           return;
         default:
           break;

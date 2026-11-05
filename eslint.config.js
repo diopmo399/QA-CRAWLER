@@ -24,6 +24,8 @@ export default tseslint.config(
       'tests/fixtures/cartography/',
       // Le mini-projet du graphe enrichi (API & Services), analysé de la même façon.
       'tests/fixtures/cartography-graph/',
+      // Le mini-projet de la cartographie conditionnelle (conteneurs, boutons, décisions Backend).
+      'tests/fixtures/cartography-conditions/',
       // Les exemples importent les paquets compilés (dist) : ils se vérifient en les lançant.
       'examples/',
     ],

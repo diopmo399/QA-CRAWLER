@@ -10,6 +10,8 @@ import {
 import type { ReadFile } from './files.js';
 import type {
   JavaClass,
+  JavaComputed,
+  JavaDecision,
   JavaFacts,
   JavaField,
   JavaMapping,
@@ -181,8 +183,12 @@ function mappingsOf(
   mappings: JavaMapping[];
   bodies: Map<string, string>;
   uses: { method: string; type: string; operation: string; loc: { file: string; line: number } }[];
+  computed: JavaComputed[];
+  decisions: JavaDecision[];
 } {
   const lines = source.split(/\r?\n/);
+  const computed: JavaComputed[] = [];
+  const decisions: JavaDecision[] = [];
   const mappings: JavaMapping[] = [];
   const bodies = new Map<string, string>();
   const uses: { method: string; type: string; operation: string; loc: { file: string; line: number } }[] = [];
@@ -196,6 +202,9 @@ function mappingsOf(
         if (local[1] && local[2]) types.set(local[2], local[1]);
       for (const local of text.matchAll(/\bvar\s+([a-z]\w*)\s*=\s*new\s+([A-Z]\w*)/g))
         if (local[1] && local[2]) types.set(local[1], local[2]);
+      // La variable d'une boucle « for (Type x : … ) ».
+      for (const local of text.matchAll(/\bfor\s*\(\s*(?:final\s+)?([A-Z]\w*)(?:<[^>]*>)?\s+([a-z]\w*)\s*:/g))
+        if (local[1] && local[2]) types.set(local[2], local[1]);
       const name = `${decl.simpleName}.${method.name}`;
       // a.setX(b.getY()) / a.setX(b.y())
       for (const match of text.matchAll(
@@ -220,6 +229,68 @@ function mappingsOf(
               method.line,
             ),
           },
+        });
+      }
+      // a.setX(b.m(…)) / Type.builder().x(b.m(…)) : un champ dont la valeur est calculée par une méthode.
+      for (const match of text.matchAll(
+        /(?:\b([a-z]\w*)\s*\.\s*set([A-Z]\w*)|\.\s*([a-z]\w*))\s*\(\s*(?:([a-z]\w*)\s*\.\s*)?([a-z]\w*)\s*\(([^()]*)\)\s*\)/g,
+      )) {
+        const [, target, setField, builderField, receiver, called = '', args = ''] = match;
+        // Un accesseur sans argument est une correspondance de champ (déjà lue plus haut), pas un calcul.
+        if (!args.trim() && /^(get|is)[A-Z]/.test(called)) continue;
+        if (
+          builderField &&
+          ['build', 'builder', 'set', 'get', 'orElse', 'orElseThrow', 'map'].includes(builderField)
+        )
+          continue;
+        const toClass = setField ? types.get(target ?? '') : builderTarget(text, match.index);
+        const calleeClass = receiver ? types.get(receiver) : decl.simpleName;
+        if (!toClass || !calleeClass || /^[A-Z]/.test(called)) continue;
+        computed.push({
+          toClass,
+          toField: (setField ?? builderField ?? '').replace(/^./, (c) => c.toLowerCase()),
+          callee: `${calleeClass}.${called}`,
+          method: name,
+          loc: {
+            file,
+            line: lineIn(lines, new RegExp(`\\b${escapeRe(called)}\\s*\\(`), method.line, method.line),
+          },
+        });
+      }
+      // Une méthode qui rend un booléen : une décision (hors accesseur qui rend un champ tel quel).
+      const returns = method.returnType?.name;
+      const trivial = /^\{?\s*return\s+(?:this\.)?\w+\s*;\s*\}?$/.test(text.trim());
+      if (
+        (returns === 'boolean' || returns === 'Boolean') &&
+        !trivial &&
+        method.params.length + text.length > 40
+      ) {
+        const clip = (value: string): string => value.replace(/\s+/g, ' ').trim().slice(0, 140);
+        const predicates = [
+          ...[...text.matchAll(/\bif\s*\(((?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)/g)].map(
+            (m) => `si ${clip(m[1] ?? '')}`,
+          ),
+          ...[...text.matchAll(/\breturn\s+([^;]+);/g)].map((m) => `rend ${clip(m[1] ?? '')}`),
+        ].slice(0, 6);
+        const reads = [
+          ...new Set(
+            [...text.matchAll(/\b([a-z]\w*)\s*\.\s*((?:get|is)[A-Z]\w*)\s*\(\s*\)/g)].map(
+              (m) => `${types.get(m[1] ?? '') ?? m[1] ?? ''}.${accessorField(m[2] ?? '')}`,
+            ),
+          ),
+        ].slice(0, 12);
+        decisions.push({
+          owner: decl.simpleName,
+          name: method.name,
+          loops: (
+            text.match(
+              /\bfor\s*\(|\bwhile\s*\(|\.stream\s*\(|\.forEach\s*\(|\.(?:any|all|none)Match\s*\(/g,
+            ) ?? []
+          ).length,
+          predicates,
+          reads,
+          params: method.params.map((param) => param.type.name),
+          loc: { file, line: method.line },
         });
       }
       // Type.builder().x(b.getY())… jusqu'au point-virgule.
@@ -278,7 +349,13 @@ function mappingsOf(
           });
       }
     }
-  return { mappings, bodies, uses };
+  return { mappings, bodies, uses, computed, decisions };
+}
+
+/** Le type construit par le `Type.builder()` qui précède une position (même instruction). */
+function builderTarget(text: string, at: number): string | undefined {
+  const start = Math.max(text.lastIndexOf(';', at), text.lastIndexOf('{', at));
+  return /\b([A-Z]\w*)\s*\.\s*builder\s*\(\s*\)/.exec(text.slice(start + 1, at))?.[1];
 }
 
 export function analyzeJava(
@@ -304,6 +381,8 @@ export function analyzeJava(
   const mappings: JavaMapping[] = [];
   const bodies = new Map<string, string>();
   const uses: ReturnType<typeof mappingsOf>['uses'] = [];
+  const computed: JavaComputed[] = [];
+  const decisions: JavaDecision[] = [];
   for (const file of files.filter((entry) => entry.path.endsWith('.java'))) {
     const result = analyzeJavaSource(sourceId, layer, file.path, file.text, properties);
     index = {
@@ -325,12 +404,20 @@ export function analyzeJava(
     mappings.push(...found.mappings);
     for (const [key, value] of found.bodies) bodies.set(key, value);
     uses.push(...found.uses);
+    computed.push(...found.computed);
+    decisions.push(...found.decisions);
   }
   // Une classe sans rôle reconnu, mais envoyée comme corps ou lue/écrite par un mapping explicite, est un
   // objet de transfert : ses champs sont nécessaires pour suivre la donnée.
   const carried = new Set([
     ...bodies.values(),
     ...mappings.flatMap((mapping) => [mapping.fromClass, mapping.toClass]),
+    // Le type rendu par un endpoint, ou dont un champ est calculé, transporte aussi la donnée.
+    ...computed.map((entry) => entry.toClass),
+    ...index.endpoints.map((endpoint) => {
+      const returns = index.symbols.find((symbol) => symbol.id === endpoint.symbolId)?.detail?.returns;
+      return typeof returns === 'string' ? returns.replace(/^.*<\s*|\s*>.*$/g, '') : '';
+    }),
   ]);
   for (const cls of classes) if (cls.role === 'OTHER' && carried.has(cls.name)) cls.role = 'DTO';
   index = resolveCalls(index);
@@ -454,6 +541,8 @@ export function analyzeJava(
     })),
     mappings,
     repositoryAccess,
+    computed,
+    decisions,
     warnings,
   };
 }

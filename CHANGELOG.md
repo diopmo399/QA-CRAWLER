@@ -32,6 +32,15 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Cartographie : Structure & Conditions.** Le scan lit les gabarits Angular (conteneurs, boutons,
+  `@if`, `*ngIf`, `[hidden]`, `@else`, `[disabled]`, gestionnaires `(click)` et `(ngSubmit)`) et, côté
+  Java, les méthodes de décision booléennes (boucles, prédicats, données lues) et les champs calculés
+  par un appel de méthode. Le graphe gagne les nœuds `CONTAINER`, `BUTTON`, `CONDITION` et les liens
+  `CONTAINS`, `VISIBLE_WHEN`, `ENABLED_WHEN`, `CONTROLLED_BY`, `TRIGGERS`. Nouvelles routes `structure`,
+  `element`, `conditions`, `actions` (client `cartography`) et onglet « Structure & Conditions » :
+  arbre, graphe en couloirs de l'élément, fiche (condition, décision Backend, appels, preuves,
+  scénarios). Une condition dont la décision n'est pas démontrée est dite « non déterminée », avec sa
+  cause.
 - **Cartographie fonctionnelle** (écran « Cartographie » du Dashboard, routes
   `/api/projects/:id/cartography/…`, client `cartography`) : scan statique des sources d'un projet
   (Angular, Spring, JPA, OpenAPI ; les autres technologies sont signalées « connecteur manquant »),

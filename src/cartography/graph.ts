@@ -15,6 +15,7 @@ import type {
 } from '../sdk/core/cartography.js';
 import type { CodeEndpoint } from '../sdk/core/incident-contracts.js';
 import { matchEndpoint, normalizePath } from '../incident/code/paths.js';
+import { membersOf } from './analyze-template.js';
 import type { Loc, SourceFacts } from './facts.js';
 
 /**
@@ -756,6 +757,225 @@ export function buildGraph(input: GraphInput): GraphOutput {
             'liaison JSON par nom (Jackson) du corps envoyé',
             [ev(src, out.loc, 'STATIC_CODE', confidence)],
           );
+        // La réponse lue : son type est montré par le code (`Type.class`) → chaque propriété de même nom
+        // JSON est pilotée par celle du type rendu par l'endpoint appelé (désérialisation Jackson).
+        const returned = nodes.get(found.target.endpoint.symbolId)?.detail.returns;
+        const reply = out.responseType
+          ? javaClasses.get(out.responseType)?.find((entry) => entry.sourceId === src)?.cls
+          : undefined;
+        if (reply && typeof returned === 'string')
+          for (const field of reply.fields) {
+            const from = fieldNode(src, reply.name, field.name);
+            const to = jsonField(found.target.sourceId, returned, field.jsonName ?? field.name);
+            if (from && to)
+              edge(
+                from,
+                to,
+                'CONTROLLED_BY',
+                weakest(confidence, 'PROBABLE'),
+                `réponse JSON de ${out.method} ${out.path} lue en ${reply.name} : propriété « ${field.jsonName ?? field.name} » de ${returned}`,
+                [ev(src, out.loc, 'STATIC_CODE', weakest(confidence, 'PROBABLE'))],
+              );
+          }
+      }
+    }
+  }
+
+  // ── Structure conditionnelle : conteneurs, boutons, conditions, décisions ────────────────────────
+  for (const facts of input.facts) {
+    const src = facts.sourceId;
+    const ui = facts.ui;
+    if (ui) {
+      const elementNode = (id: string, kind: 'CONTAINER' | 'BUTTON'): string => `${kind}:${src}:${id}`;
+      const kinds = new Map((ui.elements ?? []).map((el) => [el.id, el.kind]));
+      for (const el of ui.elements ?? [])
+        node(
+          elementNode(el.id, el.kind),
+          el.kind,
+          'FRONTEND',
+          el.name,
+          ev(
+            src,
+            el.loc,
+            'STATIC_CODE',
+            'CONFIRMED',
+            `${el.kind === 'BUTTON' ? 'bouton' : 'conteneur'} <${el.tag}> du gabarit de ${el.component}`,
+            el.id,
+          ),
+          {
+            component: el.component,
+            tag: el.tag,
+            ...(el.handler ? { handler: el.handler } : {}),
+            ...(el.submit ? { submit: true } : {}),
+          },
+          {
+            parent: el.parent
+              ? elementNode(el.parent, kinds.get(el.parent) ?? 'CONTAINER')
+              : `COMPONENT:${src}:${el.component}`,
+          },
+        );
+      for (const el of ui.elements ?? []) {
+        const id = elementNode(el.id, el.kind);
+        const owner = el.parent
+          ? elementNode(el.parent, kinds.get(el.parent) ?? 'CONTAINER')
+          : `COMPONENT:${src}:${el.component}`;
+        edge(
+          owner,
+          id,
+          'CONTAINS',
+          'CONFIRMED',
+          el.parent ? 'imbriqué dans le conteneur' : 'dans le gabarit du composant',
+          [ev(src, el.loc, 'STATIC_CODE', 'CONFIRMED')],
+        );
+        for (const control of el.fields) {
+          const field = ui.fields.find((f) => f.component === el.component && f.control === control);
+          if (field)
+            edge(
+              id,
+              `FIELD:${src}:${field.id}`,
+              'CONTAINS',
+              'CONFIRMED',
+              `contrôle « ${control} » dans le conteneur`,
+              [ev(src, field.loc, 'STATIC_CODE', 'CONFIRMED')],
+            );
+        }
+        // Les conditions : la visibilité (bloc, *ngIf, [hidden], @else) et l'activation ([disabled]).
+        for (const [aspect, cond] of [
+          ['VISIBLE', el.visibleWhen],
+          ['ENABLED', el.disabledWhen],
+        ] as const) {
+          if (!cond) continue;
+          // Vraie quand l'expression est vraie, sauf [hidden], @else et [disabled] (vraie quand elle est fausse).
+          const whenTrue = !(cond.how === 'hidden' || cond.how === 'else' || cond.how === 'disabled');
+          const members = membersOf(cond.expression);
+          const states = members.map((m) => ({
+            m,
+            state: ui.states?.find((st) => st.component === el.component && st.member === m.root),
+          }));
+          const condition = node(
+            `CONDITION:${src}:${el.id}:${aspect.toLowerCase()}`,
+            'CONDITION',
+            'FRONTEND',
+            cond.expression,
+            ev(
+              src,
+              cond.loc,
+              'STATIC_CODE',
+              'CONFIRMED',
+              `condition ${cond.how} : ${cond.expression}`,
+              el.id,
+            ),
+            {
+              aspect,
+              how: cond.how,
+              expression: cond.expression,
+              whenTrue,
+              element: id,
+              sources: states.map(({ m, state }) => `${m.root}:${state?.kind ?? 'UNKNOWN'}`),
+            },
+            { parent: id },
+          );
+          edge(
+            id,
+            condition,
+            aspect === 'VISIBLE' ? 'VISIBLE_WHEN' : 'ENABLED_WHEN',
+            'CONFIRMED',
+            `${cond.how} « ${cond.expression} »`,
+            [ev(src, cond.loc, 'STATIC_CODE', 'CONFIRMED')],
+          );
+          for (const { m, state } of states) {
+            if (state?.kind !== 'RESPONSE' || !state.call) continue;
+            const call = `METHOD:${src}:${state.call}`;
+            edge(
+              condition,
+              call,
+              'DEPENDS_ON',
+              'CONFIRMED',
+              `${m.root} est affecté par la réponse de ${state.call.replace('#', '.')}()`,
+              [ev(src, state.loc, 'STATIC_CODE', 'CONFIRMED')],
+            );
+            // La propriété lue dans la réponse : celle de l'affectation, puis le chemin de l'expression.
+            const property = [...(state.property ? state.property.split('.') : []), ...m.path][0];
+            if (!property) continue;
+            for (const served of edges.values()) {
+              if (served.from !== call || served.kind !== 'CALLS') continue;
+              const endpoint = nodes.get(served.to);
+              const returns = endpoint?.detail.returns;
+              if (typeof returns !== 'string') continue;
+              const target = served.to.split(':')[1] ?? '';
+              const field = jsonField(target, returns.replace(/^.*<\s*|\s*>.*$/g, ''), property);
+              if (field)
+                edge(
+                  condition,
+                  field,
+                  'CONTROLLED_BY',
+                  served.confidence,
+                  `propriété « ${property} » de ${returns}, rendu par ${endpoint?.name ?? served.to}`,
+                  [ev(src, state.loc, 'STATIC_CODE', served.confidence)],
+                );
+            }
+          }
+        }
+        // Le bouton déclenche les appels de service de son gestionnaire.
+        if (el.kind === 'BUTTON' && el.handler) {
+          const handler = ui.handlers?.find((h) => h.component === el.component && h.method === el.handler);
+          for (const call of handler?.calls ?? [])
+            edge(
+              id,
+              `METHOD:${src}:${call}`,
+              'TRIGGERS',
+              'CONFIRMED',
+              `${el.submit ? '(ngSubmit)' : '(click)'}="${el.handler}()" → ${call.replace('#', '.')}()`,
+              [
+                ev(src, el.loc, 'STATIC_CODE', 'CONFIRMED'),
+                ev(src, handler?.loc, 'STATIC_CODE', 'CONFIRMED'),
+              ],
+            );
+        }
+      }
+    }
+    const java = facts.java;
+    if (java) {
+      const methodId = (owner: string, name: string): string | undefined => {
+        const found = java.methods.find((m) => m.owner === owner && m.name === name);
+        return found ? `METHOD:${found.id}` : undefined;
+      };
+      // Un champ calculé par une méthode : piloté par elle.
+      for (const entry of java.computed ?? []) {
+        const field = fieldNode(src, entry.toClass, entry.toField);
+        const [owner = '', name = ''] = entry.callee.split('.');
+        const method = methodId(owner, name);
+        if (field && method)
+          edge(
+            field,
+            method,
+            'CONTROLLED_BY',
+            'CONFIRMED',
+            `valeur calculée par ${entry.callee}() dans ${entry.method}()`,
+            [ev(src, entry.loc, 'STATIC_CODE', 'CONFIRMED')],
+          );
+      }
+      // Une méthode de décision : ses boucles, prédicats et lectures ; l'entité qu'elle lit en paramètre.
+      for (const decision of java.decisions ?? []) {
+        const method = methodId(decision.owner, decision.name);
+        const target = method ? nodes.get(method) : undefined;
+        if (!method || !target) continue;
+        target.detail.decision = true;
+        target.detail.loops = decision.loops;
+        target.detail.predicates = decision.predicates;
+        target.detail.reads = decision.reads;
+        for (const param of new Set(decision.params)) {
+          const read = decision.reads.filter((r) => r.startsWith(`${param}.`));
+          if (read.length && nodes.has(`ENTITY:${src}:${param}`))
+            edge(
+              method,
+              `ENTITY:${src}:${param}`,
+              'READS',
+              'CONFIRMED',
+              `lit ${read.join(', ')} (paramètre ${param})`,
+              [ev(src, decision.loc, 'STATIC_CODE', 'CONFIRMED')],
+            );
+        }
       }
     }
   }

@@ -1,7 +1,10 @@
 import type {
   ApiCatalog,
+  ActionRow,
   ApiSheet,
   ConceptRow,
+  ConditionRow,
+  ElementSheet,
   Evidence,
   EvidenceExcerpt,
   FeatureDetail,
@@ -14,6 +17,7 @@ import type {
   MapNode,
   MapPage,
   MapSource,
+  MapStructure,
   MapSubgraph,
   MapSummary,
   ScanRecord,
@@ -25,6 +29,14 @@ import { mapStrings, type MapStrings } from './dashboard-cartography-i18n.js';
 import { GRAPH_CSS, shortPath, traceView, type GraphSelection } from './dashboard-cartography-graph.js';
 import { apiKpis, apisTab, APIS_CSS, type ApiTab } from './dashboard-cartography-apis.js';
 import { LANES_CSS, NO_FILTERS, type GraphView, type LaneFilters } from './dashboard-cartography-lanes.js';
+import {
+  STRUCTURE_CSS,
+  structureKpis,
+  structureTab,
+  type BottomTab,
+  type SheetTab,
+  type StructTab,
+} from './dashboard-cartography-structure.js';
 import { header, icon } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
@@ -40,6 +52,7 @@ export const MAP_TABS = [
   'overview',
   'scan',
   'features',
+  'structure',
   'fields',
   'apis',
   'coverage',
@@ -86,7 +99,11 @@ export type MapPane =
   | 'issues'
   | 'conceptSheet'
   | 'apis'
-  | 'apiSheet';
+  | 'apiSheet'
+  | 'structure'
+  | 'element'
+  | 'conditions'
+  | 'actions';
 
 export interface CartographyUi {
   tab: MapTab;
@@ -181,6 +198,22 @@ export interface CartographyUi {
   lnBundles: string[];
   /** Ajuster le graphe à la zone après son prochain affichage (ouverture, changement de mode). */
   autoFit?: boolean;
+  /** Structure & Conditions : l'arbre (une fonctionnalité ou tout le projet), sa recherche, ses nœuds repliés. */
+  structure?: MapStructure;
+  structFeature: string;
+  structQ: string;
+  structClosed: string[];
+  /** L'élément choisi (conteneur, champ, bouton) et sa fiche. */
+  element?: string;
+  elementSheet?: ElementSheet;
+  structTab: StructTab;
+  sheetTab: SheetTab;
+  bottomTab: BottomTab;
+  /** Les listes du projet : conditions, actions. */
+  conditionsPage?: MapPage<ConditionRow>;
+  condCriteria: ListCriteria;
+  actionsPage?: MapPage<ActionRow>;
+  actCriteria: ListCriteria;
 }
 
 export const emptyCartographyUi = (): CartographyUi => ({
@@ -217,6 +250,14 @@ export const emptyCartographyUi = (): CartographyUi => ({
   apiView: 'architecture',
   apiFilters: { ...NO_FILTERS },
   lnCards: [],
+  structFeature: '',
+  structQ: '',
+  structClosed: [],
+  structTab: 'graph',
+  sheetTab: 'details',
+  bottomTab: 'elements',
+  condCriteria: emptyCriteria(10),
+  actCriteria: emptyCriteria(10),
   lnBundles: [],
 });
 
@@ -323,6 +364,7 @@ const TAB_ICON: Record<MapTab, string> = {
   coverage: 'scenarios',
   trace: 'traceability',
   apis: 'code',
+  structure: 'grid',
   impact: 'trends',
 };
 
@@ -345,7 +387,18 @@ export function cartographyView(input: DashboardState): string {
   const crumb = ui.tab === 'features' ? m.g.crumbFeatures : m.tabs[ui.tab];
   const crumbs = `<nav class="map-crumbs" aria-label="${esc(m.g.crumbsLabel)}"><button class="lnk" data-action="map-tab" data-tab="overview">${icon('back')}<span>${esc(m.g.navLabel)}</span></button><span aria-hidden="true">›</span><b aria-current="page">${esc(crumb)}</b></nav>`;
   const apisView = ui.tab === 'apis';
-  const head = `<div class="map-head"><header class="hd map-hd"><div class="hd-t">${crumbs}<h1>${esc(apisView ? m.a.title : m.title)}</h1><p class="sub">${esc(apisView ? m.a.sub : m.sub)}</p></div><div class="acts">${actions}</div></header>${apisView && summary?.scan ? apiKpis(m, ui) : summary ? kpis(m, summary) : ''}</div>`;
+  const structView = ui.tab === 'structure';
+  const title = apisView ? m.a.title : structView ? m.st.title : m.title;
+  const sub = apisView ? m.a.sub : structView ? m.st.sub : m.sub;
+  const kpiRow =
+    apisView && summary?.scan
+      ? apiKpis(m, ui)
+      : structView && summary?.scan
+        ? structureKpis(m, ui.structure)
+        : summary
+          ? kpis(m, summary)
+          : '';
+  const head = `<div class="map-head"><header class="hd map-hd"><div class="hd-t">${crumbs}<h1>${esc(title)}</h1><p class="sub">${esc(sub)}</p></div><div class="acts">${actions}</div></header>${kpiRow}</div>`;
   const tabs = `<div class="tabs map-tabs" role="tablist" aria-label="${esc(m.title)}">${MAP_TABS.map((tab) => `<button role="tab" data-action="map-tab" data-tab="${tab}" aria-selected="${String(ui.tab === tab)}">${icon(TAB_ICON[tab])}<span>${esc(m.tabs[tab])}</span></button>`).join('')}</div>`;
   if (!summary)
     return `<div class="map">${head}${tabs}${paneError(ui.errors.summary ?? ui.error)}${ui.errors.summary ? '' : spinner(m)}</div>`;
@@ -368,8 +421,8 @@ export function cartographyView(input: DashboardState): string {
   else if (ui.tab === 'fields') content = fieldsTab(m, state);
   else if (ui.tab === 'coverage') content = coverageTab(m, state, summary);
   else if (ui.tab === 'trace') content = traceTab(m, state);
-  else if (ui.tab === 'apis')
-    content = apisTab(m, ui, {
+  else if (ui.tab === 'apis' || ui.tab === 'structure')
+    content = (ui.tab === 'apis' ? apisTab : structureTab)(m, ui, {
       chip,
       conf: (value) => conf(m, value),
       evidence: (e) => evidenceButton(m, e, state),
@@ -1164,7 +1217,7 @@ function evidencePanel(m: MapStrings, ui: CartographyUi): string {
   return `<aside class="map-ev" role="dialog" aria-label="${esc(e ? m.evidenceTitle(e.file, e.line) : m.evidence)}"><div class="card-h"><h2 class="mono">${esc(e ? `${e.source} · ${m.evidenceTitle(e.file, e.line)}` : m.evidence)}</h2><button class="btn small ghost icon-only" data-action="map-evidence-close" aria-label="${esc(m.closeEvidence)}">${icon('close')}</button></div>${code}</aside>`;
 }
 
-export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}
+export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}
 .map{display:flex;flex-direction:column;gap:14px}
 .map-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
 .map-head .hd{flex:1 1 460px;flex-direction:column;align-items:flex-start}

@@ -84,6 +84,10 @@ export const MAP_NODE_KINDS = [
   'COLUMN',
   'SCENARIO',
   'EXECUTION',
+  /** Un conteneur d'un gabarit (section, bloc conditionnel), un bouton, une condition d'affichage ou d'activation. */
+  'CONTAINER',
+  'BUTTON',
+  'CONDITION',
 ] as const;
 export type MapNodeKind = (typeof MAP_NODE_KINDS)[number];
 
@@ -116,6 +120,12 @@ export const MAP_EDGE_KINDS = [
   'VERIFIES',
   'COVERS',
   'DEPENDS_ON',
+  /** Structure et comportement : contient, visible si, activé si, piloté par (valeur calculée), déclenche. */
+  'CONTAINS',
+  'VISIBLE_WHEN',
+  'ENABLED_WHEN',
+  'CONTROLLED_BY',
+  'TRIGGERS',
 ] as const;
 export type MapEdgeKind = (typeof MAP_EDGE_KINDS)[number];
 
@@ -728,6 +738,105 @@ export interface ApiScenarioUse {
   executed: boolean;
   verified: boolean;
   lastRun?: { run: string; verdict: string; at?: string };
+}
+
+// ── Structure conditionnelle (conteneurs, boutons, conditions, décisions) ───────────────────────────
+
+/** Un élément de l'arbre d'une page : écran, composant, conteneur, champ ou bouton, avec ses conditions. */
+export interface StructureItem {
+  id: string;
+  kind: 'ROUTE' | 'COMPONENT' | 'CONTAINER' | 'FIELD' | 'BUTTON';
+  name: string;
+  sub?: string;
+  conditions: { aspect: 'VISIBLE' | 'ENABLED'; expression: string; whenTrue: boolean }[];
+  children: StructureItem[];
+}
+
+/** Les comptes de la structure du projet (calculés sur le scan). */
+export interface StructureKpis {
+  pages: number;
+  containers: number;
+  fields: number;
+  buttons: number;
+  internalApis: number;
+  externalApis: number;
+  conditions: number;
+}
+
+export interface MapStructure {
+  feature?: { id: string; name: string };
+  roots: StructureItem[];
+  kpis: StructureKpis;
+}
+
+/** Une condition d'un élément et la chaîne qui la relie à sa décision Backend (si elle est démontrée). */
+export interface ElementCondition {
+  id: string;
+  aspect: 'VISIBLE' | 'ENABLED';
+  expression: string;
+  how: string;
+  /** L'élément est visible (ou activé) quand l'expression est vraie (sinon : quand elle est fausse). */
+  whenTrue: boolean;
+  /** Hérité d'un conteneur parent (son nom). */
+  inherited?: string;
+  /** D'où viennent les membres lus (réponse d'un appel, accesseur, formulaire, entrée, inconnu). */
+  sources: { member: string; kind: string }[];
+  chain: { nodes: MapNode[]; edges: MapEdge[] };
+  decision?: { method: MapNode; loops: number; predicates: string[]; reads: string[] };
+  status: MapConfidence;
+  /** Pourquoi la décision n'est pas déterminée (quand elle ne l'est pas). */
+  undetermined?: string;
+}
+
+/** Une action d'un bouton : les appels déclenchés, les endpoints atteints, l'aval (API externes, tables). */
+export interface ElementAction {
+  handler?: string;
+  triggers: MapNode[];
+  endpoints: MapNode[];
+  outbound: ApiOutbound[];
+  entities: { name: string; access: 'READ' | 'WRITE' }[];
+  status: MapConfidence;
+}
+
+export interface ElementSheet {
+  element: MapNode;
+  ancestors: MapNode[];
+  children: MapNode[];
+  conditions: ElementCondition[];
+  actions: ElementAction[];
+  /** Le sous-graphe de l'élément (conditions, chaîne de décision, actions et leur aval), borné. */
+  graph: MapSubgraph;
+  outbound: ApiOutbound[];
+  features: ApiFeatureUse[];
+  scenarios: ApiScenarioUse[];
+  scanId: string;
+  scannedAt?: string;
+}
+
+export interface ConditionRow {
+  id: string;
+  element: { id: string; name: string; kind: string };
+  component?: string;
+  aspect: 'VISIBLE' | 'ENABLED';
+  expression: string;
+  /** Faux quand l'expression décrit l'inverse (masqué si, désactivé si). */
+  whenTrue: boolean;
+  sources: { member: string; kind: string }[];
+  decision?: string;
+  status: MapConfidence;
+  undetermined?: string;
+}
+
+export interface ActionRow {
+  id: string;
+  name: string;
+  component?: string;
+  handler?: string;
+  calls: string[];
+  endpoints: string[];
+  externals: string[];
+  entities: string[];
+  status: MapConfidence;
 }
 
 /** Un appel sortant vers une API hors périmètre (externe ou à classifier), tel que le scan l'a établi. */

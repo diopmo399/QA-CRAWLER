@@ -1,4 +1,13 @@
-import type { ApiSheet, Evidence, MapConfidence, MapEdge, MapNode, MapSummary } from '../core/cartography.js';
+import type {
+  ApiOutbound,
+  ApiService,
+  Evidence,
+  MapConfidence,
+  MapEdge,
+  MapNode,
+  MapSubgraph,
+  MapSummary,
+} from '../core/cartography.js';
 import { breakable, idList, nodeText, technologyOf, weakest } from './dashboard-cartography-graph.js';
 import type { MapStrings } from './dashboard-cartography-i18n.js';
 import { icon } from './dashboard-parts.js';
@@ -50,11 +59,12 @@ export const NO_FILTERS: LaneFilters = { lanes: [], natures: [], statuses: [], d
 export const filtersActive = (f: LaneFilters): boolean =>
   f.lanes.length > 0 || f.natures.length > 0 || f.statuses.length > 0 || f.depth > 0;
 
-export type CardKind = 'COMPONENT' | 'CLASS' | 'ENDPOINT' | 'DTO' | 'TABLE' | 'EXTERNAL' | 'OTHER';
+export type CardKind =
+  'COMPONENT' | 'CONTAINER' | 'BUTTON' | 'CLASS' | 'ENDPOINT' | 'DTO' | 'TABLE' | 'EXTERNAL' | 'OTHER';
 export interface LaneMember {
   id: string;
   text: string;
-  kind: 'method' | 'field' | 'column' | 'out' | 'in';
+  kind: 'method' | 'field' | 'column' | 'out' | 'in' | 'condition';
 }
 export interface LaneCard {
   key: string;
@@ -106,7 +116,18 @@ export interface LaneModel {
   cardOfNode: Map<string, string>;
 }
 
-const ARCH_KINDS: ReadonlySet<string> = new Set(['CALLS', 'DEPENDS_ON', 'READS', 'WRITES']);
+const ARCH_KINDS: ReadonlySet<string> = new Set([
+  'CALLS',
+  'DEPENDS_ON',
+  'READS',
+  'WRITES',
+  // La structure conditionnelle : contenu, conditions, valeurs pilotées, actions déclenchées.
+  'CONTAINS',
+  'VISIBLE_WHEN',
+  'ENABLED_WHEN',
+  'CONTROLLED_BY',
+  'TRIGGERS',
+]);
 const DATA_KINDS: ReadonlySet<string> = new Set([
   'SENDS',
   'TRANSFORMS',
@@ -114,6 +135,7 @@ const DATA_KINDS: ReadonlySet<string> = new Set([
   'WRITES',
   'INPUTS',
   'DISPLAYS',
+  'CONTROLLED_BY',
 ]);
 const RANK: Record<MapConfidence, number> = { UNKNOWN: 0, PROBABLE: 1, CONFIRMED: 2 };
 const strongest = (list: readonly MapConfidence[]): MapConfidence =>
@@ -146,6 +168,15 @@ function cardOf(
   switch (node.kind) {
     case 'COMPONENT':
       return { key: `cmp:${node.id}`, kind: 'COMPONENT', title: node.name, lane };
+    case 'CONTAINER':
+    case 'BUTTON':
+      return { key: `el:${node.id}`, kind: node.kind, title: node.label ?? node.name, lane };
+    case 'CONDITION': {
+      // Une condition se lit sur la carte de son élément.
+      const owner = node.parent ? nodes.get(node.parent) : undefined;
+      if (owner) return cardOf(owner, nodes);
+      return { key: `n:${node.id}`, kind: 'OTHER', title: node.name, lane };
+    }
     case 'FIELD': {
       const parent = node.parent ? nodes.get(node.parent) : undefined;
       if (parent && parent.kind !== 'FIELD') return cardOf(parent, nodes);
@@ -198,6 +229,8 @@ function cardOf(
 const KIND_RANK: Record<CardKind, number> = {
   ENDPOINT: 0,
   COMPONENT: 1,
+  CONTAINER: 1,
+  BUTTON: 1,
   CLASS: 2,
   DTO: 3,
   TABLE: 4,
@@ -206,7 +239,20 @@ const KIND_RANK: Record<CardKind, number> = {
 };
 
 /** Le modèle du graphe en couloirs pour une vue et des critères d'affichage (fonction pure, sans DOM). */
-export function laneModel(sheet: ApiSheet, view: GraphView, filters: LaneFilters = NO_FILTERS): LaneModel {
+/** Ce que le graphe en couloirs dessine : un sous-graphe, ses appels sortants, et ce qui appartient au sujet. */
+export interface LaneInput {
+  graph: MapSubgraph;
+  outbound: ApiOutbound[];
+  /** L'API dont c'est la fiche (ses endpoints et champs sont « les siens »). */
+  api?: Pick<ApiService, 'id' | 'endpoints' | 'fields'>;
+  /** D'autres nœuds propres au sujet (l'élément d'une page, par exemple). */
+  ownNodes?: string[];
+  /** Des sortes de liens montrées en plus dans la vue Architecture (les mappings d'une chaîne de décision). */
+  extraKinds?: string[];
+  scanId: string;
+}
+
+export function laneModel(sheet: LaneInput, view: GraphView, filters: LaneFilters = NO_FILTERS): LaneModel {
   const nodes = new Map(sheet.graph.nodes.map((n) => [n.id, n]));
   // Les appels sortants établis : une cible par endpoint externe (ou à classifier), un lien par appel.
   const extEdges: MapEdge[] = [];
@@ -226,7 +272,7 @@ export function laneModel(sheet: ApiSheet, view: GraphView, filters: LaneFilters
         signature: '',
         evidence: call.evidence,
       };
-      extCards.set(id, { node, lane, own: call.api === sheet.api.id, sub: call.provider ?? call.name });
+      extCards.set(id, { node, lane, own: call.api === sheet.api?.id, sub: call.provider ?? call.name });
       nodes.set(id, node);
     }
     extEdges.push({
@@ -239,13 +285,16 @@ export function laneModel(sheet: ApiSheet, view: GraphView, filters: LaneFilters
       evidence: call.evidence,
     });
   }
-  const kinds = view === 'data' ? DATA_KINDS : ARCH_KINDS;
+  const kinds = view === 'data' ? DATA_KINDS : new Set([...ARCH_KINDS, ...(sheet.extraKinds ?? [])]);
   const all = [...sheet.graph.edges.filter((e) => kinds.has(e.kind)), ...extEdges];
 
   // Les cartes : chaque nœud dans la carte de son conteneur.
   const cards = new Map<string, LaneCard>();
   const cardOfNode = new Map<string, string>();
-  const ownNodes = new Set(sheet.api.endpoints.map((ep) => ep.node).filter((n): n is string => Boolean(n)));
+  const ownNodes = new Set([
+    ...(sheet.api?.endpoints ?? []).map((ep) => ep.node).filter((n): n is string => Boolean(n)),
+    ...(sheet.ownNodes ?? []),
+  ]);
   const place = (node: MapNode): void => {
     const ext = extCards.get(node.id);
     const base = ext
@@ -286,6 +335,12 @@ export function laneModel(sheet: ApiSheet, view: GraphView, filters: LaneFilters
       card.members.push({ id: node.id, text: str(node.detail.field) || text.name, kind: 'field' });
     else if (node.kind === 'COLUMN')
       card.members.push({ id: node.id, text: str(node.detail.column) || text.name, kind: 'column' });
+    else if (node.kind === 'CONDITION')
+      card.members.push({
+        id: node.id,
+        text: `${node.detail.aspect === 'ENABLED' ? 'activé' : 'visible'} si ${shownExpression({ expression: node.name, whenTrue: node.detail.whenTrue !== false })}`,
+        kind: 'condition',
+      });
   };
   for (const node of sheet.graph.nodes) place(node);
   for (const ext of extCards.values()) place(ext.node);
@@ -303,10 +358,10 @@ export function laneModel(sheet: ApiSheet, view: GraphView, filters: LaneFilters
       if (!card.own) continue;
       // Les champs de ses endpoints : ceux du type envoyé (requête) et du type reçu (réponse).
       const ids = new Set(card.nodes.map((id) => (id.startsWith('EXT:') ? id.slice(4) : id)));
-      const eps = sheet.api.endpoints.filter(
+      const eps = (sheet.api?.endpoints ?? []).filter(
         (ep) => ids.has(ep.id) || (ep.node !== undefined && ids.has(ep.node)),
       );
-      const exchanged = sheet.api.fields.filter((f) =>
+      const exchanged = (sheet.api?.fields ?? []).filter((f) =>
         eps.some((ep) => (f.direction === 'OUT' ? ep.requestType : ep.responseType) === f.container),
       );
       for (const f of exchanged)
@@ -468,6 +523,13 @@ export function laneModel(sheet: ApiSheet, view: GraphView, filters: LaneFilters
     viewHidden,
     cardOfNode,
   };
+}
+
+/** La condition telle qu'elle s'énonce : « [disabled]="!x" » se lit « activé si x » (négation simple retirée). */
+export function shownExpression(c: { expression: string; whenTrue: boolean }): string {
+  if (c.whenTrue) return c.expression;
+  const simple = /^!\s*([\w$.?]+)$/.exec(c.expression.trim());
+  return simple?.[1] ?? `!(${c.expression})`;
 }
 
 // ── Disposition ─────────────────────────────────────────────────────────────────────────────────
@@ -723,6 +785,8 @@ const LANE_ICON: Record<string, string> = {
 };
 const CARD_ICON: Record<CardKind, string> = {
   COMPONENT: 'cube',
+  CONTAINER: 'grid',
+  BUTTON: 'pointer',
   CLASS: 'gear',
   ENDPOINT: 'code',
   DTO: 'file',
@@ -739,7 +803,7 @@ const STATUS_ICON: Record<MapConfidence, string> = {
 export interface LaneRenderOptions {
   m: MapStrings;
   summary?: MapSummary;
-  sheet: ApiSheet;
+  sheet: LaneInput;
   model: LaneModel;
   /** Cartes dépliées (tous les membres), faisceaux dépliés (un tracé par paire de cartes). */
   openCards: ReadonlySet<string>;
@@ -918,7 +982,7 @@ export function laneLegend(m: MapStrings, model: LaneModel): string {
 }
 
 /** Les critères d'affichage : couches présentes, natures, statuts, profondeur (masquer n'efface aucune relation). */
-export function laneFilters(m: MapStrings, sheet: ApiSheet, view: GraphView, filters: LaneFilters): string {
+export function laneFilters(m: MapStrings, sheet: LaneInput, view: GraphView, filters: LaneFilters): string {
   const present = laneModel(sheet, view, NO_FILTERS).lanes.map((l) => l.id);
   const chip = (group: string, value: string, label: string, hidden: boolean): string =>
     `<label class="ln-f"><input type="checkbox" data-map="ln-filter" data-group="${group}" value="${esc(value)}" ${hidden ? '' : 'checked'}>${esc(label)}</label>`;

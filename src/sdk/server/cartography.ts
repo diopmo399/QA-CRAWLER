@@ -26,6 +26,7 @@ import {
   type MapIndex,
 } from '../../cartography/explorer.js';
 import { runScan } from '../../cartography/scan.js';
+import { actionRows, conditionRows, elementSheet, structureOf } from '../../cartography/structure.js';
 import {
   appendDecision,
   CartographyStoreError,
@@ -41,8 +42,12 @@ import {
   DECISION_KINDS,
   MAP_LAYERS,
   SUPPORTED_TECHNOLOGIES,
+  type ActionRow,
   type ApiCatalog,
   type ApiSheet,
+  type ConditionRow,
+  type ElementSheet,
+  type MapStructure,
   type CartographyConfig,
   type CartographyView,
   type ConceptRow,
@@ -831,6 +836,50 @@ export async function mapApi(project: CartographyProject, id: string): Promise<A
   const sheet = apiSheet(state.index, state.cov, id);
   if (!sheet) throw new CartographyInputError(404, 'NOT_FOUND', 'unknown API');
   return sheet;
+}
+
+/** La structure d'une fonctionnalité (ou du projet) : écrans, composants, conteneurs, champs, boutons. */
+export async function mapStructure(project: CartographyProject, feature?: string): Promise<MapStructure> {
+  const state = await progressive(project);
+  if (!state)
+    return {
+      roots: [],
+      kpis: {
+        pages: 0,
+        containers: 0,
+        fields: 0,
+        buttons: 0,
+        internalApis: 0,
+        externalApis: 0,
+        conditions: 0,
+      },
+    };
+  const structure = structureOf(state.index, feature || undefined);
+  if (!structure) throw new CartographyInputError(404, 'NOT_FOUND', 'unknown feature');
+  return structure;
+}
+
+export async function mapElement(project: CartographyProject, id: string): Promise<ElementSheet> {
+  const state = await required(project);
+  const sheet = elementSheet(state.index, state.cov, id);
+  if (!sheet) throw new CartographyInputError(404, 'NOT_FOUND', 'unknown element');
+  return sheet;
+}
+
+export async function mapConditions(
+  project: CartographyProject,
+  query: MapListQuery,
+): Promise<MapPage<ConditionRow>> {
+  const state = await progressive(project);
+  return state ? conditionRows(state.index, query) : { items: [], total: 0, page: 1, size: query.size ?? 25 };
+}
+
+export async function mapActions(
+  project: CartographyProject,
+  query: MapListQuery,
+): Promise<MapPage<ActionRow>> {
+  const state = await progressive(project);
+  return state ? actionRows(state.index, query) : { items: [], total: 0, page: 1, size: query.size ?? 25 };
 }
 
 export { number as queryNumber };

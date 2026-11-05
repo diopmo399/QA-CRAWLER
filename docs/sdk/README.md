@@ -1241,6 +1241,58 @@ Le dessin est calculé dans la page, sans bibliothèque de disposition suppléme
 par barycentre (moins de croisements), troncs et voies écartés, couloirs du haut et du bas pour les
 faisceaux qui sautent une colonne ou reviennent en arrière.
 
+#### Structure & Conditions
+
+L'onglet **Structure & Conditions** décrit ce que l'écran affiche, à quelle condition, et ce que chaque
+bouton déclenche. Le scan lit les gabarits Angular (fichier `templateUrl` ou `template` en ligne) :
+
+| Lu dans le gabarit                                                                                         | Devient                                                                                                             |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `section`, `fieldset`, `article`, `mat-card`, `mat-expansion-panel`, `mat-tab`, ou un élément conditionnel | un nœud `CONTAINER` (nommé par son titre `h1`…`h6`, `legend`, `mat-card-title`), relié par `CONTAINS`               |
+| `@if`, `*ngIf`, `[hidden]`, la branche `@else`, `@case`                                                    | un nœud `CONDITION` (aspect visible) et le lien `VISIBLE_WHEN` ; `[hidden]` et `@else` se lisent « visible si non » |
+| `[disabled]`                                                                                               | un nœud `CONDITION` (aspect activation) et le lien `ENABLED_WHEN`                                                   |
+| `button` avec `(click)`, ou `type="submit"` d'un formulaire `(ngSubmit)`                                   | un nœud `BUTTON`, relié par `TRIGGERS` à la méthode de service appelée par son gestionnaire                         |
+| `formControlName`, `[(ngModel)]`                                                                           | le champ, rattaché à son conteneur                                                                                  |
+
+L'expression est gardée telle qu'écrite. Ses membres sont classés : réponse d'un appel (`state` rempli par
+`subscribe` d'une méthode de service), accesseur, formulaire, entrée (`@Input`) ou valeur locale.
+
+Côté Java, le scan relève :
+
+- les **décisions** : méthodes qui rendent un booléen, avec leurs boucles, leurs prédicats et les
+  propriétés lues (`Request.status`) ;
+- les **champs calculés** : `view.setCanValidate(service.canValidate(request))` ou un builder, reliés par
+  `CONTROLLED_BY` à la méthode ;
+- la correspondance BFF ↔ Backend d'un champ de réponse de même propriété JSON (`CONTROLLED_BY`, probable).
+
+La fiche d'un élément (`GET …/cartography/element?id=`) remonte, pour chaque condition, la chaîne
+condition → champ de réponse du BFF → champ du Backend → méthode de décision → table lue. Une condition
+héritée d'un conteneur parent est montrée avec son origine. Si la chaîne s'arrête, la condition est
+**non déterminée** et la cause est donnée (par exemple « valeur calculée dans le frontal : aucune
+décision Backend »). Les actions d'un bouton suivent gestionnaire → service → endpoint BFF → endpoint
+Backend → API externe et tables écrites.
+
+| Route (`GET /api/projects/:id/cartography/…`) | Client                           | Contenu                                                                      |
+| --------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------- |
+| `structure?feature=`                          | `structure(projectId, feature?)` | arbre écran → composant → conteneurs → champs et boutons ; comptes           |
+| `element?id=`                                 | `element(projectId, id)`         | conditions, décision, actions, sous-graphe borné, scénarios (404 si inconnu) |
+| `conditions?q=&page=&size=`                   | `conditions(projectId, query)`   | les conditions du projet, avec leur décision ou leur cause                   |
+| `actions?q=&page=&size=`                      | `actions(projectId, query)`      | les boutons : gestionnaire, appels, endpoints, API externes, tables          |
+
+À l'écran : sept indicateurs (pages, conteneurs, champs, boutons, API internes, API externes,
+conditions) ; à gauche, l'arbre de la fonctionnalité choisie (ou du projet), avec recherche, nœuds
+repliables et badges de condition ; au centre, la **Traçabilité (graphe)** de l'élément en couloirs
+(Frontend, BFF, Backend, API externes, base de données), puis les onglets **Éléments du parcours**,
+**Conditions**, **APIs appelées**, **Données échangées** et **Preuves de code** ; les onglets
+**Conditions & Règles** et **Actions & APIs** listent tout le projet, page par page. À droite, la fiche :
+description, conditions d'affichage et d'activation, « Calculé par » et la preuve (« Voir le code »),
+appels d'API, preuves, scénarios associés. Sous 1680 px, la fiche passe sous l'arbre pour laisser au
+graphe la largeur de la zone centrale.
+
+**Limites.** Une condition fondée sur un `Observable` lu par `async`, un signal Angular ou un service
+d'état partagé n'est pas suivie jusqu'au Backend : elle reste non déterminée. Une décision prise dans une
+requête SQL ou une règle externe n'est pas lue.
+
 « Planifier » est affiché désactivé : la planification des scans de cartographie n'existe pas encore.
 
 **Limites.** Le corps d'une méthode n'est pas comparé entre deux scans (seule sa signature l'est).

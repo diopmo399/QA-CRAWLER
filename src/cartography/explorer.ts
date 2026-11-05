@@ -839,7 +839,7 @@ function apiRow(index: MapIndex, api: ApiService): ApiRow {
   };
 }
 
-function apiScenarios(cov: CoverageContext, features: readonly ApiFeatureUse[]): ApiScenarioUse[] {
+export function apiScenarios(cov: CoverageContext, features: readonly ApiFeatureUse[]): ApiScenarioUse[] {
   const rows = new Map<string, ApiScenarioUse>();
   for (const use of features)
     for (const link of cov.links) {
@@ -1024,7 +1024,7 @@ function apiGraph(
 }
 
 /** Les appels sortants (externes ou à classifier) faits depuis un nœud du graphe : tels que le scan les établit. */
-function outboundOf(index: MapIndex, graph: MapSubgraph): ApiSheet['outbound'] {
+export function outboundOf(index: MapIndex, graph: MapSubgraph): ApiSheet['outbound'] {
   const inGraph = new Set(graph.nodes.map((n) => n.id));
   const out: ApiSheet['outbound'] = [];
   for (const api of index.model.apis ?? []) {

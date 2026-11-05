@@ -73,6 +73,56 @@ export interface UiDto {
   loc: Loc;
 }
 
+/** Une condition lue dans un gabarit : l'expression brute, telle qu'écrite (jamais évaluée). */
+export interface UiCondition {
+  expression: string;
+  /** if : bloc `@if` ; ngIf : `*ngIf` ; hidden : `[hidden]` (visible quand l'expression est fausse) ;
+   * else : branche `@else` (visible quand l'expression est fausse) ; disabled : `[disabled]`. */
+  how: 'if' | 'ngIf' | 'hidden' | 'else' | 'case' | 'disabled';
+  loc: Loc;
+}
+
+/** Un conteneur (section, bloc conditionnel…) ou un bouton d'un gabarit, avec son parent. */
+export interface UiElement {
+  /** Stable : composant, sorte, nom (et rang si le nom se répète). */
+  id: string;
+  component: string;
+  kind: 'CONTAINER' | 'BUTTON';
+  name: string;
+  tag: string;
+  parent?: string;
+  /** Les contrôles de formulaire directement dedans (hors conteneurs imbriqués). */
+  fields: string[];
+  visibleWhen?: UiCondition;
+  disabledWhen?: UiCondition;
+  /** La méthode du composant appelée par le bouton (`(click)`, ou `(ngSubmit)` du formulaire). */
+  handler?: string;
+  submit?: boolean;
+  loc: Loc;
+}
+
+/** D'où vient un membre du composant lu par une condition. */
+export interface UiState {
+  component: string;
+  member: string;
+  /** RESPONSE : affecté depuis la réponse d'un appel ; GETTER : accesseur calculé ; FORM : état du
+   * formulaire ; INPUT : entrée du composant ; LOCAL : valeur posée dans le composant. */
+  kind: 'RESPONSE' | 'GETTER' | 'FORM' | 'INPUT' | 'LOCAL';
+  /** Service#méthode de l'appel dont la réponse est lue. */
+  call?: string;
+  property?: string;
+  expression?: string;
+  loc: Loc;
+}
+
+/** Une méthode du composant et les appels de service qu'elle fait. */
+export interface UiHandler {
+  component: string;
+  method: string;
+  calls: string[];
+  loc: Loc;
+}
+
 export interface UiFacts {
   routes: UiRoute[];
   components: UiComponent[];
@@ -81,6 +131,10 @@ export interface UiFacts {
   flows: UiFlow[];
   reads: UiRead[];
   dtos: UiDto[];
+  /** La structure des gabarits : conteneurs, boutons, conditions ; l'origine des états ; les gestionnaires. */
+  elements?: UiElement[];
+  states?: UiState[];
+  handlers?: UiHandler[];
   warnings: string[];
 }
 
@@ -170,6 +224,28 @@ export interface JavaMapping {
   loc: Loc;
 }
 
+/** Un champ dont la valeur est calculée par une méthode (`dto.setX(service.m(…))`, `.x(service.m(…))`). */
+export interface JavaComputed {
+  toClass: string;
+  toField: string;
+  /** La classe et la méthode appelées (« EligibilityService.canValidate »). */
+  callee: string;
+  method: string;
+  loc: Loc;
+}
+
+/** Une méthode qui rend un booléen : ses boucles, ses prédicats et les données qu'elle lit (bornés). */
+export interface JavaDecision {
+  owner: string;
+  name: string;
+  loops: number;
+  predicates: string[];
+  reads: string[];
+  /** Les types des paramètres (pour relier une entité lue). */
+  params: string[];
+  loc: Loc;
+}
+
 export interface JavaFacts {
   classes: JavaClass[];
   endpoints: JavaEndpoint[];
@@ -179,6 +255,8 @@ export interface JavaFacts {
   mappings: JavaMapping[];
   /** Les lectures et écritures d'une entité par un dépôt, lues à l'appel (`repository.save(x)`). */
   repositoryAccess?: JavaRepositoryAccess[];
+  computed?: JavaComputed[];
+  decisions?: JavaDecision[];
   warnings: string[];
 }
 

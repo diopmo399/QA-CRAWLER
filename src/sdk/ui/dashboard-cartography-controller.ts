@@ -9,6 +9,14 @@ import type {
 import type { QaCrawlerClient } from '../core/client.js';
 import { API_TABS, type ApiTab } from './dashboard-cartography-apis.js';
 import { readIds } from './dashboard-cartography-graph.js';
+import {
+  BOTTOM_TABS,
+  SHEET_TABS,
+  STRUCT_TABS,
+  type BottomTab,
+  type SheetTab,
+  type StructTab,
+} from './dashboard-cartography-structure.js';
 import { mapStrings } from './dashboard-cartography-i18n.js';
 import {
   CENTER_TABS,
@@ -81,6 +89,10 @@ export class CartographyController {
     if (this.host.state.map) {
       this.host.state.map.apis = undefined;
       this.host.state.map.apiSheet = undefined;
+      this.host.state.map.structure = undefined;
+      this.host.state.map.elementSheet = undefined;
+      this.host.state.map.conditionsPage = undefined;
+      this.host.state.map.actionsPage = undefined;
     }
   }
 
@@ -309,7 +321,91 @@ export class CartographyController {
     }
   }
 
+  /** Structure & Conditions : l'arbre (fonctionnalité choisie ou projet entier). */
+  private async loadStructure(): Promise<void> {
+    const feature = this.ui.structFeature;
+    const structure = await this.fetch('structure', (api, id, signal) =>
+      api.cartography.structure(id, feature || undefined, { signal }),
+    );
+    if (structure && this.ui.structFeature === feature) this.ui.structure = structure;
+  }
+
+  private async loadElement(): Promise<void> {
+    const id = this.ui.element;
+    if (!id) {
+      this.ui.elementSheet = undefined;
+      return;
+    }
+    const sheet = await this.fetch('element', (api, projectId, signal) =>
+      api.cartography.element(projectId, id, { signal }),
+    );
+    if (sheet && this.ui.element === id) this.ui.elementSheet = sheet;
+  }
+
+  private async loadConditions(): Promise<void> {
+    const page = await this.fetch('conditions', (api, id, signal) =>
+      api.cartography.conditions(id, this.query(this.ui.condCriteria), { signal }),
+    );
+    if (!page) return;
+    this.ui.conditionsPage = page;
+    this.ui.condCriteria.page = page.page;
+  }
+
+  private async loadActions(): Promise<void> {
+    const page = await this.fetch('actions', (api, id, signal) =>
+      api.cartography.actions(id, this.query(this.ui.actCriteria), { signal }),
+    );
+    if (!page) return;
+    this.ui.actionsPage = page;
+    this.ui.actCriteria.page = page.page;
+  }
+
+  /** L'élément choisi dans l'arbre ou une liste : sa fiche, son graphe ajusté à la zone. */
+  private selectElement(id: string): void {
+    const ui = this.ui;
+    if (!id) return;
+    if (ui.element !== id) {
+      ui.element = id;
+      ui.elementSheet = undefined;
+      ui.lnCards = [];
+      ui.lnBundles = [];
+      this.resetGraph();
+    }
+    ui.structTab = 'graph';
+    ui.autoFit = true;
+    void this.run(() => this.loadElement()).then(() => {
+      this.fitSoon();
+    });
+  }
+
   private async loadTab(): Promise<void> {
+    if (this.ui.tab === 'structure') {
+      const ui = this.ui;
+      if (!ui.structure) await this.loadStructure();
+      if (!ui.element) {
+        // Le premier conteneur conditionnel de l'arbre est montré d'emblée (sinon le premier élément).
+        const flat: { id: string; kind: string; conditional: boolean }[] = [];
+        const walk = (items: NonNullable<typeof ui.structure>['roots']): void => {
+          for (const item of items) {
+            flat.push({ id: item.id, kind: item.kind, conditional: item.conditions.length > 0 });
+            walk(item.children);
+          }
+        };
+        walk(ui.structure?.roots ?? []);
+        const pick =
+          flat.find((x) => x.kind === 'CONTAINER' && x.conditional) ??
+          flat.find((x) => x.kind === 'CONTAINER' || x.kind === 'BUTTON');
+        if (pick) {
+          ui.element = pick.id;
+          ui.autoFit = true;
+        }
+      }
+      if (ui.structTab === 'conditions' && !ui.conditionsPage) await this.loadConditions();
+      if (ui.structTab === 'actions' && !ui.actionsPage) await this.loadActions();
+      if (ui.element && ui.elementSheet?.element.id !== ui.element) await this.loadElement();
+      this.fitSoon();
+      return;
+    }
     if (this.ui.tab === 'apis') {
       if (!this.ui.apis) await this.loadApis();
       if (this.ui.api && this.ui.apiSheet?.api.id !== this.ui.api) await this.loadApiSheet();
@@ -469,7 +565,7 @@ export class CartographyController {
       const content = box?.inner.firstElementChild as HTMLElement | null | undefined;
       if (!box || !content?.hasAttribute('data-lanes')) return;
       ui.autoFit = false;
-      this.fitLanes(box.canvas, content, 0.7);
+      this.fitLanes(box.canvas, content, ui.tab === 'structure' ? 0.55 : 0.7);
     };
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
     else run();
@@ -657,6 +753,37 @@ export class CartographyController {
         this.host.paint();
         return true;
       }
+      case 'map-st-toggle': {
+        const id = target.dataset.id ?? '';
+        ui.structClosed = ui.structClosed.includes(id)
+          ? ui.structClosed.filter((x) => x !== id)
+          : [...ui.structClosed, id];
+        this.host.paint();
+        return true;
+      }
+      case 'map-st-el':
+        this.selectElement(target.dataset.id ?? '');
+        return true;
+      case 'map-st-tab': {
+        const tab = target.dataset.tab as StructTab;
+        if (!STRUCT_TABS.includes(tab)) return true;
+        ui.structTab = tab;
+        if (tab === 'graph') ui.autoFit = true;
+        void this.run(() => this.loadTab());
+        return true;
+      }
+      case 'map-st-sheet': {
+        const tab = target.dataset.tab as SheetTab;
+        if (SHEET_TABS.includes(tab)) ui.sheetTab = tab;
+        this.host.paint();
+        return true;
+      }
+      case 'map-st-bottom': {
+        const tab = target.dataset.tab as BottomTab;
+        if (BOTTOM_TABS.includes(tab)) ui.bottomTab = tab;
+        this.host.paint();
+        return true;
+      }
       case 'map-ln-expand':
         this.toggleBundle(target.dataset.bundle ?? '');
         this.host.paint();
@@ -685,7 +812,7 @@ export class CartographyController {
       case 'map-g-full':
         ui.fullscreen = !ui.fullscreen;
         // Le graphe en couloirs se recadre sur la nouvelle zone (plus grande ou rendue).
-        ui.autoFit = ui.tab === 'apis';
+        ui.autoFit = ui.tab === 'apis' || ui.tab === 'structure';
         this.host.paint();
         this.fitSoon();
         this.host.root.querySelector<HTMLElement>('[data-action="map-g-full"]')?.focus();
@@ -802,6 +929,12 @@ export class CartographyController {
         } else if (list === 'issues') {
           ui.issuesPage = page;
           void this.run(() => this.loadIssues());
+        } else if (list === 'conditions') {
+          ui.condCriteria.page = page;
+          void this.run(() => this.loadConditions());
+        } else if (list === 'actions') {
+          ui.actCriteria.page = page;
+          void this.run(() => this.loadActions());
         }
         return true;
       }
@@ -1078,6 +1211,35 @@ export class CartographyController {
         return true;
       case 'a-q':
         criteria(ui.apiCriteria, 'q', () => this.loadApis(), !committed);
+        return true;
+      case 'struct-feature':
+        if (ui.structFeature === value) return true;
+        ui.structFeature = value;
+        ui.structure = undefined;
+        void this.run(() => this.loadStructure());
+        return true;
+      case 'struct-q':
+        // La recherche dans l'arbre est locale (l'arbre chargé) : seul l'affichage change.
+        if (ui.structQ === value) return true;
+        ui.structQ = value;
+        if (committed) this.host.paint();
+        else this.searchLater(() => Promise.resolve());
+        return true;
+      case 'cond-q':
+        criteria(ui.condCriteria, 'q', () => this.loadConditions(), !committed);
+        return true;
+      case 'act-q':
+        criteria(ui.actCriteria, 'q', () => this.loadActions(), !committed);
+        return true;
+      case 'conditions-size':
+        ui.condCriteria.size = Number(value) || 10;
+        ui.condCriteria.page = 1;
+        void this.run(() => this.loadConditions());
+        return true;
+      case 'actions-size':
+        ui.actCriteria.size = Number(value) || 10;
+        ui.actCriteria.page = 1;
+        void this.run(() => this.loadActions());
         return true;
       case 'a-sort':
         criteria(ui.apiCriteria, 'sort', () => this.loadApis(), false);

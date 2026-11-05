@@ -1,6 +1,7 @@
 import { buildStaticGraph } from '../static-analysis/graph-builder.js';
 import { sourceSetOf } from '../static-analysis/source-set.js';
 import { loadTypeScript } from '../static-analysis/typescript-loader.js';
+import { analyzeTemplates } from './analyze-template.js';
 import type { ReadFile } from './files.js';
 import type { UiFacts, UiField } from './facts.js';
 
@@ -115,6 +116,16 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
       loc: field.location,
     };
   });
+  const calls = graph.apiCalls.map((call) => ({
+    id: call.id,
+    owner: call.owner,
+    method: call.method,
+    ...(call.route ? { path: call.route } : {}),
+    ...(call.bodyType ? { bodyType: call.bodyType } : {}),
+    loc: call.location,
+  }));
+  // La structure des gabarits (conteneurs, boutons, conditions) et l'origine des états lus.
+  const structure = analyzeTemplates(relevant, new Set(calls.map((call) => call.id)));
   return {
     routes: graph.routes.map((route) => ({
       path: route.path,
@@ -127,14 +138,7 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
       loc: component.location,
     })),
     fields,
-    calls: graph.apiCalls.map((call) => ({
-      id: call.id,
-      owner: call.owner,
-      method: call.method,
-      ...(call.route ? { path: call.route } : {}),
-      ...(call.bodyType ? { bodyType: call.bodyType } : {}),
-      loc: call.location,
-    })),
+    calls,
     flows: graph.dataFlows.map((flow) => ({
       ...(flow.field ? { field: flow.field } : {}),
       ...(flow.requestProperty ? { requestProperty: flow.requestProperty } : {}),
@@ -153,6 +157,9 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
         loc: source.location,
       })),
     dtos: graph.dtos.map((dto) => ({ name: dto.name, properties: dto.properties, loc: dto.location })),
-    warnings: graph.warnings,
+    elements: structure.elements,
+    states: structure.states,
+    handlers: structure.handlers,
+    warnings: [...graph.warnings, ...structure.warnings],
   };
 }

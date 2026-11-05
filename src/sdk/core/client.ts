@@ -108,8 +108,12 @@ import type {
   FieldIssue,
   FieldRow,
   FieldSheet,
+  ActionRow,
   ApiCatalog,
   ApiSheet,
+  ConditionRow,
+  ElementSheet,
+  MapStructure,
   ImpactReport,
   MapListQuery,
   MapPage,
@@ -575,6 +579,22 @@ export interface QaCrawlerClient {
     apis(projectId: string, query?: MapListQuery, options?: MapRequestOptions): Promise<ApiCatalog>;
     /** La fiche d'une API : fonctionnalités, scénarios, parcours démontré, impact, criticité. */
     api(projectId: string, id: string, options?: MapRequestOptions): Promise<ApiSheet>;
+    /** La structure d'une fonctionnalité (ou du projet) : écrans, conteneurs, champs, boutons, conditions, comptes. */
+    structure(projectId: string, feature?: string, options?: MapRequestOptions): Promise<MapStructure>;
+    /** La fiche d'un élément (conteneur, bouton, champ) : conditions, décision Backend, actions, sous-graphe. */
+    element(projectId: string, id: string, options?: MapRequestOptions): Promise<ElementSheet>;
+    /** Les conditions d'affichage et d'activation du projet, avec leur décision (ou la cause). */
+    conditions(
+      projectId: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<ConditionRow>>;
+    /** Les actions (boutons) : gestionnaire, appels, endpoints, API externes, tables. */
+    actions(
+      projectId: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<ActionRow>>;
   };
   /**
    * Les accès : qui appelle et ses droits ; les membres (jetons nominatifs, rôles par projet) et le
@@ -1398,6 +1418,34 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request(
           'GET',
           `${project(projectId)}/cartography/api${queryString({ id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      structure: (projectId, feature, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/structure${queryString(feature ? { feature } : {})}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      element: (projectId, id, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/element${queryString({ id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      conditions: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/conditions${queryString({ ...query })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      actions: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/actions${queryString({ ...query })}`,
           undefined,
           mapOptions.signal,
         ),

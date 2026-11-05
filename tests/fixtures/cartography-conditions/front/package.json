@@ -1,0 +1,10 @@
+{
+  "name": "cond-front",
+  "private": true,
+  "dependencies": {
+    "@angular/core": "^18.0.0",
+    "@angular/forms": "^18.0.0",
+    "@angular/router": "^18.0.0",
+    "@angular/common": "^18.0.0"
+  }
+}
