@@ -80,6 +80,14 @@ export interface UiSymbol {
     filters?: string[];
     reads?: string[];
   };
+  /**
+   * Une méthode générique vue dans un contexte d'appel (`OrderStore#dispatch⟨OrderAction.Submit⟩`) : `of` est
+   * la méthode, `context` la valeur transmise qui choisit ses branches ; `branches` compte celles qui restent
+   * (sûres ou non déterminées) et celles écartées par cette valeur.
+   */
+  of?: string;
+  context?: string;
+  branches?: { kept: number; pruned: number; unknown: number };
   loc: Loc;
 }
 
@@ -95,6 +103,14 @@ export interface UiLink {
   kind: 'CALL' | 'EMIT' | 'PROPAGATES' | 'PIPE' | 'OUTPUT' | 'DERIVES' | 'FEEDS';
   confidence: 'CONFIRMED' | 'PROBABLE' | 'UNKNOWN';
   reason: string;
+  /** Les conditions qui entourent l'appel (« action = OrderAction.Submit », « valid est faux »…). */
+  condition?: string;
+  /** Ce qui doit s'être produit avant : réponse attendue (await, subscribe), erreur, minuterie, opérateur. */
+  async?: string;
+  /** La provenance des arguments (« payload = résultat de this.validate(form) »). */
+  data?: string;
+  /** Le contexte d'appel retenu pour une méthode générique (valeur de l'action transmise). */
+  context?: string;
   loc: Loc;
 }
 
@@ -113,7 +129,8 @@ export interface UiDiagnostic {
     | 'NO_HTTP'
     | 'URL_DYNAMIC'
     | 'CYCLE'
-    | 'LIMIT';
+    | 'LIMIT'
+    | 'CONTEXT_UNRESOLVED';
   message: string;
   loc: Loc;
 }

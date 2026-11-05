@@ -159,6 +159,13 @@ export interface MapEdge {
   /** Pourquoi ce lien (mécanisme, correspondance) ; un lien PROBABLE dit ce qui manque. */
   reason: string;
   evidence: Evidence[];
+  /**
+   * Le contexte d'exécution démontré par le code (absent des scans d'avant) : conditions qui entourent l'appel,
+   * ce qui doit s'être produit avant (réponse attendue, erreur, opérateur), provenance des données transmises,
+   * contexte d'appel retenu pour une méthode générique. Une relation conditionnelle ou asynchrone n'est
+   * jamais présentée comme exécutée à coup sûr.
+   */
+  detail?: { condition?: string; async?: string; data?: string; context?: string };
 }
 
 /** Ce qu'une technologie a donné pour une source. */
@@ -538,6 +545,21 @@ export interface ImpactReport {
     elementName: string;
     confidence: 'CONFIRMED' | 'PROBABLE';
     how: 'CONTAINS' | 'TRIGGERS' | 'READS';
+  }[];
+  /**
+   * Les actions de l'interface (bouton, méthode appelée par le gabarit ou le cycle de vie) dont le parcours
+   * atteint un élément modifié, avec le chemin de propagation le plus court et les conditions rencontrées.
+   * Probable dès qu'un lien du chemin l'est (branche non déterminée, souscription non démontrée…).
+   */
+  actions?: {
+    action: string;
+    name: string;
+    component?: string;
+    element: string;
+    elementName: string;
+    confidence: 'CONFIRMED' | 'PROBABLE';
+    path: string[];
+    conditions: string[];
   }[];
 }
 

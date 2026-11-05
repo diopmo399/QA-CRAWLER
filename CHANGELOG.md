@@ -32,6 +32,13 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Cartographie : parcours reconstruits par contexte d'appel.** Une méthode générique (`dispatch(action)`)
+  n'est suivie que dans les branches choisies par la valeur transmise (littéral, enum, constante, objet,
+  instance) ; une valeur indéterminée garde les branches comme possibles et le dit. Chaque lien porte ses
+  conditions (if, switch, retour anticipé, catch, boucle), ce qu'il attend (await, subscribe, then, erreur,
+  opérateur, avec annulation par switchMap ou takeUntil) et la provenance de ses données. Nouvel arbre de
+  parcours dépliable (fiche et Traçabilité) ; l'impact liste les actions touchées et leur chemin de
+  propagation. `forkJoin([...])` compte comme souscrit. Version d'analyseur : `rxjs-2`.
 - **Cartographie : onglets Angular.** Les groupes et onglets Angular Material, ng-bootstrap, PrimeNG et
   maison (y compris générés par `*ngFor`/`@for`, imbriqués, routés) sont lus dans les gabarits, avec leurs
   libellés, conditions d'affichage et d'activation, la sélection pilotée par un store, et leur chargement à

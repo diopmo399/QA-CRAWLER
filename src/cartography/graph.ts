@@ -60,7 +60,8 @@ function frontLabel(n: MapNode): string {
   }
   const role = String(n.detail.role ?? '');
   const prefix = role === 'COMPONENT' ? 'Action' : role === 'STORE' ? 'Store' : 'Service';
-  return `${prefix} ${n.name}()`;
+  // Une méthode vue dans un contexte d'appel porte déjà ses arguments : « OrderStore.dispatch(OrderAction.Submit) ».
+  return `${prefix} ${n.name}${n.name.endsWith(')') ? '' : '()'}`;
 }
 
 /** « RequestBffController.get » → « get Request » (l'action, puis la ressource). */
@@ -153,16 +154,18 @@ export function buildGraph(input: GraphInput): GraphOutput {
     confidence: MapConfidence,
     reason: string,
     evidence: Evidence[],
+    detail?: MapEdge['detail'],
   ): void => {
     if (!nodes.has(from) || !nodes.has(to) || from === to) return;
     const id = `${kind}:${from}->${to}`;
     const existing = edges.get(id);
     if (existing) {
-      if (RANK[confidence] > RANK[existing.confidence]) Object.assign(existing, { confidence, reason });
+      if (RANK[confidence] > RANK[existing.confidence])
+        Object.assign(existing, { confidence, reason, ...(detail ? { detail } : {}) });
       existing.evidence.push(...evidence);
       return;
     }
-    edges.set(id, { id, from, to, kind, confidence, reason, evidence });
+    edges.set(id, { id, from, to, kind, confidence, reason, evidence, ...(detail ? { detail } : {}) });
   };
 
   // ── Nœuds, source par source ─────────────────────────────────────────────────────────────────
@@ -310,6 +313,15 @@ export function buildGraph(input: GraphInput): GraphOutput {
           role: sym.role,
           owner: sym.owner,
           ...(sym.entry ? { entry: sym.entry } : {}),
+          ...(sym.of
+            ? {
+                of: `METHOD:${src}:${sym.of}`,
+                context: sym.context ?? '',
+                branchesKept: sym.branches?.kept ?? 0,
+                branchesPruned: sym.branches?.pruned ?? 0,
+                branchesUnknown: sym.branches?.unknown ?? 0,
+              }
+            : {}),
           ...(stream
             ? {
                 streamKind: stream.kind,
@@ -327,7 +339,7 @@ export function buildGraph(input: GraphInput): GraphOutput {
           id,
           stream ? 'STREAM' : 'METHOD',
           'FRONTEND',
-          stream ? sym.id : sym.id.replace('#', '.'),
+          stream ? sym.id : sym.of ? `${sym.owner}.${sym.name}` : sym.id.replace('#', '.'),
           ev(
             src,
             sym.loc,
@@ -864,11 +876,20 @@ export function buildGraph(input: GraphInput): GraphOutput {
       const symbolNode = (id: string): string => `${kindOf.get(id) ?? 'METHOD'}:${src}:${id}`;
       for (const l of ui.links ?? []) {
         const evidence = [ev(src, l.loc, 'STATIC_CODE', l.confidence, l.kind)];
+        const flow: MapEdge['detail'] =
+          l.condition || l.async || l.data || l.context
+            ? {
+                ...(l.condition ? { condition: l.condition } : {}),
+                ...(l.async ? { async: l.async } : {}),
+                ...(l.data ? { data: l.data } : {}),
+                ...(l.context ? { context: l.context } : {}),
+              }
+            : undefined;
         if (l.kind === 'DERIVES')
           edge(symbolNode(l.from), symbolNode(l.to), 'DEPENDS_ON', l.confidence, l.reason, evidence);
         else if (l.kind === 'FEEDS')
           edge(symbolNode(l.to), symbolNode(l.from), 'DEPENDS_ON', l.confidence, l.reason, evidence);
-        else edge(symbolNode(l.from), symbolNode(l.to), 'CALLS', l.confidence, l.reason, evidence);
+        else edge(symbolNode(l.from), symbolNode(l.to), 'CALLS', l.confidence, l.reason, evidence, flow);
       }
       // L'écran fait ce que font ses méthodes : appelées par le gabarit ou le cycle de vie (sûr), sinon
       // seulement en interne (probable).

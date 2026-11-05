@@ -13,7 +13,7 @@ import type { Loc, UiCall, UiDiagnostic, UiLink, UiSymbol } from './facts.js';
  * réponses qui alimentent un flux. Un Observable est paresseux : un appel dont le résultat n'est jamais
  * souscrit n'est pas présenté comme exécuté. Rien n'est exécuté ; une URL non résolue garde son expression.
  */
-export const RXJS_ANALYZER = 'rxjs-1';
+export const RXJS_ANALYZER = 'rxjs-2';
 
 const SUBJECTS = new Set(['Subject', 'BehaviorSubject', 'ReplaySubject', 'AsyncSubject']);
 const CREATION = new Set([
@@ -103,12 +103,40 @@ interface Ref {
   via: string;
   name: string;
 }
+/**
+ * Une condition qui entoure un appel dans le corps d'une méthode : if/else, case/default, retour anticipé,
+ * catch, boucle, ternaire, && / ||. `on` et `values` sont remplis quand la condition compare un chemin à une
+ * valeur (égalité, switch) ; `instance` pour un instanceof.
+ */
+interface Guard {
+  kind: 'IF' | 'ELSE' | 'CASE' | 'DEFAULT' | 'EXIT' | 'CATCH' | 'FINALLY' | 'LOOP' | 'TERNARY' | 'LOGICAL';
+  text: string;
+  on?: string;
+  values?: TS.Expression[];
+  instance?: string;
+  /** Pour l'évaluation : la comparaison (après les !) doit être fausse pour suivre cette branche. */
+  negated: boolean;
+  /** Pour l'affichage : la branche est suivie quand la condition écrite est fausse (else, retour anticipé). */
+  whenFalse?: boolean;
+}
+/** Ce qui doit s'être produit avant l'appel : réponse attendue (await, subscribe, then), erreur, minuterie. */
+interface Continuation {
+  how: 'AWAIT' | 'SUBSCRIBE' | 'THEN' | 'ERROR' | 'FINALLY' | 'OPERATOR' | 'TIMER' | 'EVENT' | 'CALLBACK';
+  via: string;
+  after: string;
+  /** Les noms qui reçoivent le résultat (paramètres du rappel, variable de l'await). */
+  binds: string[];
+}
 interface CallSite {
   target: string;
   method: string;
   args: readonly TS.Expression[];
   use: Use;
   operator?: string;
+  guards?: Guard[];
+  cont?: Continuation[];
+  /** Les identifiants lus par les arguments (pour la provenance des données). */
+  uses?: string[];
   loc: Loc;
 }
 interface HttpSite {
@@ -120,6 +148,8 @@ interface HttpSite {
 }
 interface Emit {
   ref: Ref;
+  guards?: Guard[];
+  cont?: Continuation[];
   /** Les appels dont la réponse est poussée par cette émission (dans subscribe/tap). */
   fedBy: CallSite[];
   loc: Loc;
@@ -130,6 +160,8 @@ interface Pipeline {
   /** Les next() faits dans le traitement (tap, subscribe) : la réponse alimente ce flux. */
   emits: Emit[];
   operators: string[];
+  /** Les rappels de filter() du traitement (condition de passage). */
+  filters?: string[];
   subscribed: boolean;
   loc: Loc;
 }
@@ -137,6 +169,8 @@ interface Method {
   name: string;
   params: string[];
   locals: Map<string, TS.Expression>;
+  /** `const { type } = action` : type → action.type. */
+  aliases: Map<string, string>;
   calls: CallSite[];
   emits: Emit[];
   http: HttpSite[];
@@ -209,6 +243,7 @@ export function analyzeRxjs(
   const warnings: string[] = [];
   const byPath = new Map(files.map((f) => [f.path, f]));
   const classes = new Map<string, ClassInfo>();
+  const constants = new Map<string, string | null>();
   for (const file of files) {
     if (!/\.ts$/.test(file.path) || /\.(spec|test|d)\.ts$/.test(file.path)) continue;
     if (file.text.length > MAX_FILE_BYTES) {
@@ -216,7 +251,7 @@ export function analyzeRxjs(
       continue;
     }
     try {
-      for (const info of classesOf(ts, file, byPath))
+      for (const info of classesOf(ts, file, byPath, constants))
         if (classes.has(info.name)) warnings.push(`class ${info.name} declared twice: the first one is kept`);
         else classes.set(info.name, info);
     } catch (error) {
@@ -224,13 +259,67 @@ export function analyzeRxjs(
       warnings.push(`${file.path}: RxJS analysis failed (${(error as Error).message})`);
     }
   }
-  return resolve(ts, classes, knownCalls, warnings);
+  return resolve(ts, classes, knownCalls, warnings, constants);
+}
+
+/** La forme comparable d'une valeur littérale : chaîne JSON, nombre, booléen ou null. */
+function literalOf(ts: TypeScriptModule, e: TS.Expression | undefined): string | undefined {
+  if (!e) return undefined;
+  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return JSON.stringify(e.text);
+  if (ts.isNumericLiteral(e)) return String(Number(e.text));
+  if (e.kind === ts.SyntaxKind.TrueKeyword) return 'true';
+  if (e.kind === ts.SyntaxKind.FalseKeyword) return 'false';
+  if (e.kind === ts.SyntaxKind.NullKeyword) return 'null';
+  return undefined;
+}
+
+/**
+ * Les valeurs nommées d'un fichier : membres d'enum (`E.M`), constantes de module et propriétés statiques en
+ * lecture seule (`Cls.P`) dont la valeur est un littéral. Un même nom défini deux fois avec des valeurs
+ * différentes devient ambigu (null) : il n'est jamais choisi.
+ */
+function collectConstants(ts: TypeScriptModule, sf: TS.SourceFile, out: Map<string, string | null>): void {
+  const put = (name: string, value: string | undefined): void => {
+    if (value === undefined) return;
+    const known = out.get(name);
+    out.set(name, known === undefined || known === value ? value : null);
+  };
+  for (const st of sf.statements) {
+    if (ts.isEnumDeclaration(st)) {
+      let next = 0;
+      for (const member of st.members) {
+        const key = `${st.name.text}.${member.name.getText()}`;
+        const lit = literalOf(ts, member.initializer);
+        if (member.initializer && lit === undefined) {
+          out.set(key, null);
+          continue;
+        }
+        put(key, lit ?? String(next));
+        next = lit !== undefined && /^-?\d+$/.test(lit) ? Number(lit) + 1 : next + 1;
+      }
+    } else if (ts.isVariableStatement(st) && st.declarationList.flags & ts.NodeFlags.Const) {
+      for (const d of st.declarationList.declarations)
+        if (ts.isIdentifier(d.name)) put(d.name.text, literalOf(ts, d.initializer));
+    } else if (ts.isClassDeclaration(st) && st.name)
+      for (const member of st.members)
+        if (
+          ts.isPropertyDeclaration(member) &&
+          member.modifiers?.some((m) => m.kind === ts.SyntaxKind.StaticKeyword)
+        )
+          put(`${st.name.text}.${member.name.getText()}`, literalOf(ts, member.initializer));
+  }
 }
 
 // ── Lecture d'une classe ─────────────────────────────────────────────────────────────────────────
 
-function classesOf(ts: TypeScriptModule, file: ReadFile, byPath: ReadonlyMap<string, ReadFile>): ClassInfo[] {
+function classesOf(
+  ts: TypeScriptModule,
+  file: ReadFile,
+  byPath: ReadonlyMap<string, ReadFile>,
+  constants: Map<string, string | null>,
+): ClassInfo[] {
   const sf = ts.createSourceFile(file.path, file.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  collectConstants(ts, sf, constants);
   const loc = (node: TS.Node): Loc => ({
     file: file.path,
     line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
@@ -615,6 +704,15 @@ function useOf(ctx: Ctx, call: TS.Node): Use {
       cur = parent;
       continue;
     }
+    // forkJoin([a(), b()]) / combineLatest({ a: a() }) : la création reçoit le tableau ou l'objet.
+    if (
+      (ts.isArrayLiteralExpression(parent) ||
+        (ts.isPropertyAssignment(parent) && ts.isObjectLiteralExpression(parent.parent))) &&
+      ts.isCallExpression(ts.isPropertyAssignment(parent) ? parent.parent.parent : parent.parent)
+    ) {
+      cur = ts.isPropertyAssignment(parent) ? parent.parent : parent;
+      continue;
+    }
     if (ts.isCallExpression(parent) && parent.arguments.some((a) => a === cur)) {
       const name = parent.expression.getText().split('.').pop() ?? '';
       if (SUBSCRIBERS.has(name)) return 'SUBSCRIBED';
@@ -675,6 +773,320 @@ function enclosingFunction(ts: TypeScriptModule, node: TS.Node): TS.Node | undef
   return undefined;
 }
 
+/** Un texte de code raccourci pour une raison lisible. */
+const short = (text: string, max = 80): string => {
+  const one = text.replace(/\s+/g, ' ').trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+};
+
+const strip = (ts: TypeScriptModule, e: TS.Expression): TS.Expression => {
+  let cur = e;
+  while (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isNonNullExpression(cur))
+    cur = cur.expression;
+  return cur;
+};
+
+/** Une valeur écrite (littéral, membre d'enum, constante en majuscules), comparée à un chemin. */
+const valueLike = (ts: TypeScriptModule, e: TS.Expression): boolean => {
+  const x = strip(ts, e);
+  if (
+    ts.isStringLiteral(x) ||
+    ts.isNoSubstitutionTemplateLiteral(x) ||
+    ts.isNumericLiteral(x) ||
+    x.kind === ts.SyntaxKind.TrueKeyword ||
+    x.kind === ts.SyntaxKind.FalseKeyword ||
+    x.kind === ts.SyntaxKind.NullKeyword
+  )
+    return true;
+  if (ts.isPropertyAccessExpression(x)) {
+    let root: TS.Expression = x;
+    while (ts.isPropertyAccessExpression(root)) root = root.expression;
+    return ts.isIdentifier(root) && /^[A-Z]/.test(root.text);
+  }
+  return ts.isIdentifier(x) && /^[A-Z][A-Z0-9_]*$/.test(x.text);
+};
+
+/** Le chemin comparé, à travers les alias (`const { type } = action`) et les constantes locales. */
+const pathOf = (ts: TypeScriptModule, e: TS.Expression, method: Method): string => {
+  const x = strip(ts, e);
+  if (ts.isIdentifier(x)) {
+    const alias = method.aliases.get(x.text);
+    if (alias) return alias;
+    const local = method.locals.get(x.text);
+    if (local && (ts.isIdentifier(strip(ts, local)) || ts.isPropertyAccessExpression(strip(ts, local))))
+      return strip(ts, local).getText();
+  }
+  if (ts.isPropertyAccessExpression(x)) {
+    const head = pathOf(ts, x.expression, method);
+    return `${head}.${x.name.text}`;
+  }
+  return x.getText();
+};
+
+/** Ce que teste une condition : égalité à une valeur, instanceof, ou une condition quelconque. */
+function testOf(
+  ts: TypeScriptModule,
+  expr: TS.Expression,
+  method: Method,
+): Pick<Guard, 'text' | 'on' | 'values' | 'instance' | 'negated'> {
+  let e = strip(ts, expr);
+  let negated = false;
+  while (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.ExclamationToken) {
+    negated = !negated;
+    e = strip(ts, e.operand);
+  }
+  const text = short(expr.getText());
+  if (ts.isBinaryExpression(e)) {
+    const op = e.operatorToken.kind;
+    const eq = op === ts.SyntaxKind.EqualsEqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsToken;
+    const ne =
+      op === ts.SyntaxKind.ExclamationEqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken;
+    if (eq || ne) {
+      const subject = valueLike(ts, e.right) ? e.left : valueLike(ts, e.left) ? e.right : undefined;
+      const value = subject === e.left ? e.right : e.left;
+      if (subject && !valueLike(ts, subject))
+        return { text, on: pathOf(ts, subject, method), values: [value], negated: ne ? !negated : negated };
+    }
+    if (op === ts.SyntaxKind.InstanceOfKeyword)
+      return {
+        text,
+        on: pathOf(ts, e.left, method),
+        instance: e.right.getText().split('.').pop() ?? '',
+        negated,
+      };
+  }
+  return { text, negated };
+}
+
+/** Une instruction qui sort toujours de la méthode (return, throw, ou un bloc / if dont toutes les branches sortent). */
+function alwaysExits(ts: TypeScriptModule, st: TS.Statement | undefined): boolean {
+  if (!st) return false;
+  if (ts.isReturnStatement(st) || ts.isThrowStatement(st)) return true;
+  if (ts.isBlock(st)) return alwaysExits(ts, st.statements[st.statements.length - 1]);
+  if (ts.isIfStatement(st)) return alwaysExits(ts, st.thenStatement) && alwaysExits(ts, st.elseStatement);
+  return false;
+}
+
+const CONT_OF: Record<string, Continuation['how']> = {
+  subscribe: 'SUBSCRIBE',
+  then: 'THEN',
+  catch: 'ERROR',
+  catchError: 'ERROR',
+  error: 'ERROR',
+  finally: 'FINALLY',
+  finalize: 'FINALLY',
+  complete: 'FINALLY',
+  next: 'SUBSCRIBE',
+  setTimeout: 'TIMER',
+  setInterval: 'TIMER',
+  queueMicrotask: 'TIMER',
+  requestAnimationFrame: 'TIMER',
+  addEventListener: 'EVENT',
+};
+const ARRAY_CALLBACKS = new Set(['forEach', 'map', 'filter', 'some', 'every', 'find', 'reduce', 'flatMap']);
+
+/** Les noms qu'introduit un rappel (paramètres, déstructurations). */
+function boundNames(ts: TypeScriptModule, fn: TS.SignatureDeclarationBase): string[] {
+  const names: string[] = [];
+  const add = (n: TS.BindingName): void => {
+    if (ts.isIdentifier(n)) names.push(n.text);
+    else for (const el of n.elements) if (!ts.isOmittedExpression(el)) add(el.name);
+  };
+  for (const p of fn.parameters) add(p.name);
+  return names;
+}
+
+/** L'await de premier niveau d'une instruction (hors fonctions imbriquées), et le nom qui reçoit son résultat. */
+function awaitOf(ts: TypeScriptModule, st: TS.Statement): { after: string; binds: string[] } | undefined {
+  let found: TS.AwaitExpression | undefined;
+  const visit = (n: TS.Node): void => {
+    if (found || ts.isFunctionLike(n)) return;
+    if (ts.isAwaitExpression(n)) {
+      found = n;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(st);
+  if (!found) return undefined;
+  let target = strip(ts, found.expression);
+  // await firstValueFrom(x) : c'est x qui est attendu.
+  if (
+    ts.isCallExpression(target) &&
+    ts.isIdentifier(target.expression) &&
+    SUBSCRIBERS.has(target.expression.text) &&
+    target.arguments[0]
+  )
+    target = target.arguments[0];
+  const binds: string[] = [];
+  if (ts.isVariableStatement(st))
+    for (const d of st.declarationList.declarations)
+      if (ts.isIdentifier(d.name)) binds.push(d.name.text);
+      else
+        for (const el of d.name.elements)
+          if (!ts.isOmittedExpression(el) && ts.isIdentifier(el.name)) binds.push(el.name.text);
+  return { after: short(target.getText()), binds };
+}
+
+/**
+ * Le contexte de contrôle d'un appel dans le corps de sa méthode : les conditions qui l'entourent (de la plus
+ * extérieure à la plus proche) et ce qui doit s'être produit avant lui (await, rappel de subscribe/then,
+ * erreur, minuterie). Lu dans l'AST, sans rien exécuter ; une boucle ou un rappel inconnu est dit tel quel.
+ */
+function controlOf(
+  ctx: Ctx,
+  node: TS.Node,
+  stop: TS.Node,
+  method: Method,
+): { guards?: Guard[]; cont?: Continuation[]; uses?: string[] } {
+  const { ts } = ctx;
+  const guards: Guard[] = [];
+  const cont: Continuation[] = [];
+  let cur: TS.Node = node;
+  for (let i = 0; i < 200 && cur !== stop; i += 1) {
+    const p = cur.parent as TS.Node | undefined;
+    if (!p) break;
+    if (ts.isIfStatement(p) && cur !== p.expression) {
+      const t = testOf(ts, p.expression, method);
+      guards.push(
+        cur === p.thenStatement
+          ? { kind: 'IF', ...t }
+          : { kind: 'ELSE', ...t, negated: !t.negated, whenFalse: true },
+      );
+    } else if (ts.isCaseClause(p) && cur !== p.expression) {
+      // Les case vides qui précèdent tombent dans celui-ci.
+      const clauses = p.parent.clauses;
+      const values: TS.Expression[] = [];
+      for (let k = clauses.indexOf(p); k >= 0; k -= 1) {
+        const c = clauses[k];
+        if (!c || !ts.isCaseClause(c) || (c !== p && c.statements.length > 0)) break;
+        values.unshift(c.expression);
+      }
+      const on = pathOf(ts, p.parent.parent.expression, method);
+      guards.push({
+        kind: 'CASE',
+        text: `${on} = ${values.map((v) => v.getText()).join(' | ')}`,
+        on,
+        values,
+        negated: false,
+      });
+    } else if (ts.isDefaultClause(p)) {
+      const on = pathOf(ts, p.parent.parent.expression, method);
+      const values = p.parent.clauses.flatMap((c) => (ts.isCaseClause(c) ? [c.expression] : []));
+      guards.push({
+        kind: 'DEFAULT',
+        text: `${on} ≠ ${values.map((v) => v.getText()).join(', ')}`,
+        on,
+        values,
+        negated: true,
+      });
+    } else if (ts.isConditionalExpression(p) && cur !== p.condition) {
+      const t = testOf(ts, p.condition, method);
+      guards.push({
+        kind: 'TERNARY',
+        ...t,
+        negated: cur === p.whenFalse ? !t.negated : t.negated,
+        whenFalse: cur === p.whenFalse,
+      });
+    } else if (
+      ts.isBinaryExpression(p) &&
+      cur === p.right &&
+      (p.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        p.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+    ) {
+      const t = testOf(ts, p.left, method);
+      const or = p.operatorToken.kind === ts.SyntaxKind.BarBarToken;
+      guards.push({ kind: 'LOGICAL', ...t, negated: or ? !t.negated : t.negated, whenFalse: or });
+    } else if (ts.isCatchClause(p)) guards.push({ kind: 'CATCH', text: 'exception levée', negated: false });
+    else if (ts.isTryStatement(p) && cur === p.finallyBlock)
+      guards.push({ kind: 'FINALLY', text: 'fin du try', negated: false });
+    else if (
+      (ts.isForStatement(p) ||
+        ts.isForOfStatement(p) ||
+        ts.isForInStatement(p) ||
+        ts.isWhileStatement(p) ||
+        ts.isDoStatement(p)) &&
+      cur === p.statement
+    )
+      guards.push({
+        kind: 'LOOP',
+        text: short(
+          ts.isForOfStatement(p) || ts.isForInStatement(p)
+            ? p.expression.getText()
+            : ts.isForStatement(p)
+              ? (p.condition?.getText() ?? 'for')
+              : p.expression.getText(),
+        ),
+        negated: false,
+      });
+    // Les instructions qui précèdent dans le même bloc : retour anticipé (la suite n'est atteinte que si sa
+    // condition est fausse), await (la suite attend sa réponse).
+    if (ts.isBlock(p) || ts.isCaseClause(p) || ts.isDefaultClause(p)) {
+      const list = p.statements;
+      const at = list.indexOf(cur as TS.Statement);
+      for (let k = 0; k < at; k += 1) {
+        const st = list[k];
+        if (!st) continue;
+        if (ts.isIfStatement(st) && !st.elseStatement && alwaysExits(ts, st.thenStatement)) {
+          const t = testOf(ts, st.expression, method);
+          guards.push({ kind: 'EXIT', ...t, negated: !t.negated, whenFalse: true });
+        }
+        const awaited = awaitOf(ts, st);
+        if (awaited) cont.push({ how: 'AWAIT', via: 'await', ...awaited });
+      }
+    }
+    // Un rappel : la suite d'une réponse (subscribe, then), d'une erreur, d'une minuterie ou d'un opérateur.
+    if ((ts.isArrowFunction(p) || ts.isFunctionExpression(p)) && cur === p.body) {
+      let holder: TS.Node = p.parent;
+      let key: string | undefined;
+      if (ts.isPropertyAssignment(holder)) {
+        key = holder.name.getText();
+        holder = holder.parent.parent; // { next: …, error: … } → l'appel
+      }
+      if (ts.isCallExpression(holder)) {
+        const callee = holder.expression;
+        const name = key ?? callee.getText().split('.').pop() ?? '';
+        const receiver = ts.isPropertyAccessExpression(callee) ? callee.expression : undefined;
+        const base = receiver ? chainBase(ts, receiver) : undefined;
+        const how: Continuation['how'] | undefined =
+          CONT_OF[name] ?? (INNER.has(name) || OPERATORS.has(name) ? 'OPERATOR' : undefined);
+        if (receiver && ARRAY_CALLBACKS.has(name) && !INNER.has(name))
+          guards.push({ kind: 'LOOP', text: `${short(receiver.getText(), 40)}.${name}(…)`, negated: false });
+        else if (how)
+          cont.push({
+            how,
+            via: name,
+            after: short(
+              how === 'OPERATOR' &&
+                ts.isCallExpression(holder.parent) &&
+                ts.isPropertyAccessExpression(holder.parent.expression)
+                ? chainBase(ts, holder.parent.expression.expression).getText()
+                : (base ?? holder).getText(),
+            ),
+            binds: boundNames(ts, p),
+          });
+        else
+          cont.push({ how: 'CALLBACK', via: name, after: short(callee.getText()), binds: boundNames(ts, p) });
+      }
+    }
+    cur = p;
+  }
+  const uses: string[] = [];
+  if (ts.isCallExpression(node)) {
+    const collect = (n: TS.Node): void => {
+      if (ts.isIdentifier(n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n))
+        uses.push(n.text);
+      ts.forEachChild(n, collect);
+    };
+    for (const a of node.arguments) collect(a);
+  }
+  return {
+    ...(guards.length ? { guards: guards.reverse() } : {}),
+    ...(cont.length ? { cont: cont.reverse() } : {}),
+    ...(uses.length ? { uses: [...new Set(uses)] } : {}),
+  };
+}
+
 /** Le début d'une chaîne a.b().c() : l'expression de base et les noms des appels enchaînés. */
 function chainBase(ts: TypeScriptModule, expr: TS.Expression): TS.Expression {
   let cur = expr;
@@ -698,6 +1110,7 @@ function readMethod(
     name,
     params: parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : '')),
     locals: new Map(),
+    aliases: new Map(),
     calls: [],
     emits: [],
     http: [],
@@ -710,8 +1123,16 @@ function readMethod(
   const visit = (node: TS.Node, pipeline?: Pipeline): void => {
     if (handled.has(node)) return;
     if (ts.isVariableDeclarationList(node) && node.flags & ts.NodeFlags.Const)
-      for (const d of node.declarations)
+      for (const d of node.declarations) {
         if (ts.isIdentifier(d.name) && d.initializer) method.locals.set(d.name.text, d.initializer);
+        if (ts.isObjectBindingPattern(d.name) && d.initializer)
+          for (const element of d.name.elements)
+            if (ts.isIdentifier(element.name))
+              method.aliases.set(
+                element.name.text,
+                `${d.initializer.getText()}.${element.propertyName?.getText() ?? element.name.text}`,
+              );
+      }
     if (ts.isReturnStatement(node) && node.expression && enclosingFunction(ts, node) === body.parent) {
       const base = chainBase(ts, node.expression);
       if (isObservable(ts, node.expression) || isStreamRef(ctx, refOf(ts, base)) || ts.isCallExpression(base))
@@ -763,7 +1184,12 @@ function readMethod(
           return;
         }
         if (fname === 'next' && isStreamRef(ctx, ref)) {
-          const emit: Emit = { ref, fedBy: fedBy(ctx, node), loc: ctx.loc(node) };
+          const emit: Emit = {
+            ref,
+            fedBy: fedBy(ctx, node),
+            ...controlOf(ctx, node, body, method),
+            loc: ctx.loc(node),
+          };
           (pipeline ? pipeline.emits : method.emits).push(emit);
         } else if (fname === 'emit' && ref?.via === 'this' && info.outputs.has(ref.name)) {
           method.outputs.push({ name: ref.name, loc: ctx.loc(node) });
@@ -802,6 +1228,7 @@ function readMethod(
             fname,
             pipeline ? (pipeline.subscribed ? 'SUBSCRIBED' : 'LOCAL') : useOf(ctx, node),
           );
+          Object.assign(s, controlOf(ctx, node, body, method));
           (pipeline ? pipeline.calls : method.calls).push(s);
         } else if (recv.kind === ts.SyntaxKind.ThisKeyword && !ctx.streamNames.has(fname)) {
           const s = site(
@@ -811,10 +1238,13 @@ function readMethod(
             fname,
             pipeline ? (pipeline.subscribed ? 'SUBSCRIBED' : 'LOCAL') : useOf(ctx, node),
           );
+          Object.assign(s, controlOf(ctx, node, body, method));
           (pipeline ? pipeline.calls : method.calls).push(s);
         }
       } else if (ts.isIdentifier(callee)) {
         if (pipeline && OPERATORS.has(callee.text)) pipeline.operators.push(callee.text);
+        if (pipeline && callee.text === 'filter' && node.arguments[0])
+          (pipeline.filters ??= []).push(short(node.arguments[0].getText()));
         if (SUBSCRIBERS.has(callee.text) && node.arguments[0]) {
           const ref = refOf(ts, chainBase(ts, node.arguments[0]));
           if (isStreamRef(ctx, ref))
@@ -936,6 +1366,7 @@ function resolve(
   classes: ReadonlyMap<string, ClassInfo>,
   knownCalls: ReadonlyMap<string, UiCall>,
   warnings: string[],
+  constants: ReadonlyMap<string, string | null>,
 ): RxjsFacts {
   const symbols = new Map<string, UiSymbol>();
   const links = new Map<string, UiLink>();
@@ -1162,19 +1593,311 @@ function resolve(
     }
     return { id: methodId(found.cls, found.method.name), ...found };
   };
+  // ── Contexte d'appel : valeurs transmises, branches atteignables, provenance ──────────────────────
+  /** Une valeur connue statiquement : littéral, symbole (membre d'enum non résolu), objet, instance. */
+  interface Val {
+    text: string;
+    lit?: string;
+    sym?: string;
+    obj?: Map<string, Val>;
+    inst?: string;
+  }
+  type Ctxt = ReadonlyMap<string, Val | undefined>;
+  const keyOf = (v: Val | undefined): string | undefined => {
+    if (!v) return undefined;
+    if (v.lit !== undefined) return `L:${v.lit}`;
+    if (v.sym) {
+      const resolved = constants.get(v.sym);
+      if (resolved === null) return undefined; // nom ambigu : jamais choisi
+      return resolved !== undefined ? `L:${resolved}` : `S:${v.sym}`;
+    }
+    if (v.inst) return `I:${v.inst}`;
+    return undefined;
+  };
+  const valOf = (
+    e: TS.Expression,
+    c: ClassInfo,
+    m: Method,
+    ctx: Ctxt | undefined,
+    depth = 0,
+  ): Val | undefined => {
+    if (depth > 6) return undefined;
+    const x = strip(ts, e);
+    const text = short(x.getText(), 60);
+    const lit = literalOf(ts, x);
+    if (lit !== undefined) return { text, lit };
+    if (ts.isIdentifier(x)) {
+      if (m.params.includes(x.text)) return ctx?.get(x.text);
+      const local = m.locals.get(x.text);
+      if (local) return valOf(local, c, m, ctx, depth + 1);
+      const mod = c.module.get(x.text);
+      if (mod) return valOf(mod, c, m, ctx, depth + 1);
+      const named = constants.get(x.text);
+      return named ? { text, lit: named } : undefined;
+    }
+    if (ts.isPropertyAccessExpression(x)) {
+      const named = constants.get(x.getText());
+      if (named) return { text, lit: named };
+      if (named === null) return undefined;
+      if (x.expression.kind === ts.SyntaxKind.ThisKeyword) {
+        const init = c.values.get(x.name.text);
+        return init ? valOf(init, c, m, ctx, depth + 1) : undefined;
+      }
+      const head = valOf(x.expression, c, m, ctx, depth + 1);
+      if (head?.obj) return head.obj.get(x.name.text);
+      let root: TS.Expression = x;
+      while (ts.isPropertyAccessExpression(root)) root = root.expression;
+      return ts.isIdentifier(root) && /^[A-Z]/.test(root.text) ? { text, sym: x.getText() } : undefined;
+    }
+    if (ts.isObjectLiteralExpression(x)) {
+      const obj = new Map<string, Val>();
+      for (const prop of x.properties) {
+        const name = prop.name?.getText();
+        if (!name) continue;
+        const v = ts.isPropertyAssignment(prop)
+          ? valOf(prop.initializer, c, m, ctx, depth + 1)
+          : ts.isShorthandPropertyAssignment(prop)
+            ? valOf(prop.name, c, m, ctx, depth + 1)
+            : undefined;
+        if (v) obj.set(name, v);
+      }
+      return { text, obj };
+    }
+    if (ts.isNewExpression(x)) return { text, inst: x.expression.getText().split('.').pop() ?? '' };
+    return undefined;
+  };
+  /** La valeur d'un chemin (`event.type`) dans un contexte. */
+  const valAt = (path: string, ctx: Ctxt): Val | undefined => {
+    const [root, ...rest] = path.split('.');
+    let v = ctx.get(root ?? '');
+    for (const seg of rest) v = v?.obj?.get(seg);
+    return v;
+  };
+  const basesOf = (name: string): string[] => {
+    const out: string[] = [];
+    let cur = classes.get(name);
+    while (cur?.base && !out.includes(cur.base)) {
+      out.push(cur.base);
+      cur = classes.get(cur.base);
+    }
+    return out;
+  };
+  /** Une condition dans un contexte : suivie (MATCH), écartée (NO), indéterminée, ou sans lien avec le contexte. */
+  const verdictOf = (g: Guard, c: ClassInfo, m: Method, ctx: Ctxt): 'MATCH' | 'NO' | 'UNKNOWN' | 'FREE' => {
+    if (!g.on || !m.params.includes(g.on.split('.')[0] ?? '')) return 'FREE';
+    const v = valAt(g.on, ctx);
+    let hit: boolean | undefined;
+    if (g.instance) hit = v?.inst ? v.inst === g.instance || basesOf(v.inst).includes(g.instance) : undefined;
+    else {
+      const k = keyOf(v);
+      if (k === undefined) return 'UNKNOWN';
+      const keys = (g.values ?? []).map((e) => keyOf(valOf(e, c, m, undefined)));
+      hit = keys.includes(k) ? true : keys.some((x) => x === undefined) ? undefined : false;
+    }
+    if (hit === undefined) return 'UNKNOWN';
+    return hit !== g.negated ? 'MATCH' : 'NO';
+  };
+  const verdictAll = (gs: Guard[] | undefined, c: ClassInfo, m: Method, ctx: Ctxt | undefined) => {
+    let out: 'MATCH' | 'NO' | 'UNKNOWN' = 'MATCH';
+    if (!ctx) return out;
+    for (const g of gs ?? []) {
+      const v = verdictOf(g, c, m, ctx);
+      if (v === 'NO') return 'NO';
+      if (v === 'UNKNOWN') out = 'UNKNOWN';
+    }
+    return out;
+  };
+  /** Les chemins de paramètres qui choisissent les branches d'une méthode (directement ou en les transmettant). */
+  const decisive = new Map<string, string[]>();
+  const decisivePaths = (c: ClassInfo, m: Method, seen = new Set<string>()): string[] => {
+    const id = methodId(c, m.name);
+    const known = decisive.get(id);
+    if (known) return known;
+    if (seen.has(id)) return [];
+    seen.add(id);
+    const paths = new Set<string>();
+    const sites = [...m.calls, ...m.emits.map((e) => ({ guards: e.guards }))];
+    for (const site of sites)
+      for (const g of site.guards ?? [])
+        if (g.on && m.params.includes(g.on.split('.')[0] ?? '') && (g.values?.length || g.instance))
+          paths.add(g.on);
+    for (const cs of m.calls) {
+      const target = classOfDep(c, cs.target);
+      const found = target ? lookup(target, cs.method) : undefined;
+      if (!found) continue;
+      const inner = decisivePaths(found.cls, found.method, seen);
+      if (!inner.length) continue;
+      // Le paramètre transmis tel quel (ou un de ses champs) devient décisif ici aussi.
+      cs.args.forEach((arg, i) => {
+        const param = found.method.params[i];
+        if (!param || !inner.some((p) => p === param || p.startsWith(`${param}.`))) return;
+        const path = pathOf(ts, arg, m);
+        if (m.params.includes(path.split('.')[0] ?? '')) paths.add(path);
+      });
+    }
+    const list = [...paths];
+    decisive.set(id, list);
+    return list;
+  };
+  const conditionText = (gs: Guard[] | undefined): string | undefined => {
+    const parts = (gs ?? []).map((g) => {
+      if (g.kind === 'CASE') return `${g.on ?? ''} = ${(g.values ?? []).map((v) => v.getText()).join(' | ')}`;
+      if (g.kind === 'DEFAULT')
+        return `${g.on ?? ''} n’est aucun de ${(g.values ?? []).map((v) => v.getText()).join(', ')}`;
+      if (g.kind === 'CATCH') return 'une exception est levée';
+      if (g.kind === 'FINALLY') return 'fin du try';
+      if (g.kind === 'LOOP') return `chaque itération de ${g.text}`;
+      if (!g.whenFalse) return g.text;
+      return /^!\s*[^=]/.test(g.text) ? g.text.replace(/^!\s*\(?\s*|\s*\)?$/g, '') : `non (${g.text})`;
+    });
+    return parts.length ? parts.join(' et ') : undefined;
+  };
+  const NOTE: Record<string, string> = {
+    switchMap: ' ; une nouvelle émission annule le traitement en cours',
+    exhaustMap: ' ; une émission est ignorée tant que le traitement en cours n’est pas fini',
+    concatMap: ' ; les émissions sont traitées l’une après l’autre',
+    mergeMap: ' ; les traitements peuvent se chevaucher',
+    debounceTime: ' ; seule la dernière émission d’une rafale passe',
+  };
+  const asyncText = (cont: Continuation[] | undefined): string | undefined => {
+    const parts = (cont ?? []).map((k) => {
+      switch (k.how) {
+        case 'AWAIT':
+          return `après await ${k.after}`;
+        case 'SUBSCRIBE':
+          return `à chaque réponse de ${k.after} (subscribe)`;
+        case 'THEN':
+          return `à la résolution de ${k.after} (then)`;
+        case 'ERROR':
+          return `si ${k.after} échoue (${k.via})`;
+        case 'FINALLY':
+          return `à la fin de ${k.after} (${k.via})`;
+        case 'OPERATOR':
+          return `dans ${k.via} sur ${k.after}${NOTE[k.via] ?? ''}`;
+        case 'TIMER':
+          return `différé (${k.via})`;
+        case 'EVENT':
+          return `à un événement (${k.via})`;
+        default:
+          return `dans un rappel passé à ${k.after} (moment d’exécution non démontré)`;
+      }
+    });
+    return parts.length ? parts.join(' ; ') : undefined;
+  };
+  const dataText = (cs: CallSite, m: Method): string | undefined => {
+    const parts: string[] = [];
+    for (const name of cs.uses ?? []) {
+      const from = [...(cs.cont ?? [])].reverse().find((k) => k.binds.includes(name));
+      if (from) {
+        parts.push(`${name} = ${from.how === 'ERROR' ? 'erreur' : 'résultat'} de ${from.after}`);
+        continue;
+      }
+      const local = m.locals.get(name);
+      if (local && /\(/.test(local.getText())) parts.push(`${name} ← ${short(local.getText(), 60)}`);
+      else if (local && ts.isObjectLiteralExpression(strip(ts, local))) {
+        // L'objet construit à partir d'autres valeurs : leur provenance est suivie un niveau plus loin.
+        const inner = (cs.cont ?? []).flatMap((k) =>
+          k.binds.filter((b) => local.getText().includes(b)).map((b) => `${b} = résultat de ${k.after}`),
+        );
+        parts.push(`${name} ← ${short(local.getText(), 60)}${inner.length ? ` (${inner.join(', ')})` : ''}`);
+      }
+      const alias = m.aliases.get(name);
+      if (alias) parts.push(`${name} = ${alias}`);
+    }
+    return parts.length ? [...new Set(parts)].join(' ; ') : undefined;
+  };
+
+  let clones = 0;
+  const MAX_CLONES = 300;
+  const MAX_CONTEXT_DEPTH = 4;
+  const specialized = new Map<string, string>();
+  /**
+   * Une méthode générique vue avec les valeurs transmises par un appelant : ses appels et émissions ne sont
+   * suivis que dans les branches compatibles ; une branche indéterminée reste, probable. Bornée (profondeur,
+   * nombre de contextes) ; une limite atteinte est dite et l'appel retombe sur la méthode générique.
+   */
+  const specialize = (
+    c: ClassInfo,
+    m: Method,
+    ctx: Ctxt,
+    label: string,
+    depth: number,
+  ): string | undefined => {
+    const id = methodId(c, m.name);
+    const key = `${id}|${[...ctx].map(([k, v]) => `${k}=${JSON.stringify(v ? [keyOf(v), [...(v.obj ?? new Map<string, Val>())].map(([a, b]) => [a, keyOf(b)])] : null)}`).join(',')}`;
+    const known = specialized.get(key);
+    if (known) return known;
+    if (depth > MAX_CONTEXT_DEPTH || clones >= MAX_CLONES) {
+      problem(
+        id,
+        'LIMIT',
+        `${id.replace('#', '.')}() : limite d’analyse contextuelle atteinte (profondeur ${String(MAX_CONTEXT_DEPTH)}, ${String(MAX_CLONES)} contextes) ; les branches ne sont plus distinguées`,
+        m.loc,
+      );
+      return undefined;
+    }
+    clones += 1;
+    const cloneId = `${id}⟨${label}⟩`;
+    specialized.set(key, cloneId);
+    const branches = { kept: 0, pruned: 0, unknown: 0 };
+    symbols.set(cloneId, {
+      id: cloneId,
+      kind: 'METHOD',
+      owner: c.name,
+      name: `${m.name}(${label})`,
+      role: c.role,
+      of: id,
+      context: label,
+      branches,
+      loc: m.loc,
+    });
+    for (const cs of m.calls) {
+      const v = verdictAll(cs.guards, c, m, ctx);
+      if (v === 'NO') {
+        branches.pruned += 1;
+        continue;
+      }
+      if (v === 'UNKNOWN') branches.unknown += 1;
+      else branches.kept += 1;
+      callLink(c, m, cloneId, cs, 'CALL', undefined, { ctx, verdict: v, depth });
+    }
+    for (const e of m.emits) {
+      const v = verdictAll(e.guards, c, m, ctx);
+      if (v === 'NO') continue;
+      const r = resolveRef(c, e.ref);
+      if (!r) continue;
+      const sid = streamSymbol(r.cls, r.stream);
+      const condition = conditionText(e.guards?.filter((g) => verdictOf(g, c, m, ctx) !== 'MATCH'));
+      const asyncNote = asyncText(e.cont);
+      link({
+        from: cloneId,
+        to: sid,
+        kind: 'EMIT',
+        confidence: v === 'UNKNOWN' ? 'PROBABLE' : 'CONFIRMED',
+        reason: `${m.name}(${label}) émet sur ${sid} (next)${condition ? ` — si ${condition}` : ''}`,
+        ...(condition ? { condition } : {}),
+        ...(asyncNote ? { async: asyncNote } : {}),
+        context: label,
+        loc: e.loc,
+      });
+    }
+    return cloneId;
+  };
+
   const callLink = (
     c: ClassInfo,
     m: Method,
     from: string,
     cs: CallSite,
     kind: 'CALL' | 'PIPE',
-    base?: { confidence: UiLink['confidence']; why: string },
+    base?: { confidence: UiLink['confidence']; why: string; condition?: string; async?: string },
+    scope?: { ctx: Ctxt; verdict: 'MATCH' | 'UNKNOWN'; depth: number },
   ): void => {
     const t = callTarget(c, m, cs);
     if (!t) return;
     const wrapper = wrappers.get(t.id);
     const caller = methodId(c, m.name);
-    if (wrapper && kind === 'CALL' && !isLeaf(caller)) {
+    if (wrapper && kind === 'CALL' && !isLeaf(caller) && !scope) {
       // L'URL est fournie par l'appelant : l'appel HTTP est le sien.
       const arg = cs.args[wrapper.param];
       const url = urlOf(ts, arg, c, m);
@@ -1205,7 +1928,8 @@ function resolve(
     callers.set(t.id, [...(callers.get(t.id) ?? []), { from: caller, use: cs.use }]);
     const observable = returns.get(t.id) === true;
     let confidence: UiLink['confidence'] = 'CONFIRMED';
-    let why = `${from.replace('#', '.')}() appelle ${t.id.replace('#', '.')}()`;
+    const shown = from.includes('⟨') ? (symbols.get(from)?.name ?? from) : from.replace('#', '.');
+    let why = `${shown}${from.includes('⟨') ? '' : '()'} appelle ${t.id.replace('#', '.')}()`;
     if (kind === 'PIPE' && base) {
       confidence = base.confidence;
       why = `${cs.operator ? `${cs.operator} → ` : ''}${t.id.replace('#', '.')}() à chaque émission (${base.why})`;
@@ -1215,7 +1939,7 @@ function resolve(
         cs.use === 'DROPPED'
           ? ' — son Observable n’est jamais souscrit'
           : ' — souscription de son Observable non démontrée';
-      if (cs.use === 'DROPPED')
+      if (cs.use === 'DROPPED' && !scope)
         problem(
           caller,
           'OBSERVABLE_NOT_SUBSCRIBED',
@@ -1223,7 +1947,76 @@ function resolve(
           cs.loc,
         );
     } else if (cs.use === 'SUBSCRIBED') why += ' et souscrit son résultat';
-    link({ from, to: t.id, kind, confidence, reason: why, loc: cs.loc });
+    // La méthode appelée choisit ses branches selon un paramètre : la valeur transmise, si elle est connue,
+    // désigne une version contextuelle qui ne suit que les branches compatibles.
+    let to = t.id;
+    let context: string | undefined;
+    const paths = decisivePaths(t.cls, t.method);
+    if (paths.length) {
+      const ctx = new Map<string, Val | undefined>();
+      t.method.params.forEach((param, i) => {
+        const arg = cs.args[i];
+        if (arg) ctx.set(param, valOf(arg, c, m, scope?.ctx));
+      });
+      const shownVals = paths
+        .map((path) => {
+          const v = valAt(path, ctx);
+          if (!keyOf(v) || !v) return undefined;
+          return path.includes('.') ? `${path.split('.').slice(1).join('.')}=${v.text}` : v.text;
+        })
+        .filter((x): x is string => x !== undefined);
+      if (shownVals.length) {
+        const label = shownVals.join(', ');
+        const clone = specialize(t.cls, t.method, ctx, label, (scope?.depth ?? 0) + 1);
+        if (clone) {
+          to = clone;
+          context = label;
+          const b = symbols.get(clone)?.branches;
+          why += ` avec ${label} : seules les branches compatibles sont suivies${b ? ` (${String(b.kept)} retenue(s), ${String(b.pruned)} écartée(s)${b.unknown ? `, ${String(b.unknown)} indéterminée(s)` : ''})` : ''}`;
+        }
+      } else if (!scope && kind === 'CALL')
+        problem(
+          caller,
+          'CONTEXT_UNRESOLVED',
+          `${t.id.replace('#', '.')}() choisit son traitement selon ${paths.join(', ')} ; la valeur transmise par ${caller.replace('#', '.')}() (${cs.args.map((a) => short(a.getText(), 30)).join(', ')}) n’est pas déterminable statiquement : toutes ses branches restent possibles`,
+          cs.loc,
+        );
+    }
+    // Dans un contexte, une condition déjà tranchée par la valeur transmise n'est pas répétée.
+    const guards = scope ? cs.guards?.filter((g) => verdictOf(g, c, m, scope.ctx) !== 'MATCH') : cs.guards;
+    const condition = [base?.condition, conditionText(guards)].filter(Boolean).join(' et ') || undefined;
+    const asyncNote = [base?.async, asyncText(cs.cont)].filter(Boolean).join(' ; ') || undefined;
+    const data = dataText(cs, m);
+    // Dans la méthode générique elle-même (aucun contexte), une branche choisie par un paramètre n'est
+    // qu'une possibilité : elle n'est empruntée que pour certaines valeurs transmises.
+    const chosenBy = !scope
+      ? cs.guards?.find(
+          (g) => g.on && m.params.includes(g.on.split('.')[0] ?? '') && (g.values?.length || g.instance),
+        )
+      : undefined;
+    if (chosenBy && confidence === 'CONFIRMED') {
+      confidence = 'PROBABLE';
+      why += ` — branche choisie par la valeur de ${chosenBy.on ?? ''} (contexte d’appel non déterminé ici)`;
+    }
+    if (scope?.verdict === 'UNKNOWN' && confidence === 'CONFIRMED') {
+      confidence = 'PROBABLE';
+      why += ' — la valeur qui choisit cette branche n’est pas déterminable statiquement';
+    }
+    if (cs.cont?.some((k) => k.how === 'CALLBACK') && confidence === 'CONFIRMED') confidence = 'PROBABLE';
+    if (condition) why += ` — si ${condition}`;
+    if (asyncNote) why += ` — ${asyncNote}`;
+    link({
+      from,
+      to,
+      kind,
+      confidence,
+      reason: why,
+      ...(condition ? { condition } : {}),
+      ...(asyncNote ? { async: asyncNote } : {}),
+      ...(data ? { data } : {}),
+      ...(context ? { context } : {}),
+      loc: cs.loc,
+    });
   };
   for (const c of classes.values()) {
     for (const m of c.methods.values()) {
@@ -1268,8 +2061,16 @@ function resolve(
             }
           : { confidence: 'UNKNOWN' as const, why: `traitement de ${origin} jamais souscrit` };
         const operator = p.operators.find((o) => INNER.has(o));
+        const stops = p.operators.filter((o) => ['takeUntil', 'takeWhile', 'take', 'first'].includes(o));
+        const pipeBase = {
+          ...base,
+          ...(p.filters?.length ? { condition: `filter(${p.filters.join(') et filter(')})` } : {}),
+          ...(stops.length
+            ? { async: `le traitement s’arrête par ${stops.join(', ')} (annulation possible)` }
+            : {}),
+        };
         for (const cs of p.calls)
-          callLink(c, m, sid, { ...cs, ...(operator ? { operator } : {}) }, 'PIPE', base);
+          callLink(c, m, sid, { ...cs, ...(operator ? { operator } : {}) }, 'PIPE', pipeBase);
         for (const e of p.emits) {
           const target = resolveRef(c, e.ref);
           if (!target) continue;
@@ -1348,6 +2149,7 @@ function resolve(
         name: s.name,
         params: [],
         locals: new Map(),
+        aliases: new Map(),
         calls: [],
         emits: [],
         http: [],
@@ -1392,9 +2194,21 @@ function resolve(
           loc: h.loc,
         });
       }
+      // Un flux défini en propriété (`results$ = query.pipe(switchMap(…), takeUntil(…))`) : ses opérateurs
+      // disent quand le traitement est remplacé, ignoré ou arrêté, et ses filter() quand il passe.
+      const stops = s.operators.filter((o) => ['takeUntil', 'takeWhile', 'take', 'first'].includes(o));
       for (const cs of s.calls) {
         const m = pseudo;
-        callLink(c, m, sid, cs, 'PIPE', { confidence: run.confidence, why: run.why });
+        const notes = [
+          cs.operator && INNER.has(cs.operator) ? `dans ${cs.operator}${NOTE[cs.operator] ?? ''}` : '',
+          stops.length ? `le traitement s’arrête par ${stops.join(', ')} (annulation possible)` : '',
+        ].filter(Boolean);
+        callLink(c, m, sid, cs, 'PIPE', {
+          confidence: run.confidence,
+          why: run.why,
+          ...(s.filters.length ? { condition: `filter(${s.filters.join(') et filter(')})` } : {}),
+          ...(notes.length ? { async: notes.join(' ; ') } : {}),
+        });
         const t = callTarget(c, m, cs);
         if (t && cs.operator && INNER.has(cs.operator))
           link({
@@ -1529,8 +2343,11 @@ function resolve(
             loc: symbols.get(cycle[0] ?? '')?.loc ?? m.loc,
           });
       }
-      if (!reached && ends.length > 0) {
-        const unique = new Map(ends.map((d) => [`${d.code}|${d.message}`, d]));
+      // Une imprécision (branches non distinguées, limite contextuelle) est dite même quand un appel HTTP
+      // est atteint : la chaîne existe, mais elle peut contenir des branches que l'action n'emprunte pas.
+      const kept = reached ? ends.filter((d) => d.code === 'CONTEXT_UNRESOLVED' || d.code === 'LIMIT') : ends;
+      if (kept.length > 0) {
+        const unique = new Map(kept.map((d) => [`${d.code}|${d.message}`, d]));
         diagnostics.push(...[...unique.values()].slice(0, 6));
       }
     }

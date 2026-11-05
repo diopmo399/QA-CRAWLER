@@ -722,9 +722,19 @@ export function impactView(
   const tabsCard = tabRows
     ? `<section class="card" id="sd-imp-tabs" tabindex="-1"><h2>${icon('layers')}<span>${esc(m.sd.tabsTouched((report.tabs ?? []).length))}</span></h2><div class="tbl-wrap"><table class="map-table"><thead><tr><th>${esc(m.sd.tabCols.page)}</th><th>${esc(m.sd.tabCols.tab)}</th><th>${esc(m.sd.tabCols.feature)}</th><th>${esc(m.sd.tabCols.element)}</th><th>${esc(m.sd.tabCols.status)}</th></tr></thead><tbody>${tabRows}</tbody></table></div></section>`
     : '';
+  const actionRows = (report.actions ?? [])
+    .slice(0, 60)
+    .map(
+      (a) =>
+        `<tr><td>${esc(a.name)}${a.component ? `<br><small class="mu">${esc(a.component)}</small>` : ''}</td><td><code>${esc(a.elementName)}</code></td><td class="small">${a.path.map((p) => esc(p)).join(' <span aria-hidden="true">→</span> ')}${a.conditions.length ? `<br><small class="mu">${esc(m.sd.actionWhen)} ${esc(a.conditions.join(' ; '))}</small>` : ''}</td><td>${h.conf(a.confidence)}</td></tr>`,
+    )
+    .join('');
+  const actionsCard = actionRows
+    ? `<section class="card" id="sd-imp-actions" tabindex="-1"><h2>${icon('play')}<span>${esc(m.sd.actionsTouched((report.actions ?? []).length))}</span></h2><div class="tbl-wrap"><table class="map-table"><thead><tr><th>${esc(m.sd.actionCols.action)}</th><th>${esc(m.sd.actionCols.element)}</th><th>${esc(m.sd.actionCols.path)}</th><th>${esc(m.sd.actionCols.status)}</th></tr></thead><tbody>${actionRows}</tbody></table></div></section>`
+    : '';
   const identical =
     report.from === report.to ? `<p class="map-note warn-t" role="note">${esc(m.sd.identical)}</p>` : '';
-  return `${head}${identical}<div class="map-impact sd-impw">${row3}${table}${tabsCard}<div class="sd-imp-r2"><section class="card" id="sd-imp-features" tabindex="-1"><h2>${esc(m.impacted(report.features.length))}</h2>${features ? `<ul class="map-imp-l">${features}</ul>` : `<p class="mu small">—</p>`}</section><section class="card" id="sd-imp-scenarios" tabindex="-1"><h2>${esc(m.toReplay(report.scenarios.length))}</h2>${scenarios ? `<ul class="map-imp-l">${scenarios}</ul>` : `<p class="mu small">—</p>`}${extras.launch}</section></div></div>`;
+  return `${head}${identical}<div class="map-impact sd-impw">${row3}${table}${tabsCard}${actionsCard}<div class="sd-imp-r2"><section class="card" id="sd-imp-features" tabindex="-1"><h2>${esc(m.impacted(report.features.length))}</h2>${features ? `<ul class="map-imp-l">${features}</ul>` : `<p class="mu small">—</p>`}</section><section class="card" id="sd-imp-scenarios" tabindex="-1"><h2>${esc(m.toReplay(report.scenarios.length))}</h2>${scenarios ? `<ul class="map-imp-l">${scenarios}</ul>` : `<p class="mu small">—</p>`}${extras.launch}</section></div></div>`;
 }
 
 export const SCAN_CSS = `

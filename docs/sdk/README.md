@@ -1328,6 +1328,43 @@ Limites : les formulaires dynamiques construits à l'exécution et les URL charg
 résolus ; `ngComponentOutlet` ne l'est que lorsque la classe affichée est nommée dans le composant ; les
 signaux Angular ne sont pas suivis comme des flux.
 
+#### Parcours reconstruits par contexte d'appel
+
+L'analyse du frontal suit les appels d'une méthode à l'autre (classes, stores, services, classes de base,
+injections) sans rien exécuter, et garde pour chaque lien ce que le code en montre :
+
+- **Contexte d'appel** : une méthode générique qui choisit son traitement selon un paramètre (`switch`,
+  `if (x === …)`, `instanceof`, un champ d'objet comme `event.type`) est vue dans le contexte de chaque
+  appelant. `dispatch(OrderAction.Cancel)` ne mène qu'à la branche d'annulation ; les autres branches sont
+  écartées (comptées dans le nœud `OrderStore.dispatch(OrderAction.Cancel)`, `detail.branchesPruned`). Les
+  valeurs reconnues : littéraux, membres d'enum, constantes de module et propriétés statiques, objets
+  littéraux, `new Classe()`, paramètres transmis tel quels. Une valeur non déterminable garde toutes les
+  branches, comme possibles seulement (lien probable), avec le diagnostic `CONTEXT_UNRESOLVED`. Profondeur
+  (4) et nombre de contextes (300) sont bornés ; une limite atteinte est dite (`LIMIT`) et l'appel retombe
+  sur la méthode générique.
+- **Conditions** : `if`/`else`, `case`/`default`, retour anticipé, `catch`, boucles, ternaires et `&&`/`||`
+  qui entourent un appel sont portés par le lien (`MapEdge.detail.condition`). Une action conditionnelle
+  n'est jamais présentée comme exécutée à coup sûr.
+- **Asynchronisme** : ce qui doit s'être produit avant (`await`, rappel de `subscribe`/`then`, erreur
+  `catchError`/`error`, `finalize`, minuterie, opérateur RxJS) est dans `detail.async`, avec les effets
+  d'annulation (`switchMap` remplace le traitement en cours, `exhaustMap` ignore, `takeUntil` arrête). Les
+  `forkJoin`/`combineLatest` de plusieurs appels comptent comme souscrits. Aucun ordre temporel n'est
+  affirmé au-delà de ces dépendances.
+- **Provenance des données** : `detail.data` dit d'où viennent les arguments (`payload ← { form, valid }
+(valid = résultat de this.validate(form))`) ; deux valeurs de même nom dans des méthodes différentes ne
+  sont jamais confondues.
+
+La fiche d'une fonctionnalité et l'onglet Traçabilité montrent le **parcours reconstruit** en arbre
+dépliable (écran → composant → méthode → store → appel → endpoint), avec conditions, asynchronisme,
+données, contexte et lien vers le code de chaque étape ; une étape déjà développée n'est pas répétée.
+L'analyse d'impact liste les **actions touchées** (bouton ou méthode du gabarit) avec le chemin de
+propagation et les conditions rencontrées : sûre par un chemin confirmé, probable quand une branche n'est
+pas déterminée (une dépendance partagée n'est pas un impact certain). Version de l'analyseur : `rxjs-2`.
+
+Limites : les appels passant par une variable locale (`const s = this.store; s.x()`), les fabriques
+d'actions (`createAction(…)` rendu par une fonction) et les appels HTTP faits directement dans une branche
+d'une méthode générique ne sont pas distingués par contexte.
+
 #### Onglets Angular
 
 Les onglets sont lus dans les gabarits, sans exécuter le code. Un groupe d'onglets et chacun de ses

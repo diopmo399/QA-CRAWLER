@@ -271,11 +271,13 @@ export function computeImpact(
     };
   });
   const tabs = impactedTabs([to, from], changed, definite);
+  const actions = impactedActions([to, from], changed, definite);
   return {
     from: from.scan.id,
     to: to.scan.id,
     sources: compareSources(from, to, changes),
     ...(tabs.length ? { tabs } : {}),
+    ...(actions.length ? { actions } : {}),
     changes: enriched,
     features: [...features.values()]
       .map((entry) => ({ ...entry, confidence: definite(entry.confidence) }))
@@ -284,6 +286,91 @@ export function computeImpact(
       .map((entry) => ({ ...entry, confidence: definite(entry.confidence) }))
       .sort((a, b) => RANK[b.confidence] - RANK[a.confidence] || a.scenario.localeCompare(b.scenario)),
   };
+}
+
+const ACTION_FLOW = new Set(['TRIGGERS', 'CALLS', 'READS', 'WRITES']);
+const MAX_ACTION_VISITS = 5000;
+
+/**
+ * Les actions touchées : depuis chaque bouton (et chaque méthode appelée par un gabarit ou le cycle de vie),
+ * le chemin de déclenchement le plus court jusqu'à un élément modifié. Un flux atteint par déclenchement ne
+ * mène pas à ses sources de données ; une dépendance partagée sans chemin depuis l'action n'est pas citée.
+ */
+function impactedActions(
+  models: readonly CartographyModel[],
+  changed: ReadonlySet<string>,
+  definite: (c: MapConfidence) => 'CONFIRMED' | 'PROBABLE',
+): NonNullable<ImpactReport['actions']> {
+  const found = new Map<string, NonNullable<ImpactReport['actions']>[number]>();
+  for (const model of models) {
+    const nodes = new Map(model.nodes.map((n) => [n.id, n]));
+    const outOf = new Map<string, MapEdge[]>();
+    for (const e of model.edges)
+      if (ACTION_FLOW.has(e.kind)) outOf.set(e.from, [...(outOf.get(e.from) ?? []), e]);
+    const name = (id: string): string => {
+      const n = nodes.get(id);
+      return n?.label ?? n?.name ?? id;
+    };
+    const starts = model.nodes.filter(
+      (n) =>
+        n.kind === 'BUTTON' ||
+        (n.kind === 'METHOD' &&
+          n.layer === 'FRONTEND' &&
+          (n.detail.entry === 'TEMPLATE' || n.detail.entry === 'LIFECYCLE') &&
+          // Une méthode déjà déclenchée par un bouton est représentée par ce bouton.
+          !model.edges.some((e) => e.kind === 'TRIGGERS' && e.to === n.id)),
+    );
+    for (const start of starts) {
+      const back = new Map<string, MapEdge>();
+      const queue = [start.id];
+      const seen = new Set(queue);
+      let visits = 0;
+      while (queue.length > 0 && (visits += 1) < MAX_ACTION_VISITS) {
+        const cur = queue.shift() ?? '';
+        for (const e of outOf.get(cur) ?? []) {
+          if (seen.has(e.to) || e.confidence === 'UNKNOWN') continue;
+          if (nodes.get(cur)?.kind === 'STREAM' && e.kind !== 'CALLS') continue;
+          seen.add(e.to);
+          back.set(e.to, e);
+          queue.push(e.to);
+        }
+      }
+      for (const id of changed) {
+        if (!back.has(id) || found.has(`${start.id}|${id}`)) continue;
+        const path: string[] = [];
+        const conditions: string[] = [];
+        let confidence: MapConfidence = 'CONFIRMED';
+        for (let cur: string | undefined = id, guard = 0; cur && cur !== start.id && guard < 60; guard += 1) {
+          const e = back.get(cur);
+          if (!e) break;
+          path.unshift(name(cur));
+          if (e.detail?.condition) conditions.unshift(e.detail.condition);
+          confidence = weakest(confidence, e.confidence);
+          cur = e.from;
+        }
+        path.unshift(name(start.id));
+        const owner =
+          typeof start.detail.component === 'string'
+            ? start.detail.component
+            : typeof start.detail.owner === 'string'
+              ? start.detail.owner
+              : undefined;
+        found.set(`${start.id}|${id}`, {
+          action: start.id,
+          name: name(start.id),
+          ...(owner ? { component: owner } : {}),
+          element: id,
+          elementName: name(id),
+          confidence: definite(confidence),
+          path,
+          conditions,
+        });
+      }
+    }
+  }
+  return [...found.values()].sort(
+    (a, b) => RANK[b.confidence] - RANK[a.confidence] || a.name.localeCompare(b.name),
+  );
 }
 
 /**

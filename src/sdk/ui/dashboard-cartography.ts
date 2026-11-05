@@ -553,6 +553,84 @@ function chainCard(m: MapStrings, detail: FeatureDetail | undefined): string {
   return `<section class="card map-chain"><h2>${icon('traceability')}<span>${esc(m.chain(feature.name))}</span></h2><ol class="map-lanes">${lanes}</ol>${why}${diagnostics}<p class="mu small"><span class="map-box sample"></span> ${esc(m.confidence.CONFIRMED ?? '')} · <span class="map-box sample probable"></span> ${esc(m.confidence.PROBABLE ?? '')} · <span class="map-box sample gap"></span> ${esc(m.gap)}</p></section>`;
 }
 
+/**
+ * Le parcours d'une fonctionnalité en arbre dépliable, reconstruit depuis ses liens (déclenchement, appels,
+ * accès aux données) : chaque étape porte sa condition, ce qu'elle attend (réponse, erreur, opérateur), la
+ * provenance de ses données, le contexte d'appel et son code. Une étape déjà développée plus haut n'est pas
+ * répétée ; les étapes sœurs identiques sont regroupées ; la profondeur est bornée et le dit.
+ */
+const JOURNEY_KINDS = new Set(['DISPLAYS', 'CALLS', 'TRIGGERS', 'READS', 'WRITES', 'CONTAINS']);
+const JOURNEY_DEPTH = 12;
+function journeyCard(m: MapStrings, state: MapState, detail: FeatureDetail): string {
+  const j = m.journey;
+  const nodes = new Map(detail.nodes.map((n) => [n.id, n]));
+  const out = new Map<string, MapEdge[]>();
+  const into = new Set<string>();
+  for (const e of detail.edges) {
+    if (!JOURNEY_KINDS.has(e.kind) || !nodes.has(e.from) || !nodes.has(e.to)) continue;
+    // L'appartenance (CONTAINS) ne compte que pour descendre d'un écran à ses composants, jamais vers un champ.
+    if (e.kind === 'CONTAINS' && nodes.get(e.to)?.kind !== 'COMPONENT') continue;
+    out.set(e.from, [...(out.get(e.from) ?? []), e]);
+    into.add(e.to);
+  }
+  if (out.size === 0) return '';
+  const roots = detail.nodes
+    .filter((n) => out.has(n.id) && !into.has(n.id))
+    .sort((a, b) => (a.kind === 'ROUTE' ? -1 : b.kind === 'ROUTE' ? 1 : 0));
+  const expanded = new Set<string>();
+  const badges = (e: MapEdge): string => {
+    const d = e.detail;
+    if (!d) return '';
+    return [
+      d.condition
+        ? `<span class="jr-b cond" title="${esc(j.legend.cond)}">${esc(j.when)} ${esc(d.condition)}</span>`
+        : '',
+      d.async ? `<span class="jr-b async" title="${esc(j.legend.async)}">${esc(d.async)}</span>` : '',
+      d.data
+        ? `<span class="jr-b data" title="${esc(j.legend.data)}">${esc(j.data)} : ${esc(d.data)}</span>`
+        : '',
+    ].join('');
+  };
+  const line = (id: string, e: MapEdge | undefined, times: number): string => {
+    const n = nodes.get(id);
+    const kind = j.kinds[n?.kind ?? ''] ?? n?.kind ?? '';
+    const ev = e?.evidence[0];
+    const code = ev?.file
+      ? evidenceLink(m, ev, state, `${ev.file.split('/').pop() ?? ev.file}:${String(ev.line ?? 1)}`)
+      : '';
+    const ctx = e?.detail?.context
+      ? `<span class="jr-b ctx" title="${esc(j.legend.ctx)}">${esc(e.detail.context)}</span>`
+      : '';
+    return `<span class="jr-l"><span class="jr-k">${esc(kind)}</span> <b>${esc(n?.label ?? n?.name ?? id)}</b>${times > 1 ? ` <span class="mu">${esc(j.times(times))}</span>` : ''} ${e ? conf(m, e.confidence) : ''}${ctx}${e ? badges(e) : ''} ${code}</span>`;
+  };
+  const branch = (id: string, e: MapEdge | undefined, depth: number, times: number): string => {
+    const children = out.get(id) ?? [];
+    if (children.length === 0 || (expanded.has(id) && e)) {
+      const seen = children.length > 0 ? ` <span class="mu small">↩ ${esc(j.seen)}</span>` : '';
+      return `<li class="jr-leaf">${line(id, e, times)}${seen}</li>`;
+    }
+    expanded.add(id);
+    if (depth >= JOURNEY_DEPTH)
+      return `<li class="jr-leaf">${line(id, e, times)} <span class="warn-t small">${esc(j.depth)}</span></li>`;
+    // Les étapes sœurs identiques (même cible, même contexte d'exécution) sont regroupées.
+    const groups = new Map<string, { edge: MapEdge; count: number }>();
+    for (const c of children) {
+      const key = `${c.to}|${JSON.stringify(c.detail ?? {})}`;
+      const g = groups.get(key);
+      if (g) g.count += 1;
+      else groups.set(key, { edge: c, count: 1 });
+    }
+    const list = [...groups.values()];
+    const shown = list.slice(0, 30);
+    const rest = list.length - shown.length;
+    const inner = shown.map((g) => branch(g.edge.to, g.edge, depth + 1, g.count)).join('');
+    return `<li><details ${depth < 3 ? 'open' : ''}><summary>${line(id, e, times)}</summary><ul class="jr">${inner}${rest > 0 ? `<li class="mu small">${esc(j.more(rest))}</li>` : ''}</ul></details></li>`;
+  };
+  const tree = roots.map((r) => branch(r.id, undefined, 0, 1)).join('');
+  const legend = `<p class="mu small jr-legend"><span class="jr-b cond">${esc(j.legend.cond)}</span><span class="jr-b async">${esc(j.legend.async)}</span><span class="jr-b data">${esc(j.legend.data)}</span><span class="jr-b ctx">${esc(j.legend.ctx)}</span></p>`;
+  return `<section class="card map-journey"><h2>${icon('traceability')}<span>${esc(j.title)}</span></h2><p class="mu small">${esc(j.intro)}</p>${tree ? `<ul class="jr jr-root">${tree}</ul>` : `<p class="mu">${esc(j.empty)}</p>`}${detail.truncated ? `<p class="map-note warn-t small">${esc(m.p.truncated(detail.edges.length, 1))}</p>` : ''}${legend}</section>`;
+}
+
 // ── Niveau 1 : la liste des fonctionnalités ───────────────────────────────────────────────────────
 
 function featureListCard(m: MapStrings, state: MapState, compact: boolean): string {
@@ -685,7 +763,7 @@ function summaryPane(m: MapStrings, state: MapState, detail: FeatureDetail): str
   const criteria = detail.coverage
     ? `<h3>${esc(m.p.criteriaLabel)}</h3><ul class="map-crit-l">${detail.coverage.criteria.map((c) => `<li class="${c.met === undefined ? 'na' : c.met ? 'ok' : 'ko'}">${esc(c.met === undefined ? m.na : c.met ? '✓' : '✗')} <b>${esc(c.label)}</b> <small class="mu">${esc(c.detail)}</small></li>`).join('')}</ul><p class="mu small">${esc(detail.coverage.formula)}</p>`
     : '';
-  return `<dl class="map-dl"><dt>${esc(m.sheet.basis)}</dt><dd>${esc(feature.basis)}</dd><dt>${esc(m.sheet.proposed)}</dt><dd>${esc(feature.proposedName)}</dd><dt>${esc(m.sheet.layers)}</dt><dd>${feature.layers.map((l) => layerChip(m, l)).join(' ')}</dd>${feature.mergedFrom?.length ? `<dt>${esc(m.sheet.mergedFrom)}</dt><dd>${esc(feature.mergedFrom.join(', '))}</dd>` : ''}</dl>${chainCard(m, detail)}${criteria}${evidence ? `<h3>${esc(m.sheet.evidence)}</h3><ul class="map-ev-l">${evidence}</ul>` : ''}${buttons}`;
+  return `<dl class="map-dl"><dt>${esc(m.sheet.basis)}</dt><dd>${esc(feature.basis)}</dd><dt>${esc(m.sheet.proposed)}</dt><dd>${esc(feature.proposedName)}</dd><dt>${esc(m.sheet.layers)}</dt><dd>${feature.layers.map((l) => layerChip(m, l)).join(' ')}</dd>${feature.mergedFrom?.length ? `<dt>${esc(m.sheet.mergedFrom)}</dt><dd>${esc(feature.mergedFrom.join(', '))}</dd>` : ''}</dl>${chainCard(m, detail)}${journeyCard(m, state, detail)}${criteria}${evidence ? `<h3>${esc(m.sheet.evidence)}</h3><ul class="map-ev-l">${evidence}</ul>` : ''}${buttons}`;
 }
 
 // ── Niveau 2 : les champs d'une fonctionnalité ────────────────────────────────────────────────────
@@ -1165,7 +1243,7 @@ function traceTab(m: MapStrings, state: MapState): string {
         `<option value="${esc(f.id)}" ${f.id === detail.feature.id ? 'selected' : ''}>${esc(f.name)}</option>`,
     )
     .join('');
-  return `<section class="card"><label class="pick">${esc(m.col.feature)} <select data-map="trace-feature">${options}</select></label></section>${chainCard(m, detail)}<section class="card wide"><h2>${esc(m.edgesTitle(detail.edges.length))}</h2>${detail.truncated ? `<p class="map-note warn-t small">${esc(m.p.truncated(detail.edges.length, 1))}</p>` : ''}<div class="tbl-w"><table class="tbl map-tbl"><thead><tr><th>${esc(m.col.from)}</th><th>${esc(m.col.kind)}</th><th>${esc(m.col.to)}</th><th>${esc(m.col.confidence)}</th><th>${esc(m.col.reason)}</th><th>${esc(m.col.evidence)}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  return `<section class="card"><label class="pick">${esc(m.col.feature)} <select data-map="trace-feature">${options}</select></label></section>${chainCard(m, detail)}${journeyCard(m, state, detail)}<section class="card wide"><h2>${esc(m.edgesTitle(detail.edges.length))}</h2>${detail.truncated ? `<p class="map-note warn-t small">${esc(m.p.truncated(detail.edges.length, 1))}</p>` : ''}<div class="tbl-w"><table class="tbl map-tbl"><thead><tr><th>${esc(m.col.from)}</th><th>${esc(m.col.kind)}</th><th>${esc(m.col.to)}</th><th>${esc(m.col.confidence)}</th><th>${esc(m.col.reason)}</th><th>${esc(m.col.evidence)}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 
 function evidencePanel(m: MapStrings, ui: CartographyUi): string {
@@ -1254,6 +1332,18 @@ export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_C
 .map-decide{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .map-decide-f,.map-add{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:8px}
 .map-why{margin:4px 0 0;padding-left:18px;font-size:12px}
+.map-journey ul.jr{list-style:none;margin:0;padding-left:16px;border-left:1px dashed var(--line,#d9dee6)}
+.map-journey ul.jr-root{padding-left:0;border-left:0}
+.map-journey li{margin:3px 0}
+.map-journey summary{cursor:pointer;list-style-position:outside}
+.jr-l{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 6px;font-size:13px;min-width:0}
+.jr-k{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#5b6472)}
+.jr-b{display:inline-block;font-size:11px;line-height:1.3;padding:1px 6px;border-radius:9px;border:1px solid transparent;max-width:100%;overflow-wrap:anywhere}
+.jr-b.cond{background:#fdf3e4;color:#8a4b06;border-color:#f3d7ae}
+.jr-b.async{background:#eef0fd;color:#3b3fa0;border-color:#cfd2f6}
+.jr-b.data{background:#e6f4f7;color:#0b5d6e;border-color:#bfe3ea}
+.jr-b.ctx{background:#eef8f0;color:#1d6b33;border-color:#c5e6cf}
+.jr-legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .map-link{padding:8px;border:1px solid var(--qa-color-border);border-radius:8px}
 .map-filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}
 .map-filters .pick select{min-height:34px;font-size:13px;max-width:170px}

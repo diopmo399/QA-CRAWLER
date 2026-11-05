@@ -30,6 +30,7 @@
     "tests/fixtures/cartography-graph/**",
     "tests/fixtures/cartography-conditions/**",
     "tests/fixtures/cartography-rxjs/**",
-    "tests/fixtures/cartography-tabs/**"
+    "tests/fixtures/cartography-tabs/**",
+    "tests/fixtures/cartography-flow/**"
   ]
 }
