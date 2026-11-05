@@ -605,6 +605,15 @@ const fr = {
     neverScanned: 'Non analysée',
     scannedAt: (d: string) => `analysée le ${d}`,
     revisionShort: (r: string) => `révision ${r.slice(0, 8)}`,
+    notes: {
+      large: (kb: number, n: number, names: string) =>
+        n > 0
+          ? `${String(n)} fichier(s) de plus de ${String(kb)} Ko non lu(s) : ${names}`
+          : `Fichiers de plus de ${String(kb)} Ko non lus`,
+      fileLimit: (n: number) => `Limite de ${String(n)} fichiers atteinte : les suivants n’ont pas été lus`,
+      duration: (s: number) => `Durée maximale de lecture atteinte (${String(s)} s) : lecture incomplète`,
+      includeOutside: (p: string) => `Sous-dossier hors de la source ignoré : ${p}`,
+    },
     errors: {
       idRequired: 'Identifiant obligatoire.',
       idFormat: 'Lettres, chiffres, - et _ (40 au plus), sans espace.',
@@ -1526,6 +1535,15 @@ const en: MapStrings = {
     neverScanned: 'Not scanned',
     scannedAt: (d) => `scanned on ${d}`,
     revisionShort: (r) => `revision ${r.slice(0, 8)}`,
+    notes: {
+      large: (kb, n, names) =>
+        n > 0
+          ? `${String(n)} file(s) over ${String(kb)} KB not read: ${names}`
+          : `Files over ${String(kb)} KB not read`,
+      fileLimit: (n) => `Limit of ${String(n)} files reached: the following ones were not read`,
+      duration: (s) => `Maximum read time reached (${String(s)} s): incomplete read`,
+      includeOutside: (p) => `Sub-folder outside the source ignored: ${p}`,
+    },
     errors: {
       idRequired: 'Identifier is required.',
       idFormat: 'Letters, digits, - and _ (40 at most), no spaces.',

@@ -152,4 +152,25 @@ describe('cartography source reading', () => {
     expect(scoped.secretsExcluded).toBe(0);
     expect(scoped.limits.join(' ')).toContain('outside the source');
   });
+
+  it('never reads dependency lock files; names the files too large to be read', async () => {
+    const big = path.join(dir, 'big');
+    await mkdir(path.join(big, 'src/assets'), { recursive: true });
+    await writeFile(path.join(big, 'package.json'), '{"name":"app"}\n');
+    await writeFile(path.join(big, 'package-lock.json'), `{"lock":"${'x'.repeat(4096)}"}\n`);
+    await writeFile(path.join(big, 'pnpm-lock.yaml'), `lock: ${'x'.repeat(4096)}\n`);
+    await writeFile(path.join(big, 'src/app.ts'), 'export const app = 1;\n');
+    for (const name of ['a', 'b', 'c', 'd', 'e', 'f'])
+      await writeFile(path.join(big, `src/assets/${name}.json`), `{"v":"${'x'.repeat(2048)}"}\n`);
+    const limits = { maxFiles: 100, maxFileBytes: 1024, maxDurationMs: 60_000 };
+    const read = await readSource(big, [], limits);
+    expect(read.files.map((f) => f.path).sort()).toEqual(['package.json', 'src/app.ts']);
+    expect(read.skipped).toBe(6);
+    expect(read.limits).toEqual([
+      'files larger than 1024 bytes skipped (6): src/assets/a.json, src/assets/b.json, src/assets/c.json, src/assets/d.json, src/assets/e.json, …',
+    ]);
+    // Sans fichier trop gros, la source n'a aucune note : les fichiers lock ne la rendent pas partielle.
+    await rm(path.join(big, 'src/assets'), { recursive: true });
+    expect((await readSource(big, [], limits)).limits).toEqual([]);
+  });
 });

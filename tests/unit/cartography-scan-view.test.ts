@@ -8,6 +8,7 @@ import {
   impactRows,
   impactView,
   issueCount,
+  scanNote,
   scanView,
   sourceIssues,
   underRoot,
@@ -183,6 +184,34 @@ describe('Scan & Discovery view', () => {
     const closed = scanView(m, ui, summaryOf([source], [scan], ['github.com']), h);
     expect(closed).not.toContain('id="sd-src-b-0"');
     expect(closed).toContain('aria-expanded="false"');
+  });
+
+  it('reading limits from the server are said in plain words, with the files not read', () => {
+    expect(scanNote(m, 'files larger than 524288 bytes skipped (2): src/a.json, src/b.json')).toBe(
+      '2 fichier(s) de plus de 512 Ko non lu(s) : src/a.json, src/b.json',
+    );
+    // Une note d'un scan plus ancien (sans les noms) reste comprise.
+    expect(scanNote(m, 'files larger than 524288 bytes skipped')).toBe('Fichiers de plus de 512 Ko non lus');
+    expect(scanNote(m, 'file limit reached (4000)')).toContain('4000');
+    expect(scanNote(m, 'duration limit reached (60000 ms)')).toContain('60 s');
+    expect(scanNote(m, 'include outside the source ignored: ../x')).toContain('../x');
+    expect(scanNote(m, 'autre chose')).toBe('autre chose');
+    const scan = scanRecord('scan-1', [
+      {
+        sourceId: 'front',
+        name: 'Front',
+        layer: 'FRONTEND',
+        state: 'PARTIAL',
+        technologies: [],
+        files: 644,
+        skipped: 1,
+        secretsExcluded: 0,
+        errors: ['files larger than 524288 bytes skipped (1): src/assets/i18n/fr.json'],
+      },
+    ]);
+    const html = scanView(m, emptyCartographyUi(), summaryOf([local()], [scan]), h);
+    expect(html).toContain('1 fichier(s) de plus de 512 Ko non lu(s) : src/assets/i18n/fr.json');
+    expect(html).not.toContain('bytes skipped');
   });
 
   it('discovered elements link to their tab; recent scans offer a comparison with the latest', () => {

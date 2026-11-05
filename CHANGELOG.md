@@ -37,7 +37,8 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   résumé par source, éléments découverts, scans récents, couverture. L'impact se choisit avec permutation,
   compare les sources, compte les changements (anneau), et détaille chaque changement (source, couche,
   fonctionnalités atteintes, preuve) dans un tableau filtrable. Une source non lue n'est jamais présentée
-  comme « sans changement ».
+  comme « sans changement ». Les fichiers lock des dépendances ne sont plus lus ; les fichiers
+  trop gros pour être lus sont nommés, et les limites de lecture sont dites en clair.
 - **Cartographie : sources Git distantes.** Une source peut être un dépôt Git (`kind: 'GIT'`, `repoUrl`,
   `branch`, `commit`, `tokenEnv`) que le serveur prépare lui-même. Les hôtes sont autorisés par
   `--git-host`, en https seulement, et les adresses internes sont refusées. Git est lancé sans shell,

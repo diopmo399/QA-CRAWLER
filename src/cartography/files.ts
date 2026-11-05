@@ -73,6 +73,10 @@ const USEFUL =
   /\.(ts|tsx|js|jsx|vue|html|java|kt|cs|csproj|graphql|gql|sql|ya?ml|json|properties|xml|gradle|kts)$/i;
 const IGNORED_FILE =
   /\.(spec|test|stories|d)\.(ts|tsx|js|jsx)$|\.min\.js$|Test\.java$|Tests\.java$|IT\.java$/;
+/** Les fichiers lock des dépendances : générés, souvent très gros, sans rien pour la cartographie. */
+const LOCK_FILE = /^(package-lock|npm-shrinkwrap)\.json$|^pnpm-lock\.ya?ml$/;
+/** Combien de fichiers trop gros sont nommés dans la note du scan. */
+const NAMED_LARGE = 5;
 
 /** Un fichier qu'une lecture de la cartographie ne rend jamais (secret, ou sans intérêt pour elle). */
 export const isReadableFile = (name: string): boolean =>
@@ -129,7 +133,8 @@ export async function readSource(
         if (!IGNORED_DIRS.has(entry.name) && !entry.name.startsWith('.')) await walk(full);
       } else if (entry.isFile()) {
         if (SECRET_FILE.test(entry.name)) secretsExcluded++;
-        else if (USEFUL.test(entry.name) && !IGNORED_FILE.test(entry.name)) candidates.push(full);
+        else if (USEFUL.test(entry.name) && !IGNORED_FILE.test(entry.name) && !LOCK_FILE.test(entry.name))
+          candidates.push(full);
       }
     }
   };
@@ -144,6 +149,7 @@ export async function readSource(
   }
   const files: ReadFile[] = [];
   let skipped = 0;
+  const large: string[] = [];
   for (const file of [...new Set(candidates)].sort()) {
     if (signal?.aborted) break;
     if (files.length >= limits.maxFiles) {
@@ -159,7 +165,7 @@ export async function readSource(
     const info = await stat(file).catch(() => undefined);
     if (!info || info.size > limits.maxFileBytes) {
       skipped++;
-      if (info) limitNotes.add(`files larger than ${String(limits.maxFileBytes)} bytes skipped`);
+      if (info) large.push(path.relative(root, file).split(path.sep).join('/'));
       continue;
     }
     const text = await readFile(file, 'utf8').catch(() => undefined);
@@ -173,6 +179,13 @@ export async function readSource(
       hash: sha(text),
       bytes: info.size,
     });
+  }
+  if (large.length > 0) {
+    // La note nomme les premiers fichiers écartés, pour qu'on sache ce qui manque à l'analyse.
+    const names = large.slice(0, NAMED_LARGE).join(', ') + (large.length > NAMED_LARGE ? ', …' : '');
+    limitNotes.add(
+      `files larger than ${String(limits.maxFileBytes)} bytes skipped (${String(large.length)}): ${names}`,
+    );
   }
   return {
     root,

@@ -182,6 +182,20 @@ const normalize = (s: MapSource | undefined): string =>
       })
     : '';
 
+/** Une note de lecture du serveur (limites atteintes) dite dans la langue de l'écran ; les autres telles quelles. */
+export function scanNote(m: MapStrings, note: string): string {
+  const large = /^files larger than (\d+) bytes skipped(?: \((\d+)\): (.*))?$/.exec(note);
+  if (large)
+    return m.sd.notes.large(Math.round(Number(large[1]) / 1024), Number(large[2] ?? 0), large[3] ?? '');
+  const files = /^file limit reached \((\d+)\)$/.exec(note);
+  if (files) return m.sd.notes.fileLimit(Number(files[1]));
+  const duration = /^duration limit reached \((\d+) ms\)$/.exec(note);
+  if (duration) return m.sd.notes.duration(Math.round(Number(duration[1]) / 1000));
+  const outside = /^include outside the source ignored: (.*)$/.exec(note);
+  if (outside) return m.sd.notes.includeOutside(outside[1] ?? '');
+  return note;
+}
+
 const LAYER_ICON: Record<string, string> = { FRONTEND: 'monitor', BFF: 'network', BACKEND: 'gear' };
 const LAYERS = ['FRONTEND', 'BFF', 'BACKEND', 'API', 'DATABASE', 'EVENTS', 'OTHER'];
 
@@ -292,7 +306,7 @@ function sourceCard(
     scanned?.errors.filter((e) => !/\[(CREDENTIALS_MISSING|AUTH_FAILED)\]/.test(e)).slice(0, 3) ?? [];
   const alerts =
     hint || problems.length
-      ? `<ul class="sd-alerts" role="list">${hint ? `<li class="warn-t">${icon('alert')}<span>${esc(hint)}</span></li>` : ''}${problems.map((p) => `<li class="warn-t">${icon('alert')}<span>${esc(p)}</span></li>`).join('')}</ul>`
+      ? `<ul class="sd-alerts" role="list">${hint ? `<li class="warn-t">${icon('alert')}<span>${esc(hint)}</span></li>` : ''}${problems.map((p) => `<li class="warn-t">${icon('alert')}<span>${esc(scanNote(m, p))}</span></li>`).join('')}</ul>`
       : '';
   const status = dirty
     ? h.chip('PROPOSED', m.sd.notSaved)
@@ -386,7 +400,7 @@ function summaryCard(m: MapStrings, summary: MapSummary, h: ScanViewHelpers): st
   const rows = scan.sources
     .map((s) => {
       const first = s.errors[0];
-      return `<li><button class="sd-row" data-action="map-src-focus" data-id="${esc(s.sourceId)}" aria-label="${esc(m.sd.openSource(s.name))}"><span class="sd-src-ic l-${esc(s.layer.toLowerCase())}">${icon(LAYER_ICON[s.layer] ?? 'layers')}</span><span class="sd-row-t"><span class="sd-line"><b>${esc(s.name)}</b>${h.layerChip(s.layer)}</span><small>${esc([m.files(s.files), s.kind === 'GIT' ? m.gs.kinds.GIT : m.gs.kinds.LOCAL, s.revision ? m.sd.revisionShort(s.revision) : s.revisionStatus === 'UNDETERMINED' ? m.gs.undetermined : ''].filter(Boolean).join(' · '))}</small>${first ? `<small class="warn-t">${esc(first)}</small>` : ''}</span>${h.chip(s.state, m.sourceState[s.state] ?? s.state)}${icon('right')}</button></li>`;
+      return `<li><button class="sd-row" data-action="map-src-focus" data-id="${esc(s.sourceId)}" aria-label="${esc(m.sd.openSource(s.name))}"><span class="sd-src-ic l-${esc(s.layer.toLowerCase())}">${icon(LAYER_ICON[s.layer] ?? 'layers')}</span><span class="sd-row-t"><span class="sd-line"><b>${esc(s.name)}</b>${h.layerChip(s.layer)}</span><small>${esc([m.files(s.files), s.kind === 'GIT' ? m.gs.kinds.GIT : m.gs.kinds.LOCAL, s.revision ? m.sd.revisionShort(s.revision) : s.revisionStatus === 'UNDETERMINED' ? m.gs.undetermined : ''].filter(Boolean).join(' · '))}</small>${first ? `<small class="warn-t">${esc(scanNote(m, first))}</small>` : ''}</span>${h.chip(s.state, m.sourceState[s.state] ?? s.state)}${icon('right')}</button></li>`;
     })
     .join('');
   return `<section class="card sd-sum" id="map-scan-summary" tabindex="-1"><div class="sd-h"><h2>${icon('grid')}<span>${esc(m.sd.summaryTitle)}</span></h2></div><ul class="sd-rows">${rows}</ul></section>`;

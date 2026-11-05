@@ -1059,9 +1059,11 @@ Toute autre technologie détectée (React, Vue, Node, .NET, GraphQL, SQL, évén
 Une source est un dossier (un dépôt Git local ou une partie) lu **sous une racine que le serveur
 autorise** (`allowedSourceRoots` ; aucune : aucun scan). Le scan est statique et non destructif :
 aucun fichier n'est exécuté ni modifié. Les liens symboliques ne sont pas suivis ; les dépendances
-et sorties de build (`node_modules`, `dist`, `target`…) sont ignorées ; les fichiers de secrets
+et sorties de build (`node_modules`, `dist`, `target`…) ainsi que les fichiers lock
+(`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`) sont ignorés ; les fichiers de secrets
 (`.env`, clés, `credentials*`, `secrets*`…) ne sont **jamais lus** et sont comptés. Des limites
-(4 000 fichiers, 512 Kio par fichier, 60 s par source) rendent un scan `PARTIAL`, jamais faux. Un scan
+(4 000 fichiers, 512 Kio par fichier, 60 s par source) rendent un scan `PARTIAL`, jamais faux ; la note
+du scan nomme les premiers fichiers trop gros. Un scan
 est **incrémental** : une source dont l'empreinte n'a pas changé reprend ses faits. Un scan par projet
 à la fois, en arrière-plan, annulable ; une source en erreur n'arrête pas les autres.
 
