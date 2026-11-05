@@ -32,6 +32,29 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Cartographie fonctionnelle** (écran « Cartographie » du Dashboard, routes
+  `/api/projects/:id/cartography/…`, client `cartography`) : scan statique des sources d'un projet
+  (Angular, Spring, JPA, OpenAPI ; les autres technologies sont signalées « connecteur manquant »),
+  graphe typé avec preuves et confiance, fonctionnalités candidates et décisions (confirmer, renommer,
+  fusionner, rejeter, hors périmètre), champs et réutilisations suivis de l'écran à la colonne,
+  anomalies (champ non utilisé, doublon, types incohérents, validations divergentes, sans test),
+  couverture par les scénarios mesurée sur les exécutions réelles, impact entre deux scans et rejeu
+  des scénarios choisis. Voir [docs/sdk](docs/sdk/README.md#cartographie-fonctionnelle).
+  L'exploration est **progressive** : un résumé et une page de fonctionnalités au premier affichage,
+  puis les champs d'une fonctionnalité, puis la fiche d'un champ (sous-graphe borné, séquence,
+  réutilisations, scénarios associés / exécutés / vérifiés, impact démontré et potentiel), servis par
+  un index construit une fois par version et un cache invalidé par un scan ou une décision (routes
+  `summary`, `features`, `feature`, `feature-fields`, `field`, `neighbors`, `concepts`, `issues`).
+  La traçabilité d'un champ se lit en **parcours principal** (une carte par couche démontrée, compteurs
+  « N liens » vers les relations exactes) ou en **graphe complet** (colonnes ordonnées, sélection,
+  extension à la demande), avec zoom, ajustement, déplacement, plein écran, légende comptée,
+  regroupement des liens parallèles et tableau « Relations détectées » avec « Voir le code ».
+  L'onglet **API & Services** dresse le catalogue des API internes (par contrôleur servi), externes
+  (par hôte lu dans le code ou la configuration) et « à classifier » (cible non établie), avec
+  endpoints, appelants, champs échangés, contrat OpenAPI, parcours d'intégration démontré,
+  fonctionnalités et scénarios liés, impact, criticité justifiée ; renommage métier (`RENAME_API`) et
+  classement manuel (`CLASSIFY_API`) ; routes `apis` et `api`.
+
 - **Catalogue de blocs et fiche détaillée** :
   - **Catalogue** : cartes avec le statut réel du contrat, le nombre d'étapes, d'entrées et de sorties,
     l'origine et les groupes métier, la date de modification si elle est connue, « Ouvrir » ; pagination (12 à

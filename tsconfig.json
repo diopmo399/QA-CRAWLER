@@ -25,6 +25,7 @@
   "exclude": [
     "tests/fixtures/static-apps/**",
     "tests/fixtures/packaging/*-app/**",
-    "tests/fixtures/angular-app/**"
+    "tests/fixtures/angular-app/**",
+    "tests/fixtures/cartography/**"
   ]
 }

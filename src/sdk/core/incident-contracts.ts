@@ -921,6 +921,12 @@ export interface OutgoingHttpCall {
   status: RelationStatus;
   file: string;
   line: number;
+  /** L'origine (« https://hôte:port ») quand l'URL reconstruite en porte une ; jamais d'identifiants. */
+  origin?: string;
+  /** Le client HTTP qui fait l'appel (RestTemplate, WebClient, RestClient, Feign…). */
+  client?: string;
+  /** Les clés de configuration lues pour reconstruire l'URL (« partner.url »). */
+  properties?: string[];
 }
 
 /** Un appel de méthode à méthode lu dans le code. */

@@ -1570,6 +1570,12 @@ function pushOutgoing(
   if (method) call.method = method.toUpperCase();
   else if (call.status === 'STATICALLY_RESOLVED') call.status = 'INFERRED';
   if (evaluation.url !== undefined && evaluation.status !== 'UNKNOWN') call.path = urlPath(evaluation.url);
+  // L'origine de l'URL (schéma et hôte), sans identifiants ni gabarit non résolu.
+  const origin = /^([a-z][a-z0-9+.-]*:\/\/)(?:[^/@\s]*@)?([^/?#\s{}$]+)/i.exec(evaluation.url ?? '');
+  if (origin && evaluation.status !== 'UNKNOWN')
+    call.origin = `${origin[1] ?? ''}${origin[2] ?? ''}`.toLowerCase();
+  call.client = client;
+  if (evaluation.properties.length > 0) call.properties = [...evaluation.properties];
   ctx.out.outgoing.push(call);
   // Jamais d'identifiants d'URL (`user:secret@hôte`) dans le détail.
   const shown = (evaluation.url ?? '?').replace(/\/\/[^/@\s]*@/, '//');

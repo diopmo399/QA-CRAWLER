@@ -1,3 +1,4 @@
+import { cartographyView, type CartographyUi, type MapTab } from './dashboard-cartography.js';
 import type {
   AccessMe,
   Capabilities,
@@ -86,6 +87,8 @@ export type DashboardRoute =
   | { view: 'recordings'; projectId: string }
   /** La bibliothèque de scénarios : des blocs réutilisables. */
   | { view: 'library'; projectId: string }
+  /** La cartographie fonctionnelle d'un projet (sources, fonctionnalités, champs, couverture, impact). */
+  | { view: 'cartography'; projectId: string; tab?: MapTab }
   /** Les tests générés d'un enregistrement : génération et exécution réelle. */
   | { view: 'tests'; projectId: string; recording?: string }
   /** L'éditeur des tests générés d'un enregistrement (un fichier ouvert, une comparaison). */
@@ -209,6 +212,8 @@ export interface DashboardState {
   review?: ReviewUi;
   /** La bibliothèque de scénarios (blocs, ajout, composition, insertion). */
   lib: LibraryUi;
+  /** La cartographie : la vue du serveur, l'onglet, les critères de recherche, la fiche ouverte, l'impact. */
+  map?: CartographyUi;
   /** Les tests générés : l'enregistrement affiché, sa génération, ses exécutions. */
   tst: TestsUi;
   /** L'éditeur des tests générés : fichiers ouverts, brouillons, vues, diagnostics. */
@@ -241,6 +246,7 @@ const NAV: { section: NavSection; items: NavView[] }[] = [
       'history',
       'scenarios',
       'library',
+      'cartography',
       'recordings',
       'tests',
       'editor',
@@ -264,6 +270,7 @@ export function activeNav(route: DashboardRoute): NavView {
   if (route.view === 'access') return 'access';
   if (route.view === 'recordings' || route.view === 'recording') return 'recordings';
   if (route.view === 'library') return 'library';
+  if (route.view === 'cartography') return 'cartography';
   if (route.view === 'tests') return 'tests';
   if (route.view === 'editor') return 'editor';
   if (route.view === 'incidents' || route.view === 'incident') return 'incidents';
@@ -369,6 +376,8 @@ function body(state: DashboardState): string {
       return reviewView(state);
     case 'library':
       return libraryView(state);
+    case 'cartography':
+      return cartographyView(state);
     case 'tests':
       return testsView(state);
     case 'editor':

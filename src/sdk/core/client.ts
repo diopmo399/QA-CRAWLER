@@ -98,6 +98,28 @@ import type {
   RequirementsView,
   TrendsView,
 } from './contracts.js';
+import type {
+  CartographyConfig,
+  CartographyView,
+  ConceptRow,
+  EvidenceExcerpt,
+  FeatureDetail,
+  FeatureRow,
+  FieldIssue,
+  FieldRow,
+  FieldSheet,
+  ApiCatalog,
+  ApiSheet,
+  ImpactReport,
+  MapListQuery,
+  MapPage,
+  MapSubgraph,
+  MapSummary,
+  MapDecision,
+  MapDecisionInput,
+  MapSource,
+  ScanRecord,
+} from './cartography.js';
 import type { Journey, JourneyCheck, JourneySummary } from './journey.js';
 import type { JourneyPreview } from './journey-loop.js';
 import type { JourneyTraceability } from './journey-trace.js';
@@ -157,6 +179,11 @@ export interface ClientOptions {
   token?: string;
   /** Remplace le fetch global (tests, intercepteurs de l'hôte). */
   fetch?: typeof fetch;
+}
+
+/** Une requête de la cartographie : annulable quand la sélection change. */
+export interface MapRequestOptions {
+  signal?: AbortSignal;
 }
 
 export class QaCrawlerError extends Error {
@@ -481,6 +508,73 @@ export interface QaCrawlerClient {
       action: 'CONFIRM' | 'REJECT',
       options?: { note?: string },
     ): Promise<TraceabilityLink>;
+  };
+  /**
+   * La cartographie fonctionnelle d'un projet : les sources (sous les racines autorisées par le serveur),
+   * les scans, les fonctionnalités et champs découverts avec leurs preuves, la couverture par les
+   * scénarios, l'impact entre deux scans. Rien n'est confirmé sans décision d'une personne.
+   */
+  cartography: {
+    get(projectId: string, options?: { scan?: string }): Promise<CartographyView>;
+    /** Remplace la liste des sources ; chaque dossier est vérifié par le serveur. */
+    saveConfig(projectId: string, input: { sources: MapSource[] }): Promise<CartographyConfig>;
+    /** Lance un scan en arrière-plan (incrémental par défaut) ; un seul à la fois par projet. */
+    scan(projectId: string, options?: { incremental?: boolean }): Promise<ScanRecord>;
+    /** L'état du scan en cours, ou du dernier terminé depuis le démarrage du serveur. */
+    currentScan(projectId: string): Promise<ScanRecord>;
+    cancelScan(projectId: string): Promise<ScanRecord>;
+    decide(projectId: string, input: MapDecisionInput): Promise<MapDecision[]>;
+    /** Sans `from`/`to` : l'avant-dernier scan et le dernier. */
+    impact(projectId: string, input?: { from?: string; to?: string }): Promise<ImpactReport>;
+    /** Quelques lignes du fichier d'une preuve (jamais un fichier de secrets) ; `stale` si le fichier a changé depuis le scan. */
+    evidence(
+      projectId: string,
+      input: { source: string; file: string; line?: number },
+    ): Promise<EvidenceExcerpt>;
+    /** Exploration progressive : le résumé du premier affichage (aucun graphe). */
+    summary(projectId: string, options?: MapRequestOptions): Promise<MapSummary>;
+    /** Une page de fonctionnalités (recherche, critères, tri côté serveur). */
+    features(
+      projectId: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<FeatureRow>>;
+    feature(projectId: string, id: string, options?: MapRequestOptions): Promise<FeatureDetail>;
+    /** Une page des champs d'une seule fonctionnalité. */
+    featureFields(
+      projectId: string,
+      id: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<FieldRow>>;
+    /** La fiche d'un champ : son sous-graphe borné, sa séquence, ses réutilisations, ses scénarios, son impact. */
+    field(
+      projectId: string,
+      id: string,
+      query?: { feature?: string; depth?: number; limit?: number },
+      options?: MapRequestOptions,
+    ): Promise<FieldSheet>;
+    /** Les voisins d'un nœud, pour étendre un graphe affiché. */
+    neighbors(
+      projectId: string,
+      id: string,
+      query?: { depth?: number; limit?: number },
+      options?: MapRequestOptions,
+    ): Promise<MapSubgraph>;
+    concepts(
+      projectId: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<ConceptRow>>;
+    issues(
+      projectId: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<FieldIssue>>;
+    /** Le catalogue des API et services (recherche, périmètre, tri, pagination côté serveur). */
+    apis(projectId: string, query?: MapListQuery, options?: MapRequestOptions): Promise<ApiCatalog>;
+    /** La fiche d'une API : fonctionnalités, scénarios, parcours démontré, impact, criticité. */
+    api(projectId: string, id: string, options?: MapRequestOptions): Promise<ApiSheet>;
   };
   /**
    * Les accès : qui appelle et ses droits ; les membres (jetons nominatifs, rôles par projet) et le
@@ -885,10 +979,20 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
     ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
   });
 
-  async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  /** Les critères d'une requête, en paramètres d'adresse (les valeurs vides sont omises). */
+  const queryString = (query: Record<string, string | number | undefined>): string => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query))
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    const text = params.toString();
+    return text ? `?${text}` : '';
+  };
+
+  async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const text = await send(method, path, {
       headers: headers(body !== undefined),
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(signal ? { signal } : {}),
     });
     try {
       return (text ? JSON.parse(text) : undefined) as T;
@@ -904,6 +1008,9 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
     try {
       response = await doFetch(`${endpoint}${path}`, { method, ...init });
     } catch (error) {
+      // Une requête annulée par l'appelant (sélection changée) n'est pas une panne du serveur.
+      if (init.signal?.aborted)
+        throw new QaCrawlerError({ error: 'request aborted', status: 0, code: 'ABORTED' });
       throw new QaCrawlerError({
         error: `QA-CRAWLER server unreachable: ${error instanceof Error ? error.message : String(error)}`,
         status: 0,
@@ -1215,6 +1322,94 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           action,
           ...linkOptions,
         }),
+    },
+    cartography: {
+      get: (projectId, cartographyOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography${cartographyOptions.scan ? `?scan=${encodeURIComponent(cartographyOptions.scan)}` : ''}`,
+        ),
+      saveConfig: (projectId, input) => request('POST', `${project(projectId)}/cartography/config`, input),
+      scan: (projectId, scanOptions = {}) =>
+        request('POST', `${project(projectId)}/cartography/scans`, scanOptions),
+      currentScan: (projectId) => request('GET', `${project(projectId)}/cartography/scans/current`),
+      cancelScan: (projectId) => request('POST', `${project(projectId)}/cartography/scans/current/cancel`),
+      decide: (projectId, input) => request('POST', `${project(projectId)}/cartography/decisions`, input),
+      impact: (projectId, input = {}) => request('POST', `${project(projectId)}/cartography/impact`, input),
+      summary: (projectId, mapOptions = {}) =>
+        request('GET', `${project(projectId)}/cartography/summary`, undefined, mapOptions.signal),
+      features: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/features${queryString({ ...query })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      feature: (projectId, id, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/feature${queryString({ id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      featureFields: (projectId, id, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/feature-fields${queryString({ ...query, id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      field: (projectId, id, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/field${queryString({ ...query, id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      neighbors: (projectId, id, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/neighbors${queryString({ ...query, id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      concepts: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/concepts${queryString({ ...query })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      issues: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/issues${queryString({ ...query })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      apis: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/apis${queryString({ ...query })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      api: (projectId, id, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/api${queryString({ id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      evidence: (projectId, input) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/evidence?${new URLSearchParams({
+            source: input.source,
+            file: input.file,
+            ...(input.line !== undefined ? { line: String(input.line) } : {}),
+          }).toString()}`,
+        ),
     },
     access: {
       me: (meOptions = {}) =>

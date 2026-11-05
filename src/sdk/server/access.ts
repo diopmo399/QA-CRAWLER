@@ -251,6 +251,8 @@ export function rightFor(segments: readonly string[], method: string): Right {
       (segments[5] === 'scope' && (segments[6] === 'tree' || segments[6] === 'repositories')))
   )
     return 'RUN';
+  // L'extrait de code d'une preuve de la cartographie : lire le code, comme une investigation.
+  if (resource === 'projects' && sub === 'cartography' && item === 'evidence') return 'RUN';
   if (method === 'GET' || method === 'HEAD') return 'VIEW';
   if (resource === 'checks') return 'RUN';
   if (resource === 'explorations') return sub === 'report-links' ? 'VIEW' : 'RUN';
@@ -299,6 +301,16 @@ export function rightFor(segments: readonly string[], method: string): Right {
       return 'VIEW';
     case 'incidents':
       return incidentRight(segments);
+    case 'cartography':
+      // Les sources : configurer le projet ; lancer ou annuler un scan : analyser (RUN) ; confirmer,
+      // renommer, fusionner, associer : décider ; calculer un impact ne change rien.
+      return item === 'config'
+        ? 'MANAGE_PROJECTS'
+        : item === 'scans'
+          ? 'RUN'
+          : item === 'impact'
+            ? 'VIEW'
+            : 'DECIDE';
     case 'requirements':
       // …/requirements/links[/:link] ; …/requirements/imports/:batch/publish
       return item === 'links' || segments[6] === 'publish' ? 'PUBLISH' : 'DECIDE';
@@ -394,6 +406,10 @@ const KEYWORDS = new Set([
   'reports',
   'links',
   'requirements',
+  'cartography',
+  'scans',
+  'impact',
+  'evidence',
   'imports',
   'file',
   'decisions',

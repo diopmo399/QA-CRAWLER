@@ -1,0 +1,1189 @@
+import type {
+  FeatureDetail,
+  FieldSheet,
+  MapDecisionInput,
+  MapLayer,
+  MapListQuery,
+  MapSource,
+} from '../core/cartography.js';
+import type { QaCrawlerClient } from '../core/client.js';
+import { API_TABS, type ApiTab } from './dashboard-cartography-apis.js';
+import { mapStrings } from './dashboard-cartography-i18n.js';
+import {
+  CENTER_TABS,
+  emptyCartographyUi,
+  MAP_TABS,
+  type CartographyUi,
+  type CenterTab,
+  type ListCriteria,
+  type MapPane,
+  type MapTab,
+} from './dashboard-cartography.js';
+import type { DashboardRoute, DashboardState } from './dashboard-view.js';
+
+/**
+ * LE CONTRÔLEUR DE LA CARTOGRAPHIE, EN EXPLORATION PROGRESSIVE. Au premier affichage : le résumé et une
+ * page de fonctionnalités. Une fonctionnalité choisie : sa fiche et une page de ses champs. Un champ choisi :
+ * sa seule fiche. Chaque zone a sa requête : une nouvelle sélection ANNULE la précédente (rien d'obsolète
+ * n'est affiché), et les réponses déjà lues pour ce scan sont gardées (cache vidé à chaque nouveau scan
+ * ou décision). Aucune donnée n'est fabriquée ici : tout vient des réponses du serveur.
+ */
+export interface CartographyHost {
+  readonly root: ShadowRoot;
+  readonly state: DashboardState;
+  api(): QaCrawlerClient | undefined;
+  paint(): void;
+  navigate(route: DashboardRoute): void;
+}
+
+const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+const aborted = (error: unknown): boolean => (error as { code?: string } | undefined)?.code === 'ABORTED';
+const CACHE_MAX = 40;
+
+export class CartographyController {
+  private pollTimer?: ReturnType<typeof setTimeout>;
+  private searchTimer?: ReturnType<typeof setTimeout>;
+  private readonly inflight = new Map<MapPane, AbortController>();
+  /** Le projet affiché : un autre projet repart d'un état vide. */
+  private projectOfState?: string;
+  /** Les fiches déjà lues, valables pour une version des données (nouveau scan, décision : nouvelle version). */
+  private readonly cache = new Map<string, FeatureDetail | FieldSheet>();
+  private version = 0;
+
+  constructor(private readonly host: CartographyHost) {}
+
+  private get ui(): CartographyUi {
+    this.host.state.map ??= emptyCartographyUi();
+    return this.host.state.map;
+  }
+
+  private get projectId(): string | undefined {
+    const route = this.host.state.route;
+    return route.view === 'cartography' ? route.projectId : undefined;
+  }
+
+  private remember<T extends FeatureDetail | FieldSheet>(key: string, value: T): T {
+    this.cache.delete(key);
+    if (this.cache.size >= CACHE_MAX) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest !== undefined) this.cache.delete(oldest);
+    }
+    this.cache.set(key, value);
+    return value;
+  }
+
+  /** Les données ont changé (scan, décision) : le cache local ne sert plus. */
+  private invalidate(): void {
+    this.version += 1;
+    this.cache.clear();
+    // Le catalogue des API et la fiche choisie sont relus (la sélection est gardée).
+    if (this.host.state.map) {
+      this.host.state.map.apis = undefined;
+      this.host.state.map.apiSheet = undefined;
+    }
+  }
+
+  /**
+   * Une requête d'une zone : la précédente de la même zone est annulée ; l'état de chargement et l'erreur
+   * sont ceux de la zone. Une réponse arrivée après une autre sélection n'est jamais affichée.
+   */
+  private async fetch<T>(
+    pane: MapPane,
+    run: (api: QaCrawlerClient, projectId: string, signal: AbortSignal) => Promise<T>,
+  ): Promise<T | undefined> {
+    const api = this.host.api();
+    const projectId = this.projectId;
+    if (!api || !projectId) return undefined;
+    this.inflight.get(pane)?.abort();
+    const controller = new AbortController();
+    this.inflight.set(pane, controller);
+    this.ui.loading[pane] = true;
+    this.ui.errors[pane] = undefined;
+    try {
+      const value = await run(api, projectId, controller.signal);
+      return controller.signal.aborted || this.projectId !== projectId ? undefined : value;
+    } catch (error) {
+      if (!aborted(error) && !controller.signal.aborted) this.ui.errors[pane] = message(error);
+      return undefined;
+    } finally {
+      if (this.inflight.get(pane) === controller) {
+        this.inflight.delete(pane);
+        this.ui.loading[pane] = false;
+      }
+    }
+  }
+
+  private query(criteria: ListCriteria): MapListQuery {
+    return {
+      ...(criteria.q.trim() ? { q: criteria.q.trim() } : {}),
+      ...(criteria.module ? { module: criteria.module } : {}),
+      ...(criteria.layer ? { layer: criteria.layer } : {}),
+      ...(criteria.status ? { status: criteria.status } : {}),
+      ...(criteria.coverage ? { coverage: criteria.coverage } : {}),
+      ...(criteria.type ? { type: criteria.type } : {}),
+      ...(criteria.sort ? { sort: criteria.sort } : {}),
+      page: criteria.page,
+      size: criteria.size,
+    };
+  }
+
+  /** Le premier affichage : le résumé, une page de fonctionnalités ; la sélection gardée est relue. */
+  async load(api: QaCrawlerClient, projectId: string, current: () => boolean): Promise<void> {
+    if (this.projectOfState !== projectId) {
+      const tab = this.ui.tab;
+      this.host.state.map = { ...emptyCartographyUi(), tab };
+      this.projectOfState = projectId;
+      this.invalidate();
+    }
+    const [summary, scenarios] = await Promise.all([
+      api.cartography.summary(projectId),
+      api.scenarios.list(projectId).catch(() => []),
+    ]);
+    if (!current()) return;
+    if (summary.scan?.id !== this.ui.summary?.scan?.id) this.invalidate();
+    this.ui.summary = summary;
+    this.ui.scenarios = scenarios;
+    this.ui.errors.summary = undefined;
+    if (this.ui.sources && summary.config.updatedAt !== this.ui.summary.config.updatedAt)
+      this.ui.sources = undefined;
+    if (summary.running) this.poll(projectId);
+    if (!summary.scan) return;
+    await this.loadFeatures();
+    if (!current()) return;
+    // Une fonctionnalité est montrée d'emblée (la première de la page) : sa fiche et une page de ses champs.
+    if (!this.ui.feature && this.ui.features?.items[0]) this.ui.feature = this.ui.features.items[0].id;
+    await Promise.all([this.loadDetail(), this.loadFields(), this.loadSheet(), this.loadTab()]);
+  }
+
+  private async reloadAll(): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId;
+    if (!api || !projectId) return;
+    try {
+      await this.load(api, projectId, () => this.projectId === projectId);
+    } catch (error) {
+      this.ui.error = message(error);
+    }
+    this.host.paint();
+  }
+
+  private async loadFeatures(): Promise<void> {
+    const page = await this.fetch('features', (api, id, signal) =>
+      api.cartography.features(id, this.query(this.ui.featureCriteria), { signal }),
+    );
+    if (page) {
+      this.ui.features = page;
+      this.ui.featureCriteria.page = page.page;
+    }
+  }
+
+  private async loadDetail(): Promise<void> {
+    const feature = this.ui.feature;
+    if (!feature) {
+      this.ui.detail = undefined;
+      return;
+    }
+    const key = `${String(this.version)}|feature|${feature}`;
+    const cached = this.cache.get(key) as FeatureDetail | undefined;
+    if (cached) {
+      this.ui.detail = cached;
+      return;
+    }
+    if (this.ui.detail?.feature.id !== feature) this.ui.detail = undefined;
+    const detail = await this.fetch('detail', (api, id, signal) =>
+      api.cartography.feature(id, feature, { signal }),
+    );
+    if (detail && this.ui.feature === feature) this.ui.detail = this.remember(key, detail);
+  }
+
+  private async loadFields(): Promise<void> {
+    const feature = this.ui.feature;
+    if (!feature) {
+      this.ui.fields = undefined;
+      return;
+    }
+    const page = await this.fetch('fields', (api, id, signal) =>
+      api.cartography.featureFields(id, feature, this.query(this.ui.fieldCriteria), { signal }),
+    );
+    if (page && this.ui.feature === feature) {
+      this.ui.fields = page;
+      this.ui.fieldCriteria.page = page.page;
+      // Le premier champ est montré d'emblée, sauf si un autre est déjà choisi dans cette fonctionnalité.
+      if (!this.ui.field && page.items[0]) {
+        this.ui.field = page.items[0].id;
+        await this.loadSheet();
+      }
+    }
+  }
+
+  private async loadSheet(): Promise<void> {
+    const field = this.ui.field;
+    if (!field) {
+      this.ui.sheet = undefined;
+      return;
+    }
+    const feature = this.ui.feature;
+    const key = `${String(this.version)}|field|${feature ?? ''}|${field}`;
+    const cached = this.cache.get(key) as FieldSheet | undefined;
+    const sheet =
+      cached ??
+      (await this.fetch('sheet', (api, id, signal) =>
+        api.cartography.field(
+          id,
+          field,
+          { ...(feature ? { feature } : {}), depth: 1, limit: 60 },
+          { signal },
+        ),
+      ));
+    if (sheet && this.ui.field === field) {
+      if (this.ui.sheet?.node.id !== sheet.node.id) this.resetGraph();
+      this.ui.sheet = cached ? sheet : this.remember(key, sheet);
+      this.ui.expansion = undefined;
+      // Une proposition : les scénarios dont l'impact est démontré sont cochés ; rien n'est lancé.
+      this.ui.fieldPicked = [...sheet.impact.demonstrated.scenarios];
+    }
+  }
+
+  private async loadConcepts(): Promise<void> {
+    const page = await this.fetch('concepts', (api, id, signal) =>
+      api.cartography.concepts(id, this.query(this.ui.conceptCriteria), { signal }),
+    );
+    if (page) {
+      this.ui.concepts = page;
+      this.ui.conceptCriteria.page = page.page;
+    }
+  }
+
+  private async loadIssues(): Promise<void> {
+    const page = await this.fetch('issues', (api, id, signal) =>
+      api.cartography.issues(id, { page: this.ui.issuesPage, size: 20 }, { signal }),
+    );
+    if (page) {
+      this.ui.issues = page;
+      this.ui.issuesPage = page.page;
+    }
+  }
+
+  private async loadConceptSheet(): Promise<void> {
+    const concept = this.ui.concept;
+    if (!concept) return;
+    // L'identifiant d'un concept est celui de son champ de départ, préfixé.
+    const node = concept.replace(/^CONCEPT:/, '');
+    const sheet = await this.fetch('conceptSheet', (api, id, signal) =>
+      api.cartography.field(id, node, { depth: 1, limit: 60 }, { signal }),
+    );
+    if (sheet && this.ui.concept === concept) this.ui.conceptSheet = sheet;
+  }
+
+  /** Ce que l'onglet affiché demande de plus (et seulement lui). */
+  private async loadApis(): Promise<void> {
+    const ui = this.ui;
+    const catalog = await this.fetch('apis', (api, id, signal) =>
+      api.cartography.apis(
+        id,
+        { ...this.query(ui.apiCriteria), ...(ui.apiScope ? { scope: ui.apiScope } : {}) },
+        { signal },
+      ),
+    );
+    if (!catalog) return;
+    ui.apis = catalog;
+    ui.apiCriteria.page = catalog.page;
+    // La première API de la page est montrée d'emblée, sauf si une autre est déjà choisie.
+    if (!ui.api && catalog.items[0]) ui.api = catalog.items[0].id;
+  }
+
+  private async loadApiSheet(): Promise<void> {
+    const id = this.ui.api;
+    if (!id) {
+      this.ui.apiSheet = undefined;
+      return;
+    }
+    const sheet = await this.fetch('apiSheet', (api, projectId, signal) =>
+      api.cartography.api(projectId, id, { signal }),
+    );
+    if (sheet && this.ui.api === id) {
+      this.ui.apiSheet = sheet;
+      // Une proposition : les scénarios dont l'impact est prouvé sont cochés ; rien n'est lancé.
+      this.ui.apiPicked = [...sheet.impact.demonstrated.scenarios];
+    }
+  }
+
+  private async loadTab(): Promise<void> {
+    if (this.ui.tab === 'apis') {
+      if (!this.ui.apis) await this.loadApis();
+      if (this.ui.api && this.ui.apiSheet?.api.id !== this.ui.api) await this.loadApiSheet();
+      return;
+    }
+    if (this.ui.tab === 'fields') {
+      await Promise.all([
+        this.ui.concepts ? undefined : this.loadConcepts(),
+        this.ui.issues ? undefined : this.loadIssues(),
+        this.ui.concept && !this.ui.conceptSheet ? this.loadConceptSheet() : undefined,
+      ]);
+    }
+  }
+
+  private async run(...steps: (() => Promise<void>)[]): Promise<void> {
+    this.host.paint();
+    for (const step of steps) await step();
+    this.host.paint();
+  }
+
+  /** Un scan en cours : son état est relu jusqu'à la fin, puis tout l'affichage. */
+  private poll(projectId: string): void {
+    if (this.pollTimer) return;
+    const api = this.host.api();
+    if (!api) return;
+    const tick = async (): Promise<void> => {
+      this.pollTimer = undefined;
+      if (this.projectId !== projectId) return;
+      try {
+        const state = await api.cartography.currentScan(projectId);
+        if (this.ui.summary) this.ui.summary.running = state.state === 'RUNNING' ? state : undefined;
+        if (state.state === 'RUNNING') {
+          this.host.paint();
+          this.pollTimer = setTimeout(() => void tick(), 400);
+          return;
+        }
+        const m = mapStrings(this.host.state.t.locale);
+        this.host.state.notice = m.scanDone(m.scanState[state.state] ?? state.state);
+      } catch (error) {
+        this.ui.error = message(error);
+      }
+      this.invalidate();
+      await this.reloadAll();
+    };
+    this.pollTimer = setTimeout(() => void tick(), 300);
+  }
+
+  dispose(): void {
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    if (this.searchTimer) clearTimeout(this.searchTimer);
+    for (const controller of this.inflight.values()) controller.abort();
+    this.inflight.clear();
+    this.pollTimer = undefined;
+  }
+
+  private selectFeature(feature: string, concept?: string): void {
+    const ui = this.ui;
+    if (ui.feature !== feature) {
+      ui.feature = feature;
+      ui.detail = undefined;
+      ui.fields = undefined;
+      ui.field = undefined;
+      ui.sheet = undefined;
+      ui.fieldCriteria = { ...ui.fieldCriteria, q: '', type: '', layer: '', page: 1 };
+    }
+    ui.decision = undefined;
+    ui.decisionError = undefined;
+    if (ui.tab === 'fields' || ui.tab === 'impact' || ui.tab === 'apis') ui.tab = 'features';
+    void this.run(async () => {
+      if (concept) {
+        // « Réutilisé dans » : le même concept, retrouvé dans l'autre fonctionnalité par le serveur.
+        const row = await this.fetch('fields', (api, id, signal) =>
+          api.cartography.featureFields(id, feature, { concept, size: 1 }, { signal }),
+        );
+        if (row?.items[0]) ui.field = row.items[0].id;
+      }
+      await Promise.all([this.loadDetail(), this.loadFields(), this.loadSheet()]);
+    });
+  }
+
+  /** Un autre champ : la vue du graphe repart de son cadrage et sans sélection. */
+  private resetGraph(): void {
+    const ui = this.ui;
+    ui.graphSel = undefined;
+    ui.relStep = undefined;
+    ui.zoom = 1;
+    ui.panX = 0;
+    ui.panY = 0;
+    ui.allEvidence = false;
+  }
+
+  private canvas(): { canvas: HTMLElement; inner: HTMLElement } | undefined {
+    const canvas = this.host.root.querySelector<HTMLElement>('[data-map-canvas]');
+    const inner = canvas?.firstElementChild as HTMLElement | null | undefined;
+    return canvas && inner ? { canvas, inner } : undefined;
+  }
+
+  /** Le zoom autour du centre de la zone affichée (la vue garde ce qu'elle montrait au milieu). */
+  private zoomBy(factor: number): void {
+    const ui = this.ui;
+    const next = Math.min(2.5, Math.max(0.3, Math.round(ui.zoom * factor * 100) / 100));
+    const box = this.canvas();
+    const cx = (box?.canvas.clientWidth ?? 0) / 2;
+    const cy = (box?.canvas.clientHeight ?? 0) / 2;
+    ui.panX = Math.round(cx - ((cx - ui.panX) * next) / ui.zoom);
+    ui.panY = Math.round(cy - ((cy - ui.panY) * next) / ui.zoom);
+    ui.zoom = next;
+    this.host.paint();
+  }
+
+  /** Ajuster à la vue : le contenu entier, à l'échelle de la zone, centré (mesuré dans la page). */
+  private fit(): void {
+    const ui = this.ui;
+    const box = this.canvas();
+    const content = box?.inner.firstElementChild as HTMLElement | null | undefined;
+    if (!box || !content) return;
+    const width = content.getBoundingClientRect().width / ui.zoom + 32;
+    const height = content.getBoundingClientRect().height / ui.zoom + 44;
+    const cw = box.canvas.clientWidth;
+    const ch = box.canvas.clientHeight;
+    if (width <= 0 || cw <= 0) return;
+    const scale = ui.graphMode === 'full' ? Math.min(cw / width, ch / height) : cw / width;
+    ui.zoom = Math.min(1.5, Math.max(0.3, Math.round(scale * 100) / 100));
+    ui.panX = Math.max(0, Math.round((cw - width * ui.zoom) / 2));
+    ui.panY = ui.graphMode === 'full' ? Math.max(0, Math.round((ch - height * ui.zoom) / 2)) : 0;
+    this.host.paint();
+  }
+
+  /** Déplacer la vue en glissant dans la zone du graphe (hors des boutons, nœuds et liens). */
+  pointerDown(event: PointerEvent): boolean {
+    const target = event.target as Element | null;
+    const canvas = target?.closest<HTMLElement>('[data-map-canvas]');
+    if (!canvas || event.button !== 0 || target?.closest('[data-action]')) return false;
+    const inner = canvas.firstElementChild as HTMLElement | null;
+    if (!inner) return false;
+    const ui = this.ui;
+    const start = { x: event.clientX, y: event.clientY, panX: ui.panX, panY: ui.panY };
+    const id = event.pointerId;
+    canvas.classList.add('dragging');
+    try {
+      canvas.setPointerCapture(id);
+    } catch {
+      // Le pointeur n'est plus actif : le glisser continue sans capture.
+    }
+    const move = (e: PointerEvent): void => {
+      if (e.pointerId !== id) return;
+      ui.panX = Math.round(start.panX + e.clientX - start.x);
+      ui.panY = Math.round(start.panY + e.clientY - start.y);
+      inner.style.transform = `translate(${String(ui.panX)}px,${String(ui.panY)}px) scale(${String(ui.zoom)})`;
+    };
+    const end = (e: PointerEvent): void => {
+      if (e.pointerId !== id) return;
+      canvas.classList.remove('dragging');
+      canvas.removeEventListener('pointermove', move);
+      canvas.removeEventListener('pointerup', end);
+      canvas.removeEventListener('pointercancel', end);
+    };
+    canvas.addEventListener('pointermove', move);
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+    return true;
+  }
+
+  click(action: string, target: HTMLElement): boolean {
+    const ui = this.ui;
+    switch (action) {
+      case 'map-api': {
+        const id = target.dataset.api ?? '';
+        if (ui.api !== id) {
+          ui.api = id;
+          ui.apiSheet = undefined;
+          ui.apiRename = undefined;
+          this.resetGraph();
+        }
+        void this.run(() => this.loadApiSheet());
+        return true;
+      }
+      case 'map-api-scope':
+        ui.apiScope = target.dataset.scope ?? '';
+        ui.apiCriteria.page = 1;
+        void this.run(() => this.loadApis());
+        return true;
+      case 'map-api-sort':
+        ui.showApiSort = !ui.showApiSort;
+        this.host.paint();
+        return true;
+      case 'map-api-tab': {
+        const tab = target.dataset.tab as ApiTab;
+        if (API_TABS.includes(tab)) ui.apiTab = tab;
+        this.host.paint();
+        return true;
+      }
+      case 'map-api-rename-open':
+        ui.apiRename = ui.apiSheet?.api.name ?? '';
+        this.host.paint();
+        this.host.root.querySelector<HTMLInputElement>('input[data-map="api-name"]')?.focus();
+        return true;
+      case 'map-api-rename-cancel':
+        ui.apiRename = undefined;
+        this.host.paint();
+        return true;
+      case 'map-api-classify':
+        if (ui.api)
+          void this.decide({ kind: 'CLASSIFY_API', target: ui.api, value: target.dataset.value ?? '' });
+        return true;
+      case 'map-api-copy': {
+        const textToCopy = target.dataset.text ?? '';
+        void navigator.clipboard.writeText(textToCopy).catch(() => undefined);
+        return true;
+      }
+      case 'map-api-launch':
+        void this.launch(ui.apiPicked);
+        return true;
+      case 'map-g-mode':
+        ui.graphMode = target.dataset.mode === 'full' ? 'full' : 'path';
+        ui.graphSel = undefined;
+        ui.relStep = undefined;
+        ui.zoom = 1;
+        ui.panX = 0;
+        ui.panY = 0;
+        this.host.paint();
+        return true;
+      case 'map-g-zoom':
+        this.zoomBy(target.dataset.dir === '-1' ? 1 / 1.2 : 1.2);
+        return true;
+      case 'map-g-fit':
+        this.fit();
+        return true;
+      case 'map-g-full':
+        ui.fullscreen = !ui.fullscreen;
+        this.host.paint();
+        this.host.root.querySelector<HTMLElement>('[data-action="map-g-full"]')?.focus();
+        return true;
+      case 'map-g-collapse':
+        ui.expansion = undefined;
+        ui.graphSel = undefined;
+        this.host.paint();
+        return true;
+      case 'map-g-select': {
+        if (target.dataset.kind === 'node') {
+          const id = target.dataset.id ?? '';
+          ui.graphSel =
+            ui.graphSel?.kind === 'node' && ui.graphSel.id === id ? undefined : { kind: 'node', id };
+        } else {
+          const ids = (target.dataset.ids ?? '').split(' ').filter(Boolean);
+          if (ids.length === 0) return true;
+          const same = ui.graphSel?.kind === 'edge' && ui.graphSel.ids.join(' ') === ids.join(' ');
+          ui.graphSel = same ? undefined : { kind: 'edge', ids };
+        }
+        ui.relStep = undefined;
+        this.host.paint();
+        return true;
+      }
+      case 'map-rel-toggle':
+        // Le tableau se replie de lui-même (élément natif) : l'état suit, sans redessin.
+        ui.relOpen = !(target.closest('details')?.open ?? true);
+        return true;
+      case 'map-g-clear':
+        ui.graphSel = undefined;
+        this.host.paint();
+        return true;
+      case 'map-rel-step': {
+        const step = target.dataset.step ?? '';
+        ui.relStep = ui.relStep === step ? undefined : step;
+        ui.graphSel = undefined;
+        ui.relOpen = true;
+        this.host.paint();
+        return true;
+      }
+      case 'map-rel-all':
+        ui.relStep = undefined;
+        ui.graphSel = undefined;
+        this.host.paint();
+        return true;
+      case 'map-details-toggle':
+        ui.detailsCollapsed = !ui.detailsCollapsed;
+        this.host.paint();
+        return true;
+      case 'map-evidence-all':
+        ui.allEvidence = !ui.allEvidence;
+        this.host.paint();
+        return true;
+      case 'map-impact-open':
+        ui.impactOpen = !ui.impactOpen;
+        this.host.paint();
+        return true;
+      case 'map-tab': {
+        const tab = target.dataset.tab as MapTab;
+        if (!MAP_TABS.includes(tab)) return true;
+        ui.tab = tab;
+        void this.run(() => this.loadTab());
+        return true;
+      }
+      case 'map-center-tab': {
+        const tab = target.dataset.tab as CenterTab;
+        if (CENTER_TABS.includes(tab)) ui.centerTab = tab;
+        if (ui.tab !== 'features') ui.tab = 'features';
+        this.host.paint();
+        return true;
+      }
+      case 'map-feature':
+        this.selectFeature(target.dataset.feature ?? '');
+        return true;
+      case 'map-reuse-open':
+        this.selectFeature(target.dataset.feature ?? '', target.dataset.concept);
+        return true;
+      case 'map-field':
+        ui.field = target.dataset.field;
+        ui.expansion = undefined;
+        void this.run(() => this.loadSheet());
+        return true;
+      case 'map-field-close':
+        ui.field = undefined;
+        ui.sheet = undefined;
+        this.host.paint();
+        return true;
+      case 'map-criteria':
+        ui.showCriteria = !ui.showCriteria;
+        this.host.paint();
+        return true;
+      case 'map-graph-view':
+        ui.graphView = target.dataset.view === 'sequence' ? 'sequence' : 'graph';
+        this.host.paint();
+        return true;
+      case 'map-expand':
+        void this.expand(target.dataset.node ?? '');
+        return true;
+      case 'map-page': {
+        const page = Math.max(1, Number(target.dataset.page) || 1);
+        const list = target.dataset.list;
+        if (list === 'features') {
+          ui.featureCriteria.page = page;
+          void this.run(() => this.loadFeatures());
+        } else if (list === 'fields') {
+          ui.fieldCriteria.page = page;
+          void this.run(() => this.loadFields());
+        } else if (list === 'concepts') {
+          ui.conceptCriteria.page = page;
+          void this.run(() => this.loadConcepts());
+        } else if (list === 'apis') {
+          ui.apiCriteria.page = page;
+          void this.run(() => this.loadApis());
+        } else if (list === 'issues') {
+          ui.issuesPage = page;
+          void this.run(() => this.loadIssues());
+        }
+        return true;
+      }
+      case 'map-concept':
+        ui.concept = target.dataset.concept;
+        ui.conceptSheet = undefined;
+        ui.tab = 'fields';
+        void this.run(() => this.loadTab());
+        return true;
+      case 'map-open-scenario': {
+        const projectId = this.projectId;
+        if (projectId)
+          this.host.navigate({ view: 'scenarios', projectId, scenario: target.dataset.scenario ?? '' });
+        return true;
+      }
+      case 'map-refresh':
+        this.invalidate();
+        void this.reloadAll();
+        return true;
+      case 'map-scan':
+        void this.scan();
+        return true;
+      case 'map-scan-cancel':
+        void this.act(
+          async (api, projectId) => {
+            await api.cartography.cancelScan(projectId);
+          },
+          (text) => {
+            ui.error = text;
+          },
+        );
+        return true;
+      case 'map-export':
+        void this.export();
+        return true;
+      case 'map-src-add':
+        this.draft().push({
+          id: `source-${String(this.draft().length + 1)}`,
+          name: '',
+          layer: 'FRONTEND',
+          path: '',
+          include: [],
+          enabled: true,
+        });
+        this.host.paint();
+        return true;
+      case 'map-src-remove':
+        this.draft().splice(Number(target.dataset.index), 1);
+        this.host.paint();
+        return true;
+      case 'map-src-save':
+        void this.saveSources();
+        return true;
+      case 'map-decide':
+        void this.decide({
+          kind: target.dataset.kind as MapDecisionInput['kind'],
+          target: target.dataset.target ?? '',
+          ...(target.dataset.value ? { value: target.dataset.value } : {}),
+        });
+        return true;
+      case 'map-decision-open':
+        ui.decision = {
+          kind: target.dataset.kind === 'MERGE' ? 'MERGE' : 'RENAME',
+          value: target.dataset.kind === 'MERGE' ? '' : (ui.detail?.feature.name ?? ''),
+        };
+        ui.decisionError = undefined;
+        this.host.paint();
+        return true;
+      case 'map-decision-cancel':
+        ui.decision = undefined;
+        ui.decisionError = undefined;
+        this.host.paint();
+        return true;
+      case 'map-decision-save':
+        if (ui.feature && ui.decision)
+          void this.decide({ kind: ui.decision.kind, target: ui.feature, value: ui.decision.value });
+        return true;
+      case 'map-evidence':
+        void this.evidence(
+          target.dataset.source ?? '',
+          target.dataset.file ?? '',
+          Number(target.dataset.line) || 1,
+        );
+        return true;
+      case 'map-evidence-close':
+        ui.evidence = undefined;
+        ui.evidenceError = undefined;
+        this.host.paint();
+        return true;
+      case 'map-impact':
+        void this.impact();
+        return true;
+      case 'map-impact-launch':
+        void this.launch([...ui.impactPicked]);
+        return true;
+      case 'map-field-launch':
+        void this.launch([...ui.fieldPicked]);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /** Étendre le graphe affiché autour d'un nœud (ses voisins, bornés), sans recharger le reste. */
+  private async expand(node: string): Promise<void> {
+    if (!node || !this.ui.sheet) return;
+    const around = await this.fetch('sheet', (api, id, signal) =>
+      api.cartography.neighbors(id, node, { depth: 1, limit: 30 }, { signal }),
+    );
+    if (!around) {
+      this.host.paint();
+      return;
+    }
+    const previous = this.ui.expansion;
+    const nodes = new Map([...(previous?.nodes ?? []), ...around.nodes].map((n) => [n.id, n]));
+    const edges = new Map([...(previous?.edges ?? []), ...around.edges].map((e) => [e.id, e]));
+    this.ui.expansion = {
+      ...around,
+      nodes: [...nodes.values()],
+      edges: [...edges.values()],
+      truncated: Boolean(previous?.truncated) || around.truncated,
+    };
+    this.host.paint();
+  }
+
+  /** Un formulaire de l'écran : association d'un scénario à la fonctionnalité, ou au champ. */
+  submit(form: HTMLFormElement): boolean {
+    const ui = this.ui;
+    if (form.dataset.action === 'map-link-add') {
+      if (ui.feature && ui.linkDraft.scenario)
+        void this.decide({
+          kind: 'LINK_SCENARIO',
+          target: ui.feature,
+          value: ui.linkDraft.scenario,
+          path: ui.linkDraft.path,
+        });
+      return true;
+    }
+    if (form.dataset.action === 'map-api-rename') {
+      const name = ui.apiRename?.trim();
+      if (ui.api && name) void this.decide({ kind: 'RENAME_API', target: ui.api, value: name });
+      return true;
+    }
+    if (form.dataset.action === 'map-field-link') {
+      if (ui.field && ui.fieldLinkDraft)
+        void this.decide({ kind: 'LINK_FIELD', target: ui.field, value: ui.fieldLinkDraft });
+      return true;
+    }
+    return false;
+  }
+
+  /** Les flèches haut et bas passent d'un élément à l'autre d'une liste (fonctionnalités, champs). */
+  keydown(event: KeyboardEvent): boolean {
+    const target = event.target as HTMLElement | null;
+    const ui = this.ui;
+    if (event.key === 'Escape' && ui.fullscreen) {
+      ui.fullscreen = false;
+      this.host.paint();
+      this.host.root.querySelector<HTMLElement>('[data-action="map-g-full"]')?.focus();
+      return true;
+    }
+    // Le graphe au clavier : + et - zooment, les flèches déplacent la vue, 0 l'ajuste.
+    if (target?.hasAttribute('data-map-canvas')) {
+      const step = 40;
+      const moves: Record<string, [number, number]> = {
+        ArrowLeft: [step, 0],
+        ArrowRight: [-step, 0],
+        ArrowUp: [0, step],
+        ArrowDown: [0, -step],
+      };
+      const move = moves[event.key];
+      if (event.key === '+' || event.key === '=') this.zoomBy(1.2);
+      else if (event.key === '-') this.zoomBy(1 / 1.2);
+      else if (event.key === '0') this.fit();
+      else if (move) {
+        ui.panX += move[0];
+        ui.panY += move[1];
+        this.host.paint();
+      } else return false;
+      event.preventDefault();
+      this.host.root.querySelector<HTMLElement>('[data-map-canvas]')?.focus();
+      return true;
+    }
+    const list = target?.dataset.nav;
+    if (!target || !list || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')) return false;
+    const items = [...this.host.root.querySelectorAll<HTMLElement>(`[data-nav="${list}"]`)];
+    const index = items.indexOf(target);
+    const next = items[index + (event.key === 'ArrowDown' ? 1 : -1)];
+    if (!next) return false;
+    event.preventDefault();
+    next.focus();
+    return true;
+  }
+
+  private draft(): MapSource[] {
+    this.ui.sources ??= structuredClone(this.ui.summary?.config.sources ?? []);
+    return this.ui.sources;
+  }
+
+  /** Une recherche tapée : la requête part quand la saisie se pose (les précédentes sont annulées). */
+  private searchLater(run: () => Promise<void>): void {
+    if (this.searchTimer) clearTimeout(this.searchTimer);
+    this.searchTimer = setTimeout(() => {
+      this.searchTimer = undefined;
+      void this.run(run);
+    }, 250);
+  }
+
+  /** Une saisie : gardée dans l'état ; une liste est relue côté serveur (le focus est rendu par le Dashboard). */
+  input(target: HTMLInputElement | HTMLSelectElement, committed: boolean): boolean {
+    const name = target.dataset.map;
+    if (!name) return false;
+    const ui = this.ui;
+    const value = target.value;
+    const checked = (target as HTMLInputElement).checked;
+    if (name.startsWith('src-')) {
+      const source = this.draft()[Number(target.dataset.index)];
+      if (!source) return true;
+      const field = name.slice(4);
+      if (field === 'enabled') {
+        source.enabled = checked;
+        // Sur la vue d'ensemble, cocher une source l'enregistre aussitôt.
+        if (ui.tab !== 'scan') void this.saveSources();
+        return true;
+      }
+      if (field === 'include')
+        source.include = value
+          .split(',')
+          .map((part) => part.trim())
+          .filter(Boolean);
+      else if (field === 'layer') source.layer = value as MapLayer;
+      else if (field === 'id' || field === 'name' || field === 'path') source[field] = value;
+      return true;
+    }
+    const criteria = (
+      list: ListCriteria,
+      key: keyof ListCriteria,
+      reload: () => Promise<void>,
+      typed: boolean,
+    ): void => {
+      if (list[key] === value) return;
+      (list as unknown as Record<string, string | number>)[key] = value;
+      list.page = 1;
+      if (typed) this.searchLater(reload);
+      else void this.run(reload);
+    };
+    switch (name) {
+      case 'f-q':
+        criteria(ui.featureCriteria, 'q', () => this.loadFeatures(), !committed);
+        return true;
+      case 'f-module':
+      case 'f-layer':
+      case 'f-status':
+      case 'f-coverage':
+      case 'f-sort':
+        criteria(ui.featureCriteria, name.slice(2) as keyof ListCriteria, () => this.loadFeatures(), false);
+        return true;
+      case 'features-size':
+        ui.featureCriteria.size = Number(value) || 5;
+        ui.featureCriteria.page = 1;
+        void this.run(() => this.loadFeatures());
+        return true;
+      case 'c-q':
+        criteria(ui.fieldCriteria, 'q', () => this.loadFields(), !committed);
+        return true;
+      case 'c-type':
+      case 'c-layer':
+        criteria(ui.fieldCriteria, name.slice(2) as keyof ListCriteria, () => this.loadFields(), false);
+        return true;
+      case 'fields-size':
+        ui.fieldCriteria.size = Number(value) || 5;
+        ui.fieldCriteria.page = 1;
+        void this.run(() => this.loadFields());
+        return true;
+      case 'a-q':
+        criteria(ui.apiCriteria, 'q', () => this.loadApis(), !committed);
+        return true;
+      case 'a-sort':
+        criteria(ui.apiCriteria, 'sort', () => this.loadApis(), false);
+        return true;
+      case 'apis-size':
+        ui.apiCriteria.size = Number(value) || 5;
+        ui.apiCriteria.page = 1;
+        void this.run(() => this.loadApis());
+        return true;
+      case 'api-name':
+        ui.apiRename = value;
+        return true;
+      case 'api-pick': {
+        const scenario = target.dataset.scenario ?? '';
+        ui.apiPicked = checked
+          ? [...new Set([...ui.apiPicked, scenario])]
+          : ui.apiPicked.filter((x) => x !== scenario);
+        this.host.paint();
+        return true;
+      }
+      case 'k-q':
+        criteria(ui.conceptCriteria, 'q', () => this.loadConcepts(), !committed);
+        return true;
+      case 'k-layer':
+      case 'k-status':
+        criteria(ui.conceptCriteria, name.slice(2) as keyof ListCriteria, () => this.loadConcepts(), false);
+        return true;
+      case 'concepts-size':
+        ui.conceptCriteria.size = Number(value) || 20;
+        ui.conceptCriteria.page = 1;
+        void this.run(() => this.loadConcepts());
+        return true;
+      case 'trace-feature':
+        if (committed) this.selectFeature(value);
+        return true;
+      case 'incremental':
+        ui.incremental = checked;
+        return true;
+      case 'decision-value':
+        if (ui.decision) ui.decision.value = value;
+        if (committed) this.host.paint();
+        return true;
+      case 'link-scenario':
+        ui.linkDraft.scenario = value;
+        this.host.paint();
+        return true;
+      case 'link-path':
+        ui.linkDraft.path = value === 'NEGATIVE' ? 'NEGATIVE' : 'POSITIVE';
+        return true;
+      case 'field-link':
+        ui.fieldLinkDraft = value;
+        this.host.paint();
+        return true;
+      case 'impact-from':
+        ui.impactFrom = value;
+        return true;
+      case 'impact-to':
+        ui.impactTo = value;
+        return true;
+      case 'impact-env':
+        ui.impactEnv = value;
+        return true;
+      case 'group-parallel':
+        ui.grouped = checked;
+        this.host.paint();
+        return true;
+      case 'impact-pick':
+      case 'field-pick': {
+        const scenario = target.dataset.scenario ?? '';
+        const list = name === 'impact-pick' ? ui.impactPicked : ui.fieldPicked;
+        const next = checked ? [...new Set([...list, scenario])] : list.filter((s) => s !== scenario);
+        if (name === 'impact-pick') ui.impactPicked = next;
+        else ui.fieldPicked = next;
+        this.host.paint();
+        return true;
+      }
+      default:
+        return true;
+    }
+  }
+
+  private async act(
+    run: (api: QaCrawlerClient, projectId: string) => Promise<void>,
+    onError: (text: string) => void,
+  ): Promise<void> {
+    const api = this.host.api();
+    const projectId = this.projectId;
+    if (!api || !projectId) return;
+    try {
+      await run(api, projectId);
+    } catch (error) {
+      onError(message(error));
+    }
+    this.host.paint();
+  }
+
+  private async scan(): Promise<void> {
+    const m = mapStrings(this.host.state.t.locale);
+    this.ui.scanBusy = true;
+    this.host.paint();
+    await this.act(
+      async (api, projectId) => {
+        const record = await api.cartography.scan(projectId, { incremental: this.ui.incremental });
+        if (this.ui.summary) this.ui.summary.running = record;
+        this.host.state.notice = m.scanStarted;
+        this.poll(projectId);
+      },
+      (text) => {
+        this.ui.error = text;
+      },
+    );
+    this.ui.scanBusy = false;
+    this.host.paint();
+  }
+
+  private async saveSources(): Promise<void> {
+    const sources = this.draft();
+    this.ui.sourcesBusy = true;
+    this.ui.sourcesError = undefined;
+    this.host.paint();
+    await this.act(
+      async (api, projectId) => {
+        const config = await api.cartography.saveConfig(projectId, { sources });
+        if (this.ui.summary) this.ui.summary.config = config;
+        this.ui.sources = undefined;
+        this.host.state.notice = mapStrings(this.host.state.t.locale).saved;
+        const summary = await api.cartography.summary(projectId);
+        if (this.projectId === projectId) this.ui.summary = summary;
+      },
+      (text) => {
+        this.ui.sourcesError = text;
+        if (this.ui.tab !== 'scan') this.ui.error = text;
+      },
+    );
+    this.ui.sourcesBusy = false;
+    this.host.paint();
+  }
+
+  private async decide(input: MapDecisionInput): Promise<void> {
+    if (!input.target) return;
+    this.ui.decisionBusy = true;
+    this.host.paint();
+    await this.act(
+      async (api, projectId) => {
+        await api.cartography.decide(projectId, input);
+        this.ui.decision = undefined;
+        this.ui.decisionError = undefined;
+        this.ui.linkDraft = { scenario: '', path: 'POSITIVE' };
+        this.ui.fieldLinkDraft = '';
+        this.ui.apiRename = undefined;
+        this.host.state.notice = mapStrings(this.host.state.t.locale).decide.done;
+        // Une décision change les données : la sélection est relue (bornée), rien de plus.
+        this.invalidate();
+        if (input.kind === 'MERGE' || input.kind === 'REJECT') this.ui.conceptSheet = undefined;
+        await this.load(api, projectId, () => this.projectId === projectId);
+        if (this.ui.concept) await this.loadConceptSheet();
+      },
+      (text) => {
+        this.ui.decisionError = text;
+        this.ui.error = text;
+      },
+    );
+    this.ui.decisionBusy = false;
+    this.host.paint();
+  }
+
+  private async impact(): Promise<void> {
+    const summary = this.ui.summary;
+    const from = this.ui.impactFrom || summary?.scans[1]?.id;
+    const to = this.ui.impactTo || summary?.scans[0]?.id;
+    this.ui.impactBusy = true;
+    this.ui.impactError = undefined;
+    this.host.paint();
+    await this.act(
+      async (api, projectId) => {
+        const report = await api.cartography.impact(projectId, {
+          ...(from ? { from } : {}),
+          ...(to ? { to } : {}),
+        });
+        this.ui.impact = report;
+        // Une proposition : les scénarios dont l'impact est démontré sont cochés ; rien n'est lancé.
+        this.ui.impactPicked = report.scenarios
+          .filter((s) => s.confidence === 'CONFIRMED')
+          .map((s) => s.scenario);
+      },
+      (text) => {
+        this.ui.impactError = text;
+      },
+    );
+    this.ui.impactBusy = false;
+    this.host.paint();
+  }
+
+  /** Rejouer les scénarios choisis par la personne : rien n'est lancé sans ce clic. */
+  private async launch(scenarios: string[]): Promise<void> {
+    if (scenarios.length === 0) return;
+    this.ui.launching = true;
+    this.host.paint();
+    await this.act(
+      async (api, projectId) => {
+        const started = await api.executions.start(projectId, {
+          scenarios,
+          ...(this.ui.impactEnv ? { environmentId: this.ui.impactEnv } : {}),
+        });
+        this.host.state.live = { snapshot: started, steps: [], cancelRequested: false };
+        this.host.navigate({
+          view: 'execution',
+          projectId,
+          run: started.run ?? '',
+          explorationId: started.id,
+        });
+      },
+      (text) => {
+        this.ui.impactError = text;
+        this.ui.error = text;
+      },
+    );
+    this.ui.launching = false;
+  }
+
+  private async evidence(source: string, file: string, line: number): Promise<void> {
+    await this.act(
+      async (api, projectId) => {
+        this.ui.evidence = await api.cartography.evidence(projectId, { source, file, line });
+        this.ui.evidenceError = undefined;
+      },
+      (text) => {
+        this.ui.evidence = undefined;
+        this.ui.evidenceError = text;
+      },
+    );
+  }
+
+  /** L'export : la vue complète est demandée à ce moment-là seulement, puis enregistrée en JSON. */
+  private async export(): Promise<void> {
+    await this.act(
+      async (api, projectId) => {
+        const view = await api.cartography.get(projectId);
+        if (!view.model) return;
+        const blob = new Blob([`${JSON.stringify(view, null, 2)}\n`], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `cartography-${projectId}-${view.model.scan.id}.json`;
+        this.host.root.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => {
+          URL.revokeObjectURL(url);
+        }, 1000);
+      },
+      (text) => {
+        this.ui.error = text;
+      },
+    );
+  }
+}

@@ -1,0 +1,8 @@
+<h1>New request</h1>
+<form [formGroup]="form" (ngSubmit)="save()">
+  <label for="companyName">Company name</label>
+  <input id="companyName" type="text" formControlName="companyName" />
+  <label>Contact email</label>
+  <input type="email" formControlName="contactEmail" />
+  <button type="submit">Save</button>
+</form>

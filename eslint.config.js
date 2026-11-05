@@ -20,6 +20,8 @@ export default tseslint.config(
       'tests/fixtures/incident-app/',
       // Application Angular fictive analysée par la découverte des déclencheurs (dépendances absentes).
       'tests/fixtures/angular-app/',
+      // Projet Front/BFF/Backend/contrat fictif analysé par la cartographie (dépendances absentes).
+      'tests/fixtures/cartography/',
       // Les exemples importent les paquets compilés (dist) : ils se vérifient en les lançant.
       'examples/',
     ],

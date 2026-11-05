@@ -20,6 +20,8 @@ import { EditorController, type EditorHost } from './dashboard-editor-controller
 import { PublishController, type PublishHost } from './dashboard-publish-controller.js';
 import { LibraryController, type LibraryHost } from './dashboard-library-controller.js';
 import { IncidentsController, type IncidentsHost } from './dashboard-incidents-controller.js';
+import { CartographyController, type CartographyHost } from './dashboard-cartography-controller.js';
+import { emptyCartographyUi } from './dashboard-cartography.js';
 import { emptyIncidentsUi } from './dashboard-incidents.js';
 import { isDemoIncident } from './incident-workspace.js';
 import {
@@ -122,6 +124,8 @@ export class QaCrawlerDashboard extends Base {
   private readonly wizard: LibraryWizard;
   /** Les incidents : déclaration, investigation, suivi d'une reproduction en cours. */
   private readonly incidents: IncidentsController;
+  /** La cartographie : vue, scan suivi, décisions, impact. */
+  private readonly cartography: CartographyController;
   /** Le suivi des exécutions de tests générés en cours (écran Tests). */
   private testsTimer?: ReturnType<typeof setTimeout>;
   /** Chaque chargement porte un numéro : une réponse arrivée après un autre choix est ignorée. */
@@ -154,6 +158,7 @@ export class QaCrawlerDashboard extends Base {
       tst: emptyTestsUi(),
       ed: emptyEditorUi(),
       inc: emptyIncidentsUi(),
+      map: emptyCartographyUi(),
     };
     // Le contrôleur de l'éditeur voit l'état courant du Dashboard (lu à chaque accès).
     const host = {
@@ -217,6 +222,7 @@ export class QaCrawlerDashboard extends Base {
     };
     Object.defineProperty(incidentsHost, 'state', { get: () => this.state });
     this.incidents = new IncidentsController(incidentsHost as IncidentsHost);
+    this.cartography = new CartographyController(incidentsHost as unknown as CartographyHost);
     this.root.addEventListener('click', (event) => {
       this.onClick(event);
     });
@@ -236,11 +242,18 @@ export class QaCrawlerDashboard extends Base {
       if (form === 'ed-add-submit') this.editor.submit(event.target as HTMLFormElement);
       if (form?.startsWith('inc-') || form?.startsWith('ws-'))
         this.incidents.submit(event.target as HTMLFormElement);
+      if (form?.startsWith('map-')) this.cartography.submit(event.target as HTMLFormElement);
     });
     // La saisie d'un formulaire d'environnement : gardée dans l'état sans redessiner (le focus reste).
     this.root.addEventListener('input', (event) => {
       const target = event.target as HTMLInputElement | HTMLTextAreaElement;
       if (target.dataset.inc && target.type !== 'radio' && this.incidents.input(target)) return;
+      // La cartographie : les saisies de texte ici ; cases et listes à leur « change ».
+      if (target.dataset.map !== undefined) {
+        if (target.type !== 'checkbox' && target.tagName !== 'SELECT')
+          this.cartography.input(target as HTMLInputElement, false);
+        return;
+      }
       if (target.dataset.wsField !== undefined && this.incidents.input(target)) return;
       const reqField = target.dataset.req as keyof ImportForm | undefined;
       if (reqField && reqField !== 'source' && target.type !== 'file') {
@@ -304,6 +317,8 @@ export class QaCrawlerDashboard extends Base {
       (this.state.envForm as unknown as Record<string, string>)[name] = target.value;
     });
     this.root.addEventListener('pointerdown', (event) => {
+      if (this.state.route.view === 'cartography' && this.cartography.pointerDown(event as PointerEvent))
+        return;
       if (this.incidents.pointerDown(event as PointerEvent)) return;
       this.editor.pointerDown(event as PointerEvent);
     });
@@ -321,6 +336,7 @@ export class QaCrawlerDashboard extends Base {
       if (this.library.keydown(event as KeyboardEvent)) return;
       if (this.journeys.keydown(event as KeyboardEvent)) return;
       if (this.incidents.keydown(event as KeyboardEvent)) return;
+      if (this.state.route.view === 'cartography' && this.cartography.keydown(event as KeyboardEvent)) return;
       if (this.state.lib.wizard && this.wizard.keydown(event as KeyboardEvent)) return;
       if ((event as KeyboardEvent).key === 'Escape' && this.state.menuOpen) {
         this.state.menuOpen = false;
@@ -365,6 +381,7 @@ export class QaCrawlerDashboard extends Base {
     this.connected = false;
     this.editor.dispose();
     this.incidents.dispose();
+    this.cartography.dispose();
     this.unsubscribe();
     this.unfollowRecording();
     if (this.replayTimer) clearTimeout(this.replayTimer);
@@ -1559,6 +1576,12 @@ export class QaCrawlerDashboard extends Base {
           this.pendingPanel = undefined;
           this.wizard.open(scenario);
         }
+      } else if (route.view === 'cartography') {
+        if (route.tab) (this.state.map ??= emptyCartographyUi()).tab = route.tab;
+        await Promise.all([
+          this.loadProject(api, route.projectId, generation),
+          this.cartography.load(api, route.projectId, () => generation === this.generation),
+        ]);
       } else if (route.view === 'tests') {
         const [, recordings] = await Promise.all([
           this.loadProject(api, route.projectId, generation),
@@ -2239,6 +2262,7 @@ export class QaCrawlerDashboard extends Base {
     if (action?.startsWith('ed-') && this.editor.click(action, target)) return;
     if ((action?.startsWith('inc-') || action?.startsWith('ws-')) && this.incidents.click(action, target))
       return;
+    if (action?.startsWith('map-') && this.cartography.click(action, target)) return;
     switch (action) {
       case 'menu':
         this.state.menuOpen = !this.state.menuOpen;
@@ -2260,6 +2284,7 @@ export class QaCrawlerDashboard extends Base {
           view === 'scenarios' ||
           view === 'recordings' ||
           view === 'library' ||
+          view === 'cartography' ||
           view === 'tests' ||
           view === 'editor' ||
           view === 'explorations' ||
@@ -2642,6 +2667,10 @@ export class QaCrawlerDashboard extends Base {
   private onChange(event: Event): void {
     const target = event.target as HTMLInputElement | HTMLSelectElement;
     if (target.dataset.inc && this.incidents.change(target)) return;
+    if (target.dataset.map !== undefined) {
+      this.cartography.input(target, true);
+      return;
+    }
     if (
       (target.dataset.wsField !== undefined || target.dataset.action?.startsWith('ws-')) &&
       this.incidents.change(target)
@@ -2766,6 +2795,7 @@ export class QaCrawlerDashboard extends Base {
         route.view === 'scenarios' ||
         route.view === 'recordings' ||
         route.view === 'library' ||
+        route.view === 'cartography' ||
         route.view === 'tests' ||
         route.view === 'editor' ||
         route.view === 'explorations' ||
@@ -2924,7 +2954,8 @@ export class QaCrawlerDashboard extends Base {
       focused?.dataset.inc ??
       focused?.dataset.wz ??
       focused?.dataset.wsField ??
-      focused?.dataset.wsGraph;
+      focused?.dataset.wsGraph ??
+      focused?.dataset.map;
     const focusValue = (focused as HTMLInputElement | null)?.value;
     // Les champs validés par « change », sans brouillon dans l'état : leur saisie en cours doit survivre à
     // un redessin venu d'ailleurs (événement du serveur, console, plan recalculé), sinon elle est perdue.
@@ -2943,7 +2974,7 @@ export class QaCrawlerDashboard extends Base {
         focused?.dataset.wsField !== undefined ||
         focused?.dataset.wsGraph !== undefined);
     const twinOf = (element: HTMLElement | null | undefined): string =>
-      `${element?.dataset.block ?? ''}|${element?.dataset.index ?? ''}|${element?.dataset.direction ?? ''}|${element?.dataset.view ?? ''}`;
+      `${element?.dataset.block ?? ''}|${element?.dataset.index ?? ''}|${element?.dataset.direction ?? ''}|${element?.dataset.view ?? ''}|${element?.dataset.feature ?? ''}|${element?.dataset.field ?? ''}|${element?.dataset.tab ?? ''}`;
     const focusTwin = workspaceKey && focused ? workspaceTwin(focused) : twinOf(focused);
     const caret =
       focused instanceof HTMLInputElement && ['text', 'search'].includes(focused.type)
@@ -2961,14 +2992,14 @@ export class QaCrawlerDashboard extends Base {
       const key = CSS.escape(focusKey);
       const candidates = [
         ...this.root.querySelectorAll<HTMLElement>(
-          `[data-action="${key}"],[data-bind="${key}"],[data-field="${key}"],[data-req="${key}"],[data-lib="${key}"],[data-ed-field="${key}"],[data-ed-add="${key}"],[data-ed="${key}"],[data-inc="${key}"],[data-wz="${key}"],[data-ws-field="${key}"],[data-ws-graph="${key}"]`,
+          `[data-action="${key}"],[data-bind="${key}"],[data-field="${key}"],[data-req="${key}"],[data-lib="${key}"],[data-ed-field="${key}"],[data-ed-add="${key}"],[data-ed="${key}"],[data-inc="${key}"],[data-wz="${key}"],[data-ws-field="${key}"],[data-ws-graph="${key}"],[data-map="${key}"]`,
         ),
       ];
       const twin = candidates.find((element) =>
         workspaceKey ? workspaceTwin(element) === focusTwin : twinOf(element) === focusTwin,
       );
       const same = candidates.find((element) => (element as HTMLInputElement).value === focusValue);
-      const target = (focusTwin !== '|||' ? twin : undefined) ?? same ?? candidates[0];
+      const target = (focusTwin.replace(/\|/g, '') !== '' ? twin : undefined) ?? same ?? candidates[0];
       target?.focus();
       // Après le focus : le navigateur compare à la valeur au moment du focus, « change » partira.
       if (

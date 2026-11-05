@@ -18,6 +18,7 @@ import { INCIDENT_TIMELINE_CSS } from './incident-timeline.js';
 import { INCIDENT_UX_CSS } from './incident-ux.js';
 import { INCIDENT_WORKSPACE_CSS } from './incident-workspace.js';
 import { darkThemeCss } from './theme.js';
+import { CARTOGRAPHY_CSS } from './dashboard-cartography.js';
 
 /**
  * LE STYLE DU DASHBOARD, enfermé dans le Shadow DOM : la maquette « Dashboard QA-CRAWLER complet » —
@@ -1218,6 +1219,7 @@ ${TRACE_CSS}
 ${OUTPUT_CSS}
 ${WIZARD_CSS}
 ${INCIDENT_PARTS_CSS}
+${CARTOGRAPHY_CSS}
 ${INCIDENT_UX_CSS}
 ${INCIDENT_GRAPH_CSS}
 ${INCIDENT_TIMELINE_CSS}

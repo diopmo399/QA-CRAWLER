@@ -220,6 +220,29 @@ import {
   summaryOf,
   type FileConnectorKind,
 } from './requirements.js';
+import {
+  addDecision,
+  cancelScan,
+  cartographyError,
+  cartographyView,
+  evidenceExcerpt,
+  impactOf,
+  lastScanState,
+  listQuery,
+  mapConcepts,
+  mapFeature,
+  mapFeatureFields,
+  mapFeatures,
+  mapField,
+  mapIssues,
+  mapApis,
+  mapApi,
+  mapNeighbours,
+  mapSummary,
+  queryNumber,
+  saveConfig,
+  startScan,
+} from './cartography.js';
 import { AccessError, AccessStore, actionOf, can, rightFor, roleIn, type Identity } from './access.js';
 import { handleIncidentRoutes } from './incidents.js';
 import { IncidentService, type HostReplay, type IncidentHost } from '../../incident/service.js';
@@ -651,6 +674,10 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
       url,
       response,
     );
+    return;
+  }
+  if (resource === 'projects' && id && sub === 'cartography') {
+    await handleCartography(ctx, await projectOf(ctx, id), segments.slice(4), method, request, url, json);
     return;
   }
   if (resource === 'trends' && id === undefined && method === 'GET') {
@@ -4287,6 +4314,128 @@ const PIPELINE_STATUS: Record<PipelineError['code'], number> = {
 };
 
 /** Une erreur du pipeline ou une entrée refusée devient une réponse dite, jamais une erreur interne. */
+/**
+ * LA CARTOGRAPHIE D'UN PROJET (`/api/projects/:id/cartography/…`) : vue, sources, scans (un à la fois,
+ * annulable), décisions, impact, extrait de code d'une preuve. Toute écriture est refusée sur un projet
+ * archivé ; les dossiers lus sont toujours sous les racines que le serveur autorise.
+ */
+async function handleCartography(
+  ctx: Context,
+  project: StoredProject,
+  rest: string[],
+  method: string,
+  request: IncomingMessage,
+  url: URL,
+  json: (body: unknown, status?: number) => void,
+): Promise<void> {
+  const [part, item, action] = rest;
+  const roots = ctx.rules.allowedSourceRoots;
+  try {
+    if (part === undefined && method === 'GET') {
+      json(await cartographyView(project, roots, url.searchParams.get('scan') ?? undefined));
+      return;
+    }
+    if (part === 'config' && item === undefined && method === 'POST') {
+      refuseArchived(project);
+      json(await saveConfig(project, await readJson(request), roots));
+      return;
+    }
+    if (part === 'scans' && item === undefined && method === 'POST') {
+      refuseArchived(project);
+      const body = await readOptionalJson(request);
+      json(await startScan(project, roots, { incremental: body.incremental }), 202);
+      return;
+    }
+    if (part === 'scans' && item === 'current' && action === undefined && method === 'GET') {
+      const state = lastScanState(project);
+      if (!state) throw new HttpError(404, 'NOT_FOUND', 'no scan has run since the server started');
+      json(state);
+      return;
+    }
+    if (part === 'scans' && item === 'current' && action === 'cancel' && method === 'POST') {
+      if (!cancelScan(project)) throw new HttpError(409, 'NOT_CANCELLABLE', 'no scan is running');
+      json(lastScanState(project), 202);
+      return;
+    }
+    if (part === 'decisions' && item === undefined && method === 'POST') {
+      refuseArchived(project);
+      json(await addDecision(project, await readJson(request), authorOf(request)), 201);
+      return;
+    }
+    if (part === 'impact' && item === undefined && method === 'POST') {
+      json(await impactOf(project, await readOptionalJson(request)));
+      return;
+    }
+    // L'exploration progressive : un résumé, puis des pages et des fiches, jamais le graphe entier.
+    if (method === 'GET' && item === undefined) {
+      const params = url.searchParams;
+      const id = params.get('id') ?? '';
+      const bounds = {
+        ...(queryNumber(params.get('depth')) !== undefined
+          ? { depth: queryNumber(params.get('depth')) }
+          : {}),
+        ...(queryNumber(params.get('limit')) !== undefined
+          ? { limit: queryNumber(params.get('limit')) }
+          : {}),
+      };
+      switch (part) {
+        case 'summary':
+          json(await mapSummary(project, roots));
+          return;
+        case 'features':
+          json(await mapFeatures(project, listQuery(params)));
+          return;
+        case 'feature':
+          json(await mapFeature(project, id));
+          return;
+        case 'feature-fields':
+          json(await mapFeatureFields(project, id, listQuery(params)));
+          return;
+        case 'field':
+          json(
+            await mapField(project, id, {
+              ...bounds,
+              ...(params.get('feature') ? { feature: params.get('feature') ?? '' } : {}),
+            }),
+          );
+          return;
+        case 'neighbors':
+          json(await mapNeighbours(project, id, bounds));
+          return;
+        case 'concepts':
+          json(await mapConcepts(project, listQuery(params)));
+          return;
+        case 'issues':
+          json(await mapIssues(project, listQuery(params)));
+          return;
+        case 'apis':
+          json(await mapApis(project, listQuery(params)));
+          return;
+        case 'api':
+          json(await mapApi(project, id));
+          return;
+        default:
+          break;
+      }
+    }
+    if (part === 'evidence' && item === undefined && method === 'GET') {
+      json(
+        await evidenceExcerpt(project, roots, {
+          source: url.searchParams.get('source'),
+          file: url.searchParams.get('file'),
+          line: url.searchParams.get('line'),
+        }),
+      );
+      return;
+    }
+  } catch (error) {
+    const known = cartographyError(error);
+    if (known) throw new HttpError(known.status, known.code, known.message);
+    throw error;
+  }
+  throw new HttpError(404, 'NOT_FOUND', 'unknown cartography route');
+}
+
 async function requirementsCall<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();

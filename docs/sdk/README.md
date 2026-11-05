@@ -1026,6 +1026,190 @@ donnent :
 
 Une semaine sans donnée n'a pas de valeur.
 
+## Cartographie fonctionnelle
+
+La cartographie lit le **code** des couches d'un projet (frontal, BFF, backend, contrats d'API,
+persistance) et en déduit les fonctionnalités, leurs champs, leurs réutilisations, la couverture par
+les scénarios et l'impact d'une modification. Tout ce qu'elle montre porte ses **preuves** (source,
+fichier, ligne, symbole, révision Git, type de preuve) et un niveau de **confiance** :
+
+| Confiance   | Sens                                                                                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CONFIRMED` | mécanisme démontré par le code : liaison du gabarit, flux de données résolu, chemin et méthode HTTP littéraux, mapping explicite, `@Column`        |
+| `PROBABLE`  | correspondance plausible, et ce qui manque est écrit (adresse de base lue dans la configuration, nommage par défaut, même nom dans la même chaîne) |
+| `UNKNOWN`   | étape non retrouvée : « lien non démontré », jamais un lien inventé                                                                                |
+
+Deux champs ne sont **jamais fusionnés sur leur nom** : seuls des liens les relient (liaison JSON
+d'un corps identifié, mapping, contrat). Deux champs de même nom sans lien sont des **homonymes**.
+
+### Ce qui est réellement pris en charge
+
+| Technologie             | Analyse                                                                                                                                                                                                                                                                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Angular                 | routes, composants, formulaires réactifs, contrôles, validateurs, libellés (`<label for>`, libellé voisin, `mat-label`, `placeholder`), appels `HttpClient`, flux champ → corps de requête, valeur initiale lue dans une réponse                                                                      |
+| Spring (BFF ou backend) | endpoints servis, `@RequestBody`, DTO et validations Bean Validation, `@JsonProperty`, appels entre méthodes résolus par type, appels HTTP sortants (RestTemplate, WebClient, RestClient, Feign) avec le type du corps envoyé, mappings explicites `a.setX(b.getY())` et `Type.builder().x(b.getY())` |
+| JPA / Spring Data       | entités, `@Table`, colonnes (`@Column`, `nullable`, `length`, nommage par défaut), dépôts `JpaRepository` et leurs lectures/écritures                                                                                                                                                                 |
+| OpenAPI / Swagger       | opérations, corps de requête, schémas (obligatoires, longueur, motif, format)                                                                                                                                                                                                                         |
+
+Toute autre technologie détectée (React, Vue, Node, .NET, GraphQL, SQL, événements) est signalée
+**« connecteur manquant »** : rien n'en est déduit, les autres couches sont analysées normalement.
+
+### Sources, scan, persistance
+
+Une source est un dossier (un dépôt Git local ou une partie) lu **sous une racine que le serveur
+autorise** (`allowedSourceRoots` ; aucune : aucun scan). Le scan est statique et non destructif :
+aucun fichier n'est exécuté ni modifié. Les liens symboliques ne sont pas suivis ; les dépendances
+et sorties de build (`node_modules`, `dist`, `target`…) sont ignorées ; les fichiers de secrets
+(`.env`, clés, `credentials*`, `secrets*`…) ne sont **jamais lus** et sont comptés. Des limites
+(4 000 fichiers, 512 Kio par fichier, 60 s par source) rendent un scan `PARTIAL`, jamais faux. Un scan
+est **incrémental** : une source dont l'empreinte n'a pas changé reprend ses faits. Un scan par projet
+à la fois, en arrière-plan, annulable ; une source en erreur n'arrête pas les autres.
+
+Tout est gardé dans `<projet>/cartography/` : `config.json`, `decisions.json` (historique, jamais
+réécrit) et les 20 derniers scans (`scans/<id>.json`, modèle et faits de chaque source). Chaque
+document porte son schéma ; un document plus ancien est migré à la lecture, un schéma plus récent est
+refusé. Aucune valeur de donnée n'est gardée : seulement des métadonnées.
+
+### Couverture et impact
+
+Un scénario est **associé** à une fonctionnalité d'après ses étapes (adresse ouverte, champs saisis
+par libellé ou par empreinte, attente sur l'adresse ou la réponse d'un appel), ou à la main. Une
+association proposée n'est jamais validée d'office. La couverture d'une fonctionnalité se mesure sur
+six critères, lus dans les **exécutions réelles** : associé, traversée (les étapes qui l'atteignent ont
+réussi), vérifiée (une attente sur son écran ou ses appels a réussi), test réussi, champs obligatoires
+saisis, chemin négatif joué (réponse 4xx attendue). Un critère non applicable sort du dénominateur.
+Statuts : Couverte, Partielle, Non couverte, À confirmer, Hors périmètre. La couverture du projet est
+`couvertes / (fonctionnalités − hors périmètre)` ; sans dénominateur, elle est « non calculable ».
+
+L'impact compare deux scans (nœuds ajoutés, retirés, signature changée ; liens ajoutés ou retirés)
+et propage par les seuls liens du graphe vers les fonctionnalités et les scénarios associés, en
+séparant l'impact **confirmé** du **probable**. Rien n'est relancé sans la sélection d'une personne.
+
+| Client                                                    | Route                                                                                                                                         | Droit             |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `cartography.get(projectId, { scan? })`                   | `GET /api/projects/:id/cartography[?scan=…]`                                                                                                  | `VIEW`            |
+| `cartography.saveConfig(projectId, { sources })`          | `POST …/cartography/config`                                                                                                                   | `MANAGE_PROJECTS` |
+| `cartography.scan(projectId, { incremental? })`           | `POST …/cartography/scans` (202 ; 409 si un scan tourne)                                                                                      | `RUN`             |
+| `cartography.currentScan(projectId)`                      | `GET …/cartography/scans/current`                                                                                                             | `VIEW`            |
+| `cartography.cancelScan(projectId)`                       | `POST …/cartography/scans/current/cancel`                                                                                                     | `RUN`             |
+| `cartography.decide(projectId, decision)`                 | `POST …/cartography/decisions` (confirmer, renommer, fusionner, rejeter, hors périmètre, associer, valider, associer un scénario à un champ…) | `DECIDE`          |
+| `cartography.impact(projectId, { from?, to? })`           | `POST …/cartography/impact`                                                                                                                   | `VIEW`            |
+| `cartography.evidence(projectId, { source, file, line })` | `GET …/cartography/evidence` (20 lignes du fichier, jamais un secret)                                                                         | `RUN`             |
+
+### Exploration progressive
+
+Le premier affichage ne charge **jamais** le graphe complet : un résumé (indicateurs, modules,
+réutilisations, couverture, performance), puis une page de fonctionnalités. Les champs d'une
+fonctionnalité ne sont demandés qu'à son ouverture, la fiche d'un champ (sous-graphe borné, séquence,
+réutilisations, scénarios, impact) qu'à son choix, et le voisinage d'un nœud qu'à son expansion. La vue
+entière (`cartography.get`) ne sert plus qu'à l'export.
+
+| Client                                                                | Route                                                                            | Réponse                                                                                                                                    |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cartography.summary(projectId)`                                      | `GET …/cartography/summary`                                                      | indicateurs, couverture et sa formule, modules, réutilisations, anomalies, scan en cours, données périmées, performance (index, cache)     |
+| `cartography.features(projectId, query)`                              | `GET …/cartography/features?q&module&layer&status&coverage&sort&page&size`       | une page de fonctionnalités : nom, module, nombre de champs, de scénarios, réutilisation, statut, couverture                               |
+| `cartography.feature(projectId, id)`                                  | `GET …/cartography/feature?id=`                                                  | la fiche : chaîne, liens (400 au plus, `truncated`), associations, critères, fonctionnalités liées                                         |
+| `cartography.featureFields(projectId, id, query)`                     | `GET …/cartography/feature-fields?id&q&type&layer&status&concept&sort&page&size` | une page de champs de cette fonctionnalité, une ligne par concept : type, couches, réutilisation, confiance, état de test                  |
+| `cartography.field(projectId, id, { feature?, depth?, limit? })`      | `GET …/cartography/field?id=`                                                    | la fiche du champ : sous-graphe borné, séquence par couche, homonymes, réutilisations, scénarios, couverture, impact démontré et potentiel |
+| `cartography.neighbors(projectId, id, { depth?, limit? })`            | `GET …/cartography/neighbors?id=`                                                | le voisinage d'un nœud, pour étendre le graphe à la demande                                                                                |
+| `cartography.concepts(projectId, query)` / `issues(projectId, query)` | `GET …/cartography/concepts` · `GET …/cartography/issues`                        | une page de concepts (recherche par écran, API, table ou scénario) ou d'anomalies                                                          |
+
+Toutes ces routes demandent le droit `VIEW`. Avant le premier scan, le résumé le dit (aucun
+scan), les listes répondent une page vide et les fiches (`feature`, `feature-fields`, `field`,
+`neighbors`) répondent 409 ; un identifiant inconnu répond 404. Une page fait 100 éléments au plus ; un
+sous-graphe 300 nœuds et une profondeur de 6 au plus, sans doublon ni cycle, et dit quand il a été
+coupé (`truncated`). Chaque méthode accepte `{ signal }` : l'écran annule la requête devenue inutile
+(erreur `ABORTED`, jamais affichée).
+
+**Index et cache.** Le serveur construit un **index** une fois par version (scan + décisions) :
+nœuds, adjacences entrante et sortante, concepts par fonctionnalité, texte de recherche par concept,
+nombre de champs. La clé est `scan|nombre de décisions|dernière décision` ; la couverture est
+recalculée quand les révisions des scénarios ou les 50 dernières exécutions changent. Un nouveau scan
+ou une décision change la clé : l'index est reconstruit à la requête suivante, une seule fois même
+si plusieurs requêtes arrivent ensemble (elles partagent le même calcul). Le cache garde 16 projets
+(le plus ancien sort) ; les succès et les reconstructions sont comptés dans `summary.performance`.
+L'écran garde aussi les 40 dernières réponses de la version en cours. Les liens qui reliaient les
+mêmes nœuds par le même type sont fusionnés au scan (leurs preuves réunies).
+
+**États, preuves, scénarios.** Une preuve renvoie la source, le fichier, la ligne, le symbole, la
+justification, la confiance et la version du scan ; un extrait dont le fichier a changé depuis le
+scan est marqué **périmé** (`stale`). Un scénario lié à un champ est **associé** (inféré de ses
+étapes, ou à la main par `LINK_FIELD`), **exécuté** (ses étapes ont atteint la fonctionnalité dans une
+exécution réelle) ou **vérifié par assertion** (une attente sur son écran ou ses appels a réussi). La
+couverture d'un champ est toujours donnée avec son numérateur, son dénominateur et sa portée.
+
+Les tests mesurent un graphe **synthétique** de 80 000 nœuds (2 000 fonctionnalités × 20 champs) : il
+sert à borner les temps, jamais à être montré comme un résultat de scan.
+
+Dans le Dashboard, l'écran **Cartographie** (menu Piloter) a sept onglets : Vue d'ensemble, Scan &
+Découverte, Fonctionnalités, Champs & Réutilisations, Scénarios & Couverture, Traçabilité, Impact.
+L'onglet Fonctionnalités est l'explorateur, en trois colonnes : la liste paginée à gauche ; au centre
+Résumé, Champs, Traçabilité (vue graphe), Réutilisations et Scénarios ; à droite les détails du champ,
+« Réutilisé dans » et ses preuves (panneau repliable) ; en bas les scénarios associés et l'analyse
+d'impact (le détail et le rejeu préparé s'ouvrent sur « Voir l'impact détaillé » ; rien n'est lancé
+sans action).
+
+La **Traçabilité (vue graphe)** d'un champ a deux vues :
+
+- **Parcours principal** (par défaut) : les nœuds atteints depuis le champ par des liens de flux
+  (transmission, mapping, lecture, écriture), une carte par couche démontrée, de gauche à droite, avec
+  la technologie réellement détectée dans sa source et la confiance la plus faible des liens qui y
+  arrivent. Une couche absente du parcours n'a pas de carte ; une dépendance hors flux (contrat
+  d'API) est rattachée à sa carte. Sous chaque carte, « N liens » ouvre la liste exacte de ses
+  relations.
+- **Graphe complet** : le sous-graphe borné du serveur, en colonnes par couche ordonnées pour limiter
+  les croisements ; un nœud choisi montre sa fiche et ses preuves, s'étend à la demande (« Étendre ses
+  voisins »), et les voisins ajoutés se replient.
+
+Dans les deux vues : zoom (+/−), ajuster à la vue (mesuré dans la page), déplacement en glissant ou au
+clavier (flèches, + et −, 0 pour ajuster), plein écran (Échap pour sortir), légende comptée
+(confirmé, probable, non démontré) et regroupement des liens parallèles (mêmes extrémités ; rien n'est
+réuni sur un nom). Sous le graphe, « Relations détectées » donne la source, la cible, le type, la
+confiance et la preuve de chaque lien de la vue (ou de l'étape, ou de la sélection), avec « Voir le
+code ». Les listes se parcourent au clavier (flèches haut et bas).
+
+### API & Services
+
+L'onglet **API & Services** dresse le catalogue des API et services du projet, déduit du scan (aucune
+requête n'est envoyée : l'état dit la **détection**, la disponibilité réelle reste « non vérifiée ») :
+
+| Périmètre    | Règle (preuve)                                                                                                                                                                |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Interne      | endpoints servis par une source BFF ou Backend analysée, regroupés par le contrôleur qui les sert ; les appels qui y arrivent sont ceux que le graphe a reliés                |
+| Externe      | appels HTTP sortants (RestTemplate, WebClient, RestClient, Feign) qu'aucun endpoint analysé ne sert, dont l'hôte est lu dans le code ou la configuration ; regroupés par hôte |
+| À classifier | appel dont la cible ne peut pas être établie (URL calculée à l'exécution, propriété sans valeur, appel du frontal qu'aucun endpoint ne sert)                                  |
+
+Chaque API porte un identifiant stable (périmètre, source, contrôleur ou hôte), un nom proposé
+(étiquette du contrat, sinon le contrôleur ou le client), son nom technique, son fournisseur, son
+adresse de base **masquée** (identifiants et paramètres sensibles retirés), les clés de configuration
+qui la portent (jamais leur valeur), ses endpoints, ses appelants, les champs échangés (requête
+envoyée, réponse reçue, lus dans les types du code), son contrat OpenAPI quand un endpoint y est décrit
+(format, version et lien de documentation déclarés par le contrat), sa confiance et ses raisons. Deux
+contrôleurs de même nom dans deux sources restent deux API.
+
+La fiche d'une API montre le **parcours d'intégration démontré** (des écrans à l'API, en remontant les
+seuls liens du graphe : une couche non traversée n'a pas de carte), les fonctionnalités qui la
+consomment (avec le chemin qui le prouve), les scénarios associés à ces fonctionnalités (associé,
+exécuté, vérifié par assertion), l'impact prouvé et potentiel d'un changement, et une criticité dont la
+raison est donnée. Un nom métier se donne par une décision `RENAME_API` (le code et l'identifiant ne
+changent pas) ; un appel « à classifier » se classe par `CLASSIFY_API` (`INTERNAL` ou `EXTERNAL`).
+
+| Client                                    | Route                                                         | Réponse                                                                                                                 |
+| ----------------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `cartography.apis(projectId, query)`      | `GET …/cartography/apis?q&scope&sort&page&size`               | une page du catalogue, les comptes par périmètre et les indicateurs (API, endpoints, fonctionnalités et scénarios liés) |
+| `cartography.api(projectId, id)`          | `GET …/cartography/api?id=`                                   | la fiche : API, fonctionnalités, scénarios, parcours, voisinage borné, impact, criticité                                |
+| `cartography.decide(projectId, decision)` | `POST …/cartography/decisions` (`RENAME_API`, `CLASSIFY_API`) | l'historique des décisions                                                                                              |
+
+« Planifier » est affiché désactivé : la planification des scans de cartographie n'existe pas encore.
+
+**Limites.** Le corps d'une méthode n'est pas comparé entre deux scans (seule sa signature l'est).
+Une valeur passée par une variable intermédiaire non typée, une réflexion, un mapper généré
+(MapStruct) ou une requête SQL écrite à la main ne sont pas suivis : l'étape reste « lien non
+démontré ». Les exigences ne sont pas encore reliées aux fonctionnalités. L'authentification d'une API n'est pas
+analysée, et un appel externe du frontal (URL absolue) reste « à classifier ». L'index vit en mémoire du serveur : il
+est reconstruit après un redémarrage, à la première requête. Le lien entre une étape d'un
+bloc `run:` et l'exécution se juge sur le statut du flow entier.
+
 ## Accès : jetons nominatifs, rôles, journal
 
 Par défaut (`access: 'single'`), un seul jeton de service ouvre toute l'API, et les pages servies le
