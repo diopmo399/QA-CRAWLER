@@ -113,7 +113,9 @@ describe('Dashboard — enriched API graph in lanes, in Chromium', () => {
     ]);
     const legend = dashboard().locator('.ln-legend');
     expect(await legend.textContent()).toContain('Probable (6)');
-    expect(await legend.locator('.ln-total').textContent()).toBe('Total : 46 relations');
+    // 46 relations, plus 10 lues depuis l'analyse des appels entre classes : chaque écran appelle sa méthode
+    // (gabarit ou cycle de vie), qui appelle le service en souscrivant son résultat.
+    expect(await legend.locator('.ln-total').textContent()).toBe('Total : 56 relations');
     expect(await dashboard().locator('.map-rel summary').textContent()).toContain('Toutes les relations');
   });
 

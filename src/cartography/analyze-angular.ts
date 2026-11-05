@@ -1,9 +1,10 @@
 import { buildStaticGraph } from '../static-analysis/graph-builder.js';
 import { sourceSetOf } from '../static-analysis/source-set.js';
 import { loadTypeScript } from '../static-analysis/typescript-loader.js';
-import { analyzeTemplates } from './analyze-template.js';
+import { analyzeRxjs } from './analyze-rxjs.js';
+import { analyzeTemplates, membersOf } from './analyze-template.js';
 import type { ReadFile } from './files.js';
-import type { UiFacts, UiField } from './facts.js';
+import type { UiCall, UiFacts, UiField, UiState } from './facts.js';
 
 /**
  * LE FRONTAL ANGULAR : l'analyse statique existante (AST TypeScript, gabarits) donne les routes, les
@@ -116,7 +117,7 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
       loc: field.location,
     };
   });
-  const calls = graph.apiCalls.map((call) => ({
+  const direct: UiCall[] = graph.apiCalls.map((call) => ({
     id: call.id,
     owner: call.owner,
     method: call.method,
@@ -124,8 +125,33 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
     ...(call.bodyType ? { bodyType: call.bodyType } : {}),
     loc: call.location,
   }));
+  // Les stores et flux RxJS : appels indirects (store → service → client HTTP), émissions, souscriptions.
+  const rx = analyzeRxjs(ts, relevant, new Map(direct.map((call) => [call.id, call])));
+  // Une enveloppe (`ApiClient.post(url, body)`) n'est pas un appel : chacun de ses appelants en est un.
+  const wrappers = new Set(rx.wrappers);
+  const calls = [...direct.filter((call) => !wrappers.has(call.id)), ...rx.calls];
   // La structure des gabarits (conteneurs, boutons, conditions) et l'origine des états lus.
   const structure = analyzeTemplates(relevant, new Set(calls.map((call) => call.id)));
+  // Un membre lu par une condition qui est un flux (`canActivate$ | async`, `store.status$ | async`).
+  const states: UiState[] = [...structure.states];
+  for (const el of structure.elements)
+    for (const cond of [el.visibleWhen, el.disabledWhen]) {
+      if (!cond) continue;
+      for (const m of membersOf(cond.expression)) {
+        const stream = rx.streamOf(el.component, m.root, m.path);
+        if (!stream) continue;
+        const at = states.findIndex((st) => st.component === el.component && st.member === m.root);
+        const state: UiState = {
+          component: el.component,
+          member: m.root,
+          kind: 'STREAM',
+          stream,
+          loc: cond.loc,
+        };
+        if (at >= 0) states[at] = state;
+        else states.push(state);
+      }
+    }
   return {
     routes: graph.routes.map((route) => ({
       path: route.path,
@@ -158,8 +184,11 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
       })),
     dtos: graph.dtos.map((dto) => ({ name: dto.name, properties: dto.properties, loc: dto.location })),
     elements: structure.elements,
-    states: structure.states,
+    states,
     handlers: structure.handlers,
-    warnings: [...graph.warnings, ...structure.warnings],
+    symbols: rx.symbols,
+    links: rx.links,
+    diagnostics: rx.diagnostics,
+    warnings: [...graph.warnings, ...structure.warnings, ...rx.warnings],
   };
 }

@@ -32,6 +32,13 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Cartographie : stores et flux RxJS maison.** Le frontal est suivi à travers les stores détectés par
+  leur comportement (Subject, BehaviorSubject…), les émissions, les flux calculés et leurs traitements
+  (switchMap…), les façades, les classes de base et les clients HTTP maison, jusqu'au BFF. La souscription
+  est vérifiée (un Observable non souscrit n'est pas présenté comme exécuté). Les conditions des gabarits
+  sont reliées aux flux qu'elles lisent jusqu'à la réponse du serveur. Chaque rupture de chaîne est dite à
+  l'étape exacte ; une correspondance HTTP ambiguë n'est plus choisie au hasard. Les faits portent la
+  version des analyseurs : un scan incrémental relit une source analysée par une autre version.
 - **Cartographie : écrans Scan & Découverte et Analyse d'impact revus.** Sources en cartes dépliables
   (champs obligatoires, validations avant envoi, jeton Git absent signalé), dernier scan par étapes,
   résumé par source, éléments découverts, scans récents, couverture. L'impact se choisit avec permutation,

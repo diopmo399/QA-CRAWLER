@@ -26,6 +26,8 @@ export default tseslint.config(
       'tests/fixtures/cartography-graph/',
       // Le mini-projet de la cartographie conditionnelle (conteneurs, boutons, décisions Backend).
       'tests/fixtures/cartography-conditions/',
+      // Les stores et flux RxJS maison analysés par la cartographie (dépendances absentes).
+      'tests/fixtures/cartography-rxjs/',
       // Les exemples importent les paquets compilés (dist) : ils se vérifient en les lançant.
       'examples/',
     ],

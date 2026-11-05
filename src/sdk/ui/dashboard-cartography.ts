@@ -537,7 +537,20 @@ function chainCard(m: MapStrings, detail: FeatureDetail | undefined): string {
       .join('');
     return `<li class="map-lane l-${esc(layer.toLowerCase())}"><span class="map-lane-n">${esc(m.layers[layer] ?? layer)}</span><span class="map-lane-b">${boxes}</span></li>`;
   }).join('');
-  return `<section class="card map-chain"><h2>${icon('traceability')}<span>${esc(m.chain(feature.name))}</span></h2><ol class="map-lanes">${lanes}</ol><p class="mu small"><span class="map-box sample"></span> ${esc(m.confidence.CONFIRMED ?? '')} · <span class="map-box sample probable"></span> ${esc(m.confidence.PROBABLE ?? '')} · <span class="map-box sample gap"></span> ${esc(m.gap)}</p></section>`;
+  // Pourquoi une étape manque (étape exacte, cause), et les ruptures relevées dans les écrans.
+  const gaps = feature.chain
+    .filter((step) => step.gap)
+    .map(
+      (step) =>
+        `<li><b>${esc(m.layers[step.layer] ?? step.layer)}</b> — ${esc((step.gap ?? '').replace(/^lien non démontré : /, ''))}</li>`,
+    );
+  const why = gaps.length
+    ? `<h3 class="small">${esc(m.gaps)}</h3><ul class="map-why warn-t small">${gaps.join('')}</ul>`
+    : '';
+  const diagnostics = feature.diagnostics?.length
+    ? `<h3 class="small">${esc(m.chainDiagnostics)}</h3><ul class="map-why small">${feature.diagnostics.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>`
+    : '';
+  return `<section class="card map-chain"><h2>${icon('traceability')}<span>${esc(m.chain(feature.name))}</span></h2><ol class="map-lanes">${lanes}</ol>${why}${diagnostics}<p class="mu small"><span class="map-box sample"></span> ${esc(m.confidence.CONFIRMED ?? '')} · <span class="map-box sample probable"></span> ${esc(m.confidence.PROBABLE ?? '')} · <span class="map-box sample gap"></span> ${esc(m.gap)}</p></section>`;
 }
 
 // ── Niveau 1 : la liste des fonctionnalités ───────────────────────────────────────────────────────

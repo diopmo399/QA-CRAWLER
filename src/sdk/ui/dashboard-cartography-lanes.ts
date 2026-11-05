@@ -201,6 +201,7 @@ function cardOf(
     case 'DTO':
       return { key: `cls:${lane}:${src}:${node.name}`, kind: 'DTO', title: node.name, lane };
     case 'METHOD':
+    case 'STREAM':
       return {
         key: `cls:${lane}:${src}:${ownerOf(node).owner}`,
         kind: 'CLASS',
@@ -331,6 +332,8 @@ export function laneModel(sheet: LaneInput, view: GraphView, filters: LaneFilter
     const text = nodeText(node, node.id);
     if (node.kind === 'METHOD')
       card.members.push({ id: node.id, text: `${ownerOf(node).method}()`, kind: 'method' });
+    else if (node.kind === 'STREAM')
+      card.members.push({ id: node.id, text: ownerOf(node).method, kind: 'field' });
     else if (node.kind === 'FIELD')
       card.members.push({ id: node.id, text: str(node.detail.field) || text.name, kind: 'field' });
     else if (node.kind === 'COLUMN')

@@ -31,7 +31,7 @@ const out = (index: MapIndex, id: string, kind: string): MapEdge[] =>
   (index.out.get(id) ?? []).filter((e) => e.kind === kind);
 const into = (index: MapIndex, id: string, kind: string): MapEdge[] =>
   (index.in.get(id) ?? []).filter((e) => e.kind === kind);
-const MAX_CHAIN = 12;
+const MAX_CHAIN = 20;
 
 export function structureKpis(index: MapIndex): StructureKpis {
   let pages = 0;
@@ -140,7 +140,8 @@ function resolveCondition(index: MapIndex, condition: MapNode): Omit<ElementCond
       // En avant : piloté par, dépend de (la réponse) ; en arrière : le champ qui alimente par mapping.
       const steps = [
         ...out(index, id, 'CONTROLLED_BY').map((e) => ({ e, to: e.to })),
-        ...(index.nodes.get(id)?.kind === 'CONDITION'
+        // Une condition, ou un flux RxJS : ce dont la valeur dépend (flux sources, réponse poussée).
+        ...(index.nodes.get(id)?.kind === 'CONDITION' || index.nodes.get(id)?.kind === 'STREAM'
           ? out(index, id, 'DEPENDS_ON').map((e) => ({ e, to: e.to }))
           : []),
         ...(index.nodes.get(id)?.kind === 'FIELD'
@@ -175,13 +176,20 @@ function resolveCondition(index: MapIndex, condition: MapNode): Omit<ElementCond
   const toDecision = decision ? edges.filter((e) => e.kind !== 'READS') : [];
   const status: MapConfidence = decision ? weakest(toDecision.map((e) => e.confidence)) : 'UNKNOWN';
   const local = sources.filter((s) => s.kind !== 'RESPONSE');
+  // Des flux suivis jusqu'à une réponse HTTP (ou une propriété d'un DTO du serveur) : la valeur vient du
+  // serveur, mais aucune méthode qui la calcule n'y est démontrée.
+  const response = [...nodes.values()].find(
+    (n) => (n.kind === 'FIELD' && n.layer !== 'FRONTEND') || n.detail.httpMethod !== undefined,
+  );
   const undetermined = decision
     ? undefined
-    : local.length && local.length === sources.length
-      ? `valeur calculée dans le frontal (${local.map((s) => `${s.member} : ${s.kind.toLowerCase()}`).join(', ')}) : aucune décision Backend`
-      : sources.some((s) => s.kind === 'RESPONSE')
-        ? 'la réponse lue n’est reliée à aucune méthode Backend démontrée (champ non trouvé ou mapping non suivi)'
-        : 'origine des membres lus non trouvée dans le composant';
+    : response && sources.some((s) => s.kind === 'STREAM')
+      ? `la valeur suit des flux RxJS jusqu’à la réponse (${response.label ?? response.name}) ; aucune méthode Backend qui la calcule n’est démontrée`
+      : local.length && local.length === sources.length
+        ? `valeur calculée dans le frontal (${local.map((s) => `${s.member} : ${s.kind.toLowerCase()}`).join(', ')}) : aucune décision Backend`
+        : sources.some((s) => s.kind === 'RESPONSE')
+          ? 'la réponse lue n’est reliée à aucune méthode Backend démontrée (champ non trouvé ou mapping non suivi)'
+          : 'origine des membres lus non trouvée dans le composant';
   return {
     id: condition.id,
     aspect: condition.detail.aspect === 'ENABLED' ? 'ENABLED' : 'VISIBLE',
@@ -217,6 +225,14 @@ function actionOf(
 ): ElementAction {
   const triggers = out(index, button.id, 'TRIGGERS');
   const endpoints: MapNode[] = [];
+  // Les appels HTTP atteints, et les étapes du frontal traversées (méthode du composant, store, flux).
+  const calls: MapNode[] = [];
+  const via: MapNode[] = [];
+  const front = (node: MapNode | undefined): void => {
+    if (!node || node.layer !== 'FRONTEND' || (node.kind !== 'METHOD' && node.kind !== 'STREAM')) return;
+    const list = node.detail.httpMethod !== undefined ? calls : via;
+    if (!list.includes(node)) list.push(node);
+  };
   const entities = new Map<string, 'READ' | 'WRITE'>();
   const confidences: MapConfidence[] = [];
   const add = (e: MapEdge, to: string): boolean => {
@@ -228,7 +244,10 @@ function actionOf(
     return true;
   };
   let frontier: string[] = [];
-  for (const e of triggers) if (add(e, e.to)) frontier.push(e.to);
+  for (const e of triggers) {
+    front(index.nodes.get(e.to));
+    if (add(e, e.to)) frontier.push(e.to);
+  }
   for (let depth = 0; depth < MAX_CHAIN && frontier.length > 0; depth += 1) {
     const next: string[] = [];
     for (const id of frontier)
@@ -244,6 +263,7 @@ function actionOf(
             !endpoints.includes(target)
           )
             endpoints.push(target);
+          front(target);
           if (add(e, e.to)) next.push(e.to);
         } else if ((e.kind === 'WRITES' || e.kind === 'READS') && index.nodes.get(e.to)?.kind === 'ENTITY') {
           const entity = index.nodes.get(e.to);
@@ -256,7 +276,8 @@ function actionOf(
   }
   return {
     ...(typeof button.detail.handler === 'string' ? { handler: button.detail.handler } : {}),
-    triggers: triggers.map((e) => index.nodes.get(e.to)).filter((n): n is MapNode => n !== undefined),
+    triggers: calls,
+    ...(via.length ? { via } : {}),
     endpoints,
     outbound: [],
     entities: [...entities].map(([name, access]) => ({ name, access })),

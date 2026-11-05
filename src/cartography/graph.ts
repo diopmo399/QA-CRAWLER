@@ -45,6 +45,24 @@ export function humanize(name: string): string {
 
 const last = (text: string): string => text.split('.').pop() ?? text;
 
+/** Au plus autant d'étapes du frontal dans une chaîne (le reste est compté). */
+const MAX_FRONT_STEPS = 10;
+
+/** Le libellé d'une étape du frontal : appel HTTP, flux, ou méthode selon le rôle de sa classe. */
+function frontLabel(n: MapNode): string {
+  if (n.detail.httpMethod !== undefined) {
+    const path = String(n.detail.path ?? '');
+    return `${String(n.detail.httpMethod)} ${path || '(URL dynamique)'}`;
+  }
+  if (n.kind === 'STREAM') {
+    const ops = Array.isArray(n.detail.operators) ? n.detail.operators.slice(0, 3).join(', ') : '';
+    return `Flux ${n.name}${ops ? ` (${ops})` : ''}`;
+  }
+  const role = String(n.detail.role ?? '');
+  const prefix = role === 'COMPONENT' ? 'Action' : role === 'STORE' ? 'Store' : 'Service';
+  return `${prefix} ${n.name}()`;
+}
+
 /** « RequestBffController.get » → « get Request » (l'action, puis la ressource). */
 const handlerTitle = (handler: string): string => {
   const [owner = '', method = handler] = handler.includes('.') ? handler.split('.') : ['', handler];
@@ -266,8 +284,71 @@ export function buildGraph(input: GraphInput): GraphOutput {
             httpMethod: call.method,
             path: call.path ?? '',
             ...(call.bodyType ? { bodyType: call.bodyType } : {}),
+            ...(call.via ? { via: call.via } : {}),
+            ...(call.expression ? { urlExpression: call.expression } : {}),
+            ...(call.unresolved ? { unresolved: call.unresolved } : {}),
           },
         );
+      // Les stores et flux RxJS : méthodes traversées (composant, store, service) et flux.
+      const diagnosticsOf = new Map<string, string[]>();
+      for (const d of ui.diagnostics ?? []) {
+        const owner = d.from.split('#')[0] ?? '';
+        // Pour l'écran, chaque rupture dit de quelle action elle part ; pour la méthode, la rupture seule.
+        for (const [key, text] of [
+          [owner, `${d.from.replace('#', '.')}() — ${d.message}`],
+          [d.from, d.message],
+        ] as const)
+          diagnosticsOf.set(key, [...new Set([...(diagnosticsOf.get(key) ?? []), text])].slice(0, 6));
+      }
+      for (const sym of ui.symbols ?? []) {
+        const stream = sym.stream;
+        const id = `${stream ? 'STREAM' : 'METHOD'}:${src}:${sym.id}`;
+        // Ce qui compte pour l'impact (rôle, point d'entrée, nature du flux, opérateurs, consommation) fait la
+        // signature d'un nœud nouveau ; un appel HTTP déjà connu garde la sienne (pas de faux changement face
+        // à un scan d'avant).
+        const detail: MapNode['detail'] = {
+          role: sym.role,
+          owner: sym.owner,
+          ...(sym.entry ? { entry: sym.entry } : {}),
+          ...(stream
+            ? {
+                streamKind: stream.kind,
+                ...(stream.type ? { subjectType: stream.type } : {}),
+                operators: stream.operators,
+                consumed: stream.consumed,
+                ...(stream.filters ? { filters: stream.filters } : {}),
+                ...(stream.reads ? { reads: stream.reads } : {}),
+              }
+            : {}),
+        };
+        const known = nodes.get(id);
+        if (known) Object.assign(known.detail, detail);
+        node(
+          id,
+          stream ? 'STREAM' : 'METHOD',
+          'FRONTEND',
+          stream ? sym.id : sym.id.replace('#', '.'),
+          ev(
+            src,
+            sym.loc,
+            'STATIC_CODE',
+            'CONFIRMED',
+            stream
+              ? `${stream.kind === 'SUBJECT' ? (stream.type ?? 'Subject') : 'Observable calculé'} ${sym.id}`
+              : `méthode ${sym.id.replace('#', '.')}() (${sym.role.toLowerCase()})`,
+            sym.id,
+          ),
+          known ? {} : detail,
+          sym.role === 'COMPONENT' ? { parent: `COMPONENT:${src}:${sym.owner}` } : {},
+        );
+        const created = nodes.get(id)?.detail;
+        if (created && stream?.consumers) created.consumers = stream.consumers;
+        if (created && diagnosticsOf.get(sym.id)) created.diagnostics = diagnosticsOf.get(sym.id) ?? [];
+      }
+      for (const [owner, messages] of diagnosticsOf) {
+        const detail = nodes.get(`COMPONENT:${src}:${owner}`)?.detail;
+        if (detail) detail.diagnostics = messages;
+      }
     }
     if (facts.java) {
       const java = facts.java;
@@ -698,7 +779,61 @@ export function buildGraph(input: GraphInput): GraphOutput {
         const id = `METHOD:${src}:${call.id}`;
         if (!call.path) continue;
         const found = findServed(call.method, call.path, downstream('FRONTEND'));
-        if (!found) continue;
+        const callDetail = nodes.get(id)?.detail;
+        if (!found) {
+          if (callDetail) callDetail.match = `aucun endpoint ne correspond à ${call.method} ${call.path}`;
+          continue;
+        }
+        // Un chemin qui garde une part inconnue ({base}, {param}) et que plusieurs endpoints satisfont : aucun
+        // n'est choisi au hasard.
+        const callPath = call.path;
+        if (callPath.includes('{')) {
+          // Forte : même forme (paramètre contre paramètre) ; faible : un paramètre de l'appel couvre un
+          // segment littéral. Une adresse de base inconnue en tête ne compare que la fin du chemin.
+          const segments = normalizePath(callPath).split('/').filter(Boolean);
+          const rest = segments.slice(
+            Math.max(
+              0,
+              segments.findIndex((segment) => segment !== '{}'),
+            ),
+          );
+          const tailOnly = rest.length < segments.length;
+          const strength = (entry: Served): 'STRONG' | 'WEAK' | undefined => {
+            if (entry.endpoint.method !== call.method && entry.endpoint.method !== '*') return undefined;
+            const target = normalizePath(entry.endpoint.path).split('/').filter(Boolean);
+            const mine = tailOnly ? rest : segments;
+            if (tailOnly ? target.length < mine.length : target.length !== mine.length) return undefined;
+            const theirs = target.slice(target.length - mine.length);
+            let weak = false;
+            for (let i = 0; i < mine.length; i += 1) {
+              if (mine[i] === theirs[i]) continue;
+              if (mine[i] === '{}') weak = true;
+              else return undefined;
+            }
+            return weak ? 'WEAK' : 'STRONG';
+          };
+          const pool = served.filter((entry) => entry.layer === found.target.layer);
+          const strong = [
+            ...new Map(
+              pool.filter((e) => strength(e) === 'STRONG').map((e) => [e.endpoint.symbolId, e]),
+            ).values(),
+          ];
+          const weakOnes = [
+            ...new Map(
+              pool.filter((e) => strength(e) === 'WEAK').map((e) => [e.endpoint.symbolId, e]),
+            ).values(),
+          ];
+          const ambiguous =
+            strong.length > 1 ? strong : strong.length === 0 && weakOnes.length > 1 ? weakOnes : [];
+          if (ambiguous.length > 1) {
+            if (callDetail)
+              callDetail.match = `correspondance ambiguë : ${String(ambiguous.length)} endpoints correspondent à ${call.method} ${call.path} (${ambiguous
+                .slice(0, 3)
+                .map((entry) => `${entry.endpoint.method} ${entry.endpoint.path}`)
+                .join(', ')})`;
+            continue;
+          }
+        }
         const confidence: MapConfidence = found.how === 'EXACT' ? 'CONFIRMED' : 'PROBABLE';
         const why =
           found.how === 'EXACT'
@@ -723,6 +858,34 @@ export function buildGraph(input: GraphInput): GraphOutput {
             [ev(src, call.loc, 'STATIC_CODE', confidence)],
           );
       }
+      // Déclenchement (appel, next(), traitement de flux, @Output) → CALLS ; données (flux calculé, réponse
+      // poussée dans un flux) → DEPENDS_ON, du flux vers ce dont il dépend.
+      const kindOf = new Map((ui.symbols ?? []).map((sym) => [sym.id, sym.stream ? 'STREAM' : 'METHOD']));
+      const symbolNode = (id: string): string => `${kindOf.get(id) ?? 'METHOD'}:${src}:${id}`;
+      for (const l of ui.links ?? []) {
+        const evidence = [ev(src, l.loc, 'STATIC_CODE', l.confidence, l.kind)];
+        if (l.kind === 'DERIVES')
+          edge(symbolNode(l.from), symbolNode(l.to), 'DEPENDS_ON', l.confidence, l.reason, evidence);
+        else if (l.kind === 'FEEDS')
+          edge(symbolNode(l.to), symbolNode(l.from), 'DEPENDS_ON', l.confidence, l.reason, evidence);
+        else edge(symbolNode(l.from), symbolNode(l.to), 'CALLS', l.confidence, l.reason, evidence);
+      }
+      // L'écran fait ce que font ses méthodes : appelées par le gabarit ou le cycle de vie (sûr), sinon
+      // seulement en interne (probable).
+      for (const sym of ui.symbols ?? [])
+        if (sym.entry)
+          edge(
+            `COMPONENT:${src}:${sym.owner}`,
+            `METHOD:${src}:${sym.id}`,
+            'CALLS',
+            sym.entry === 'INTERNAL' ? 'PROBABLE' : 'CONFIRMED',
+            sym.entry === 'TEMPLATE'
+              ? `${sym.name}() est appelée par le gabarit`
+              : sym.entry === 'LIFECYCLE'
+                ? `${sym.name}() est exécutée au cycle de vie du composant`
+                : `${sym.name}() n’est appelée par aucun gabarit ni cycle de vie lus`,
+            [ev(src, sym.loc, 'STATIC_CODE', sym.entry === 'INTERNAL' ? 'PROBABLE' : 'CONFIRMED')],
+          );
     }
     if (facts.java) {
       const layer: MapLayer = (sourceById.get(src)?.layer ?? facts.layer) === 'BFF' ? 'BFF' : 'BACKEND';
@@ -884,6 +1047,17 @@ export function buildGraph(input: GraphInput): GraphOutput {
             [ev(src, cond.loc, 'STATIC_CODE', 'CONFIRMED')],
           );
           for (const { m, state } of states) {
+            if (state?.kind === 'STREAM' && state.stream) {
+              edge(
+                condition,
+                `STREAM:${src}:${state.stream}`,
+                'CONTROLLED_BY',
+                'CONFIRMED',
+                `${m.root}${m.path.length ? `.${m.path.join('.')}` : ''} lit le flux ${state.stream}`,
+                [ev(src, state.loc, 'TEMPLATE', 'CONFIRMED')],
+              );
+              continue;
+            }
             if (state?.kind !== 'RESPONSE' || !state.call) continue;
             const call = `METHOD:${src}:${state.call}`;
             edge(
@@ -916,7 +1090,16 @@ export function buildGraph(input: GraphInput): GraphOutput {
             }
           }
         }
-        // Le bouton déclenche les appels de service de son gestionnaire.
+        // Le bouton déclenche son gestionnaire (suivi à travers stores et flux), et les appels directs.
+        if (el.kind === 'BUTTON' && el.handler && nodes.has(`METHOD:${src}:${el.component}#${el.handler}`))
+          edge(
+            id,
+            `METHOD:${src}:${el.component}#${el.handler}`,
+            'TRIGGERS',
+            'CONFIRMED',
+            `${el.submit ? '(ngSubmit)' : '(click)'}="${el.handler}()"`,
+            [ev(src, el.loc, 'STATIC_CODE', 'CONFIRMED')],
+          );
         if (el.kind === 'BUTTON' && el.handler) {
           const handler = ui.handlers?.find((h) => h.component === el.component && h.method === el.handler);
           for (const call of handler?.calls ?? [])
@@ -932,6 +1115,50 @@ export function buildGraph(input: GraphInput): GraphOutput {
               ],
             );
         }
+      }
+    }
+    // Vue alimentation : une propriété lue par map()/filter() d'un flux alimenté par une réponse HTTP est
+    // reliée à la propriété du type rendu par l'endpoint (réponse → store → flux → condition). Probable :
+    // la correspondance passe par le nom de la propriété lue.
+    if (ui?.symbols?.some((sym) => sym.stream?.reads?.length)) {
+      const outOf = new Map<string, MapEdge[]>();
+      for (const e of edges.values()) outOf.set(e.from, [...(outOf.get(e.from) ?? []), e]);
+      for (const sym of ui.symbols) {
+        const reads = sym.stream?.reads ?? [];
+        if (reads.length === 0) continue;
+        const sid = `STREAM:${src}:${sym.id}`;
+        const seen = new Set([sid]);
+        let frontier = [sid];
+        const feeders: string[] = [];
+        for (let depth = 0; depth < 8 && frontier.length > 0; depth += 1) {
+          const next: string[] = [];
+          for (const id of frontier)
+            for (const e of outOf.get(id) ?? []) {
+              if (e.kind !== 'DEPENDS_ON' || seen.has(e.to)) continue;
+              seen.add(e.to);
+              if (nodes.get(e.to)?.detail.httpMethod !== undefined) feeders.push(e.to);
+              else next.push(e.to);
+            }
+          frontier = next;
+        }
+        for (const feeder of feeders)
+          for (const served of outOf.get(feeder) ?? []) {
+            const returns = nodes.get(served.to)?.detail.returns;
+            if (served.kind !== 'CALLS' || typeof returns !== 'string') continue;
+            const target = served.to.split(':')[1] ?? '';
+            for (const property of reads) {
+              const field = jsonField(target, returns.replace(/^.*<\s*|\s*>.*$/g, ''), property);
+              if (field)
+                edge(
+                  sid,
+                  field,
+                  'CONTROLLED_BY',
+                  'PROBABLE',
+                  `propriété « ${property} » lue par ${sym.id} dans la réponse ${returns} de ${nodes.get(served.to)?.name ?? served.to}`,
+                  [ev(src, sym.loc, 'STATIC_CODE', 'PROBABLE')],
+                );
+            }
+          }
       }
     }
     const java = facts.java;
@@ -1030,6 +1257,8 @@ export function buildGraph(input: GraphInput): GraphOutput {
         if (!FLOW.has(e.kind)) continue;
         // Une méthode d'un service ne mène pas à toutes les méthodes de ce service.
         if (nodes.get(current)?.kind === 'SERVICE') continue;
+        // Un flux atteint par déclenchement ne mène pas à ses sources de données (seulement à ses traitements).
+        if (nodes.get(current)?.kind === 'STREAM' && e.kind !== 'CALLS') continue;
         const confidence = weakest(seen.get(current) ?? 'UNKNOWN', e.confidence);
         const known = seen.get(e.to);
         if (known !== undefined && RANK[known] >= RANK[confidence]) continue;
@@ -1054,6 +1283,14 @@ export function buildGraph(input: GraphInput): GraphOutput {
 
   const features: Feature[] = [];
   const claimed = new Set<string>();
+  /** Les ruptures relevées dans les composants atteints. */
+  const diagnosticsIn = (set: Map<string, MapConfidence>): { diagnostics?: string[] } => {
+    const list = [...set.keys()].flatMap((id) => {
+      const n = nodes.get(id);
+      return n?.kind === 'COMPONENT' && Array.isArray(n.detail.diagnostics) ? n.detail.diagnostics : [];
+    });
+    return list.length ? { diagnostics: [...new Set(list)].slice(0, 12) } : {};
+  };
   const chainOf = (set: Map<string, MapConfidence>, title: string, start: MapLayer): ChainStep[] => {
     const steps: ChainStep[] = [];
     const pick = (layer: MapLayer, kinds: MapNodeKind[]): MapNode[] =>
@@ -1071,9 +1308,82 @@ export function buildGraph(input: GraphInput): GraphOutput {
           component,
           `Formulaire (${String(fields.filter((f) => f.parent === component.id).length)} champs)`,
         );
-      for (const call of pick('FRONTEND', ['METHOD']))
-        add(call, `${String(call.detail.httpMethod ?? '')} ${String(call.detail.path ?? '')}`.trim());
+      // Les étapes du frontal dans l'ordre du parcours : action du composant, store, flux, service, appel HTTP.
+      // D'abord celles qui mènent à un appel HTTP ; une étape atteinte seulement par un lien non démontré
+      // (flux jamais souscrit, Observable perdu) n'est pas une étape du parcours.
+      const reachable = pick('FRONTEND', ['METHOD', 'STREAM']).filter((n) => set.get(n.id) !== 'UNKNOWN');
+      const leading = new Set(reachable.filter((n) => n.detail.httpMethod !== undefined).map((n) => n.id));
+      const demonstrated = (e: MapEdge): boolean => e.kind === 'CALLS' && e.confidence !== 'UNKNOWN';
+      for (let changed = true; changed;) {
+        changed = false;
+        for (const n of reachable)
+          if (!leading.has(n.id) && (out.get(n.id) ?? []).some((e) => demonstrated(e) && leading.has(e.to))) {
+            leading.add(n.id);
+            changed = true;
+          }
+      }
+      // Parcours par parcours (profondeur d'abord depuis l'écran), puis les étapes sans appel HTTP.
+      const ordered: MapNode[] = [];
+      const placed = new Set<string>();
+      const walk = (id: string): void => {
+        for (const e of out.get(id) ?? []) {
+          if (!demonstrated(e) || placed.has(e.to) || !leading.has(e.to)) continue;
+          const n = nodes.get(e.to);
+          if (!n) continue;
+          placed.add(e.to);
+          ordered.push(n);
+          walk(e.to);
+        }
+      };
+      for (const c of pick('FRONTEND', ['COMPONENT'])) walk(c.id);
+      const fronts = [
+        ...ordered,
+        ...reachable.filter((n) => leading.has(n.id) && !placed.has(n.id)),
+        ...reachable.filter((n) => !leading.has(n.id)),
+      ];
+      const shown = fronts.slice(0, MAX_FRONT_STEPS);
+      for (const n of shown) add(n, frontLabel(n));
+      if (fronts.length > shown.length)
+        steps.push({
+          layer: 'FRONTEND',
+          node: '',
+          label: `+${String(fronts.length - shown.length)} étape(s)`,
+          confidence: 'PROBABLE',
+        });
+      // Aucun appel HTTP atteint : l'étape exacte où la chaîne s'arrête, quand l'analyse la connaît.
+      if (!fronts.some((n) => n.detail.httpMethod !== undefined)) {
+        const why = pick('FRONTEND', ['COMPONENT']).flatMap((c) =>
+          Array.isArray(c.detail.diagnostics) ? c.detail.diagnostics : [],
+        );
+        if (why.length > 0)
+          steps.push({
+            layer: 'FRONTEND',
+            node: '',
+            label: '—',
+            confidence: 'UNKNOWN',
+            gap: `lien non démontré : ${[...new Set(why)].slice(0, 3).join(' ; ')}`,
+          });
+      }
     }
+    // Pourquoi le frontal ne rejoint pas la couche suivante : aucun appel, URL non résolue, ambiguïté, sans
+    // correspondance.
+    const frontWhy = ((): string | undefined => {
+      if (start !== 'FRONTEND') return undefined;
+      const httpCalls = pick('FRONTEND', ['METHOD']).filter((n) => n.detail.httpMethod !== undefined);
+      if (httpCalls.length === 0) return 'lien non démontré : aucun appel HTTP n’est atteint depuis l’écran';
+      const reasons = httpCalls.map((n) =>
+        typeof n.detail.unresolved === 'string'
+          ? `${n.name}() : ${n.detail.unresolved}${typeof n.detail.urlExpression === 'string' ? ` (${n.detail.urlExpression})` : ''}`
+          : typeof n.detail.match === 'string'
+            ? `${String(n.detail.httpMethod)} ${String(n.detail.path)} : ${n.detail.match}`
+            : undefined,
+      );
+      const known = reasons.filter((r): r is string => r !== undefined);
+      return known.length > 0
+        ? `lien non démontré : ${[...new Set(known)].slice(0, 3).join(' ; ')}`
+        : undefined;
+    })();
+    let explained = false;
     const layers: MapLayer[] = ['BFF', 'BACKEND', 'API', 'DATABASE'];
     const order: MapLayer[] = ['FRONTEND', ...layers];
     if (start !== 'FRONTEND' && layersPresent.has('FRONTEND'))
@@ -1107,19 +1417,25 @@ export function buildGraph(input: GraphInput): GraphOutput {
         expected &&
         !steps.some((step) => step.layer === layer) &&
         (start === 'FRONTEND' || layer !== start)
-      )
+      ) {
+        // La raison précise côté frontal ne s'écrit qu'une fois, à la première couche manquante.
+        const fromFront = frontWhy !== undefined && !explained && layer !== 'DATABASE' && layer !== 'API';
+        if (fromFront) explained = true;
         steps.push({
           layer,
           node: '',
           label: '—',
           confidence: 'UNKNOWN',
           gap:
-            layer === 'DATABASE'
-              ? 'lien non démontré : aucune écriture ni lecture d’une entité n’a été retrouvée dans la chaîne'
-              : order.indexOf(layer) < order.indexOf(start)
-                ? `lien non démontré : aucun appel de la couche ${layer} vers cet endpoint n’a été retrouvé`
-                : `lien non démontré : aucun endpoint ${layer === 'API' ? 'du contrat' : `de la couche ${layer}`} ne correspond aux appels de la chaîne`,
+            fromFront && frontWhy
+              ? frontWhy
+              : layer === 'DATABASE'
+                ? 'lien non démontré : aucune écriture ni lecture d’une entité n’a été retrouvée dans la chaîne'
+                : order.indexOf(layer) < order.indexOf(start)
+                  ? `lien non démontré : aucun appel de la couche ${layer} vers cet endpoint n’a été retrouvé`
+                  : `lien non démontré : aucun endpoint ${layer === 'API' ? 'du contrat' : `de la couche ${layer}`} ne correspond aux appels de la chaîne`,
         });
+      }
     }
     return steps;
   };
@@ -1150,6 +1466,7 @@ export function buildGraph(input: GraphInput): GraphOutput {
         nodes: [...set.keys()],
         fields: fieldsOf(set),
         chain: chainOf(set, title, 'FRONTEND'),
+        ...diagnosticsIn(set),
         basis: `l’écran ${route.path} (${route.component}) et les appels de son formulaire`,
         evidence: evidenceOf,
         reach: Object.fromEntries(set),

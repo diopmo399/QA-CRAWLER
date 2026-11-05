@@ -46,6 +46,75 @@ export interface UiCall {
   method: string;
   path?: string;
   bodyType?: string;
+  /** L'appel passe par une méthode d'enveloppe (« ApiClient#post ») qui reçoit l'URL en paramètre. */
+  via?: string;
+  /** L'URL telle qu'écrite, quand elle n'a pas pu être résolue statiquement, et pourquoi. */
+  expression?: string;
+  unresolved?: string;
+  loc: Loc;
+}
+
+/**
+ * Un symbole du frontal suivi à travers les stores et les flux RxJS : une méthode (`Classe#méthode`) ou un
+ * flux (`Classe.propriété` : Subject, BehaviorSubject…, ou Observable calculé par pipe/combineLatest…).
+ */
+export interface UiSymbol {
+  id: string;
+  kind: 'METHOD' | 'STREAM';
+  owner: string;
+  name: string;
+  /** STORE : classe qui garde un état RxJS (Subject…) et l'expose ; SERVICE : injectable sans état RxJS. */
+  role: 'COMPONENT' | 'STORE' | 'SERVICE' | 'CLASS';
+  /** Méthode de composant : appelée par le gabarit, par le cycle de vie, ou seulement en interne. */
+  entry?: 'TEMPLATE' | 'LIFECYCLE' | 'INTERNAL';
+  stream?: {
+    kind: 'SUBJECT' | 'DERIVED';
+    /** Subject, BehaviorSubject, ReplaySubject, AsyncSubject. */
+    type?: string;
+    operators: string[];
+    /** Comment le flux est consommé : souscription explicite, pipe async d'un gabarit, via un flux qui en
+     * dérive, ou nulle part (un Observable non souscrit n'est jamais exécuté). */
+    consumed: 'SUBSCRIBED' | 'ASYNC' | 'DERIVED' | 'NONE';
+    consumers?: string[];
+    /** Les expressions de filter() (texte, borné) et les propriétés lues par map()/filter(). */
+    filters?: string[];
+    reads?: string[];
+  };
+  loc: Loc;
+}
+
+/**
+ * Un lien entre deux symboles du frontal. Déclenchement : CALL (appel de méthode), EMIT (next() sur un
+ * Subject), PROPAGATES (une émission traverse un flux qui en dérive), PIPE (le traitement d'un flux appelle
+ * une méthode : switchMap…), OUTPUT (@Output d'un enfant → gestionnaire du parent). Données : DERIVES (un
+ * flux est calculé à partir d'un autre), FEEDS (la réponse d'un appel alimente un flux).
+ */
+export interface UiLink {
+  from: string;
+  to: string;
+  kind: 'CALL' | 'EMIT' | 'PROPAGATES' | 'PIPE' | 'OUTPUT' | 'DERIVES' | 'FEEDS';
+  confidence: 'CONFIRMED' | 'PROBABLE' | 'UNKNOWN';
+  reason: string;
+  loc: Loc;
+}
+
+/** L'étape exacte où une chaîne de preuves s'interrompt, depuis une méthode d'un composant. */
+export interface UiDiagnostic {
+  /** Composant#méthode d'où part la chaîne. */
+  from: string;
+  /** Le symbole où elle s'arrête. */
+  at: string;
+  code:
+    | 'SERVICE_NOT_FOUND'
+    | 'METHOD_NOT_FOUND'
+    | 'SUBJECT_NO_CONSUMER'
+    | 'STREAM_NOT_SUBSCRIBED'
+    | 'OBSERVABLE_NOT_SUBSCRIBED'
+    | 'NO_HTTP'
+    | 'URL_DYNAMIC'
+    | 'CYCLE'
+    | 'LIMIT';
+  message: string;
   loc: Loc;
 }
 
@@ -107,7 +176,9 @@ export interface UiState {
   member: string;
   /** RESPONSE : affecté depuis la réponse d'un appel ; GETTER : accesseur calculé ; FORM : état du
    * formulaire ; INPUT : entrée du composant ; LOCAL : valeur posée dans le composant. */
-  kind: 'RESPONSE' | 'GETTER' | 'FORM' | 'INPUT' | 'LOCAL';
+  kind: 'RESPONSE' | 'GETTER' | 'FORM' | 'INPUT' | 'LOCAL' | 'STREAM';
+  /** STREAM : le flux lu (`Classe.propriété`), par le pipe async ou une propriété du composant. */
+  stream?: string;
   /** Service#méthode de l'appel dont la réponse est lue. */
   call?: string;
   property?: string;
@@ -135,6 +206,10 @@ export interface UiFacts {
   elements?: UiElement[];
   states?: UiState[];
   handlers?: UiHandler[];
+  /** Les stores, flux RxJS et appels traversés (absents des scans d'avant : rien n'est supposé). */
+  symbols?: UiSymbol[];
+  links?: UiLink[];
+  diagnostics?: UiDiagnostic[];
   warnings: string[];
 }
 
@@ -319,6 +394,9 @@ export interface SourceFacts {
   sourceId: string;
   layer: MapLayer;
   revision?: string;
+  /** La version des analyseurs qui ont produit ces faits : un scan incrémental ne reprend que les faits de
+   * la version courante (absente : faits d'avant, toujours réanalysés). */
+  analyzer?: string;
   ui?: UiFacts;
   java?: JavaFacts;
   openapi?: OpenApiFacts;

@@ -10,6 +10,7 @@ import type {
 import { analyzeAngular } from './analyze-angular.js';
 import { analyzeJava } from './analyze-java.js';
 import { analyzeOpenApi } from './analyze-openapi.js';
+import { RXJS_ANALYZER } from './analyze-rxjs.js';
 import { detectTechnologies, technologyStatuses } from './detect.js';
 import type { SourceFacts } from './facts.js';
 import {
@@ -30,6 +31,12 @@ import { buildGraph } from './graph.js';
  * PARTIAL) ; une annulation arrête tout (CANCELLED). Incrémental : une source dont l'empreinte n'a pas
  * changé depuis le scan précédent reprend ses faits sans être réanalysée (REUSED).
  */
+/**
+ * La version des analyseurs : à changer quand un analyseur produit d'autres faits. Les faits d'une autre
+ * version (ou d'avant, sans version) ne sont jamais repris par un scan incrémental.
+ */
+export const ANALYZERS = `cartography-2;${RXJS_ANALYZER}`;
+
 export interface ScanOptions {
   config: CartographyConfig;
   allowedRoots: readonly string[];
@@ -139,10 +146,13 @@ export async function runScan(
       const before = options.incremental
         ? options.previous?.sources.find((entry) => entry.sourceId === source.id)
         : undefined;
-      const reused =
+      // Une source inchangée reprend ses faits, seulement s'ils viennent des analyseurs actuels : une
+      // évolution d'un analyseur fait relire la source (de nouvelles relations peuvent apparaître).
+      const previous =
         before?.hash === read.hash
           ? options.previous?.facts.find((entry) => entry.sourceId === source.id)
           : undefined;
+      const reused = previous?.analyzer === ANALYZERS ? previous : undefined;
       if (reused) {
         scan.state = 'REUSED';
         facts.push({ ...reused, layer: source.layer, ...(revision ? { revision } : {}) });
@@ -151,6 +161,7 @@ export async function runScan(
       const sourceFacts: SourceFacts = {
         sourceId: source.id,
         layer: source.layer,
+        analyzer: ANALYZERS,
         ...(revision ? { revision } : {}),
       };
       if (found.has('ANGULAR')) {

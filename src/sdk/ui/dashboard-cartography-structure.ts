@@ -120,6 +120,8 @@ const layerTypeOf = (m: MapStrings, node: MapNode): string => {
   if (node.kind === 'ENTITY' || node.kind === 'COLUMN') return m.st.types.db ?? '';
   if (node.kind === 'FIELD') return `${m.st.types.field ?? ''} (${m.layers[node.layer] ?? node.layer})`;
   if (node.kind === 'API') return (node.layer === 'BFF' ? m.st.types.bff : m.st.types.backend) ?? '';
+  if (node.kind === 'STREAM') return m.st.types.stream ?? '';
+  if (node.layer === 'FRONTEND' && node.detail.role === 'STORE') return m.st.types.store ?? '';
   if (node.layer === 'FRONTEND') return m.st.types.front ?? '';
   return (node.layer === 'BFF' ? m.st.types.bffService : m.st.types.service) ?? '';
 };
@@ -136,6 +138,7 @@ function pathRows(sheet: ElementSheet): { node: MapNode; status: MapConfidence }
   for (const c of sheet.conditions)
     for (const n of c.chain.nodes) put(n, c.status === 'UNKNOWN' ? 'UNKNOWN' : c.status);
   for (const a of sheet.actions) {
+    for (const n of a.via ?? []) put(n, a.status);
     for (const n of a.triggers) put(n, 'CONFIRMED');
     for (const n of a.endpoints) put(n, a.status);
   }

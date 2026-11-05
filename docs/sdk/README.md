@@ -1295,6 +1295,38 @@ graphe la largeur de la zone centrale.
 d'état partagé n'est pas suivie jusqu'au Backend : elle reste non déterminée. Une décision prise dans une
 requête SQL ou une règle externe n'est pas lue.
 
+#### Stores et flux RxJS du frontal
+
+Un écran Angular dont l'état vit dans des stores maison (ni NgRx, ni convention de nommage) est suivi
+jusqu'à ses appels HTTP. L'analyse lit l'AST TypeScript, sans rien exécuter :
+
+- **Store** : une classe qui garde un état dans un `Subject`, `BehaviorSubject`, `ReplaySubject` ou
+  `AsyncSubject` et l'expose, quel que soit son nom. Une classe sans état RxJS reste un service.
+- **Déclenchement** : méthode du composant (appelée par le gabarit, le cycle de vie, ou un `@Output` d'un
+  enfant) → méthode d'un store → `next()` → flux qui en dérive (`pipe`, `combineLatest`…) → traitement
+  (`switchMap`, `mergeMap`, `concatMap`, `exhaustMap`…) → façade → service → client HTTP. Les appels sont
+  suivis à travers les classes et leurs classes de base, sans profondeur fixe (cycles détectés, exploration
+  bornée). `HttpClient.request()` et les clients maison qui reçoivent l'URL en paramètre sont pris en charge :
+  l'appel est attribué à leur appelant, avec l'URL qu'il fournit.
+- **Paresse des Observables** : un appel n'est présenté comme exécuté que si son résultat est souscrit
+  (`subscribe`, pipe `async`, `toSignal`, `firstValueFrom`, ou par le flux extérieur d'un `switchMap`). Une
+  souscription explicite rend le lien sûr, un pipe `async` d'un gabarit le rend probable, l'absence de
+  souscription le laisse non démontré.
+- **Alimentation** : une condition du gabarit (`*ngIf="canActivate$ | async"`) est reliée au flux qu'elle
+  lit, à ses flux sources, à la réponse HTTP poussée dans le store (`next()` dans `subscribe`/`tap`, ou
+  résultat d'un `switchMap`), puis à la propriété du DTO rendu par l'endpoint quand `map()`/`filter()` la lit
+  (probable : correspondance par le nom de la propriété). Une dépendance de visibilité n'est jamais un
+  déclenchement.
+- **Diagnostics** : quand une action de l'écran n'atteint aucun appel HTTP, l'étape exacte est dite (classe
+  absente des sources, méthode introuvable, flux jamais souscrit, Observable perdu, cycle, URL construite
+  dynamiquement, correspondance ambiguë avec plusieurs endpoints). La chaîne d'une fonctionnalité affiche
+  ses étapes intermédiaires (action, store, flux, service, appel) et ces ruptures.
+
+Les faits d'une source portent la version des analyseurs : un scan incrémental relit une source inchangée
+dont les faits viennent d'une autre version (ou d'avant), pour que les nouvelles relations apparaissent.
+Limites : les formulaires dynamiques construits à l'exécution, `ngComponentOutlet` et les URL chargées au
+démarrage ne sont pas résolus ; les signaux Angular ne sont pas suivis comme des flux.
+
 #### Sources locales et dépôts Git distants
 
 Une source est de l'un de deux types :

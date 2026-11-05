@@ -306,7 +306,10 @@ function stackStartOf(stack: readonly Frame[], container: UiElement): number {
 
 /** Les racines des membres lus par une expression (`state.canValidate && !form.invalid` → state, form). */
 export function membersOf(expression: string): { root: string; path: string[] }[] {
-  const cleaned = expression.replace(/'[^']*'|"[^"]*"|`[^`]*`/g, ' ');
+  // Les chaînes et les pipes (`x$ | async`, `d | date:'short'`) ne sont pas des membres.
+  const cleaned = expression
+    .replace(/'[^']*'|"[^"]*"|`[^`]*`/g, ' ')
+    .replace(/(?<!\|)\|(?!\|)\s*[A-Za-z_$][\w$]*/g, ' ');
   const out = new Map<string, string[]>();
   for (const m of cleaned.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)((?:\??\.[A-Za-z_$][\w$]*|\(\))*)/g)) {
     const root = m[1] ?? '';

@@ -107,6 +107,8 @@ export const MAP_NODE_KINDS = [
   'CONTAINER',
   'BUTTON',
   'CONDITION',
+  /** Un flux RxJS du frontal : Subject/BehaviorSubject d'un store, ou Observable calculé (pipe, combineLatest). */
+  'STREAM',
 ] as const;
 export type MapNodeKind = (typeof MAP_NODE_KINDS)[number];
 
@@ -236,6 +238,8 @@ export interface Feature {
   nodes: string[];
   fields: string[];
   chain: ChainStep[];
+  /** Les ruptures de chaîne relevées dans les écrans de la fonctionnalité (étape exacte, cause). */
+  diagnostics?: string[];
   /** Comment la fonctionnalité a été proposée (un écran et ses appels, une opération d'API seule…). */
   basis: string;
   mergedFrom?: string[];
@@ -853,7 +857,10 @@ export interface ElementCondition {
 /** Une action d'un bouton : les appels déclenchés, les endpoints atteints, l'aval (API externes, tables). */
 export interface ElementAction {
   handler?: string;
+  /** Les appels HTTP du frontal atteints par le gestionnaire (directement ou via stores et flux RxJS). */
   triggers: MapNode[];
+  /** Les étapes intermédiaires du frontal, dans l'ordre : méthode du composant, store, flux, service. */
+  via?: MapNode[];
   endpoints: MapNode[];
   outbound: ApiOutbound[];
   entities: { name: string; access: 'READ' | 'WRITE' }[];
