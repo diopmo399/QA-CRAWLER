@@ -33,15 +33,34 @@ export type MapTechnology = (typeof MAP_TECHNOLOGIES)[number];
 export const SUPPORTED_TECHNOLOGIES: readonly MapTechnology[] = ['ANGULAR', 'SPRING', 'JPA', 'OPENAPI'];
 
 /** Une source à analyser : un dossier (un dépôt Git local ou une partie) lu sous une racine autorisée. */
+/** Les hébergeurs Git dont QA-CRAWLER sait construire un lien vers un fichier à une révision. */
+export const GIT_PROVIDERS = ['GITHUB', 'GITLAB', 'BITBUCKET', 'AZURE_DEVOPS'] as const;
+export type GitProvider = (typeof GIT_PROVIDERS)[number];
+
 export interface MapSource {
   id: string;
   name: string;
   layer: MapLayer;
-  /** Chemin absolu, sous l'une des racines autorisées par le serveur (`allowedSourceRoots`). */
+  /**
+   * LOCAL (par défaut, et pour toute source enregistrée avant cette option) : un dossier du serveur.
+   * GIT : un dépôt distant que le serveur prépare (clone ou mise à jour) dans son propre dossier de travail.
+   */
+  kind?: 'LOCAL' | 'GIT';
+  /** LOCAL : chemin absolu, sous l'une des racines autorisées par le serveur (`allowedSourceRoots`). GIT : vide. */
   path: string;
-  /** Sous-dossiers analysés (relatifs à `path`) ; vide : tout le dossier. */
+  /** Sous-dossiers analysés (relatifs à la racine) ; vide : tout le dossier. */
   include: string[];
   enabled: boolean;
+  /** GIT : le dépôt à préparer. LOCAL : facultatif, sert seulement à construire les liens « Voir sur Git ». */
+  repoUrl?: string;
+  /** L'hébergeur, quand il ne se déduit pas de l'hôte (instance auto-hébergée). */
+  provider?: GitProvider;
+  /** GIT : la branche suivie (sinon la branche par défaut du dépôt). */
+  branch?: string;
+  /** GIT : un commit précis (40 caractères hexadécimaux) ; prioritaire sur la branche. */
+  commit?: string;
+  /** GIT : le NOM de la variable d'environnement du serveur qui porte le jeton (jamais sa valeur). */
+  tokenEnv?: string;
 }
 
 export interface CartographyConfig {
@@ -161,7 +180,18 @@ export interface SourceScan {
   /** Fichiers laissés de côté (limites, taille, secrets), comptés. */
   skipped: number;
   secretsExcluded: number;
+  /** Le commit réellement analysé (vérifié après extraction pour une source GIT). */
   revision?: string;
+  /** RESOLVED : révision lue ; UNDETERMINED : dépôt Git mais révision illisible (la cause est dans `errors`) ; NONE : pas un dépôt Git. */
+  revisionStatus?: 'RESOLVED' | 'UNDETERMINED' | 'NONE';
+  /** Le type de la source au moment du scan, et pour une source GIT ce qui a été demandé. */
+  kind?: 'LOCAL' | 'GIT';
+  repoUrl?: string;
+  provider?: GitProvider;
+  branch?: string;
+  requestedCommit?: string;
+  /** Le dossier de la source dans son dépôt (« front » dans un monodépôt), « / » comme séparateur ; vide : la racine. */
+  repoPath?: string;
   /** Empreinte des fichiers lus : inchangée → le scan incrémental reprend le résultat précédent. */
   hash?: string;
   errors: string[];
@@ -465,9 +495,24 @@ export interface MapChange {
   detail: string[];
 }
 
+/** Une source comparée entre deux scans : un autre commit n'est pas une différence si les fichiers lus sont identiques. */
+export interface SourceComparison {
+  sourceId: string;
+  name: string;
+  layer: MapLayer;
+  status: 'ADDED' | 'REMOVED' | 'MODIFIED' | 'UNCHANGED' | 'UNDETERMINED';
+  from?: { revision?: string; files: number; state: SourceScan['state'] };
+  to?: { revision?: string; files: number; state: SourceScan['state'] };
+  /** Les éléments du graphe de cette source ajoutés, retirés, modifiés. */
+  changes: { added: number; removed: number; changed: number };
+  reason: string;
+}
+
 export interface ImpactReport {
   from: string;
   to: string;
+  /** Les sources des deux scans, comparées (absent des rapports d'avant cette option). */
+  sources?: SourceComparison[];
   changes: MapChange[];
   features: { feature: string; name: string; confidence: 'CONFIRMED' | 'PROBABLE'; via: string[] }[];
   scenarios: { scenario: string; confidence: 'CONFIRMED' | 'PROBABLE'; features: string[]; reason: string }[];
@@ -502,6 +547,14 @@ export interface EvidenceExcerpt {
   lines: string[];
   /** Le fichier a changé depuis le scan : la preuve est périmée (la raison est dite). */
   stale?: string;
+  /** L'extrait n'a pas pu être lu (fichier absent, révision disparue) : la raison, sans inventer de code. */
+  unavailable?: string;
+  /** La couche, le scan et la révision dont l'extrait est tiré. */
+  layer?: MapLayer;
+  scanId?: string;
+  revision?: string;
+  /** « Voir sur Git » : le fichier chez l'hébergeur, à la révision analysée et à la ligne. */
+  gitUrl?: string;
 }
 
 // ── Exploration progressive (fonctionnalités → champs → champ) ────────────────────────────────────
@@ -535,6 +588,8 @@ export interface MapListQuery {
 export interface MapSummary {
   config: CartographyConfig;
   allowedRoots: string[];
+  /** Les hôtes Git autorisés pour les sources distantes ; absent : sources distantes désactivées. */
+  gitHosts?: string[];
   supported: readonly MapTechnology[];
   scans: ScanRecord[];
   running?: ScanRecord;

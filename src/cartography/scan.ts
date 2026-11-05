@@ -1,6 +1,12 @@
 import { buildApis } from './apis.js';
 import { randomUUID } from 'node:crypto';
-import type { CartographyConfig, CartographyModel, ScanRecord, SourceScan } from '../sdk/core/cartography.js';
+import type {
+  CartographyConfig,
+  CartographyModel,
+  MapSource,
+  ScanRecord,
+  SourceScan,
+} from '../sdk/core/cartography.js';
 import { analyzeAngular } from './analyze-angular.js';
 import { analyzeJava } from './analyze-java.js';
 import { analyzeOpenApi } from './analyze-openapi.js';
@@ -9,11 +15,12 @@ import type { SourceFacts } from './facts.js';
 import {
   allowedPath,
   DEFAULT_LIMITS,
-  gitRevision,
+  gitInfo,
   readSource,
   SourceAccessError,
   type ReadLimits,
 } from './files.js';
+import { GitSourceError, type PreparedGit } from './git-source.js';
 import { buildGraph } from './graph.js';
 
 /**
@@ -32,6 +39,11 @@ export interface ScanOptions {
   signal?: AbortSignal;
   now?: () => Date;
   onProgress?: (record: ScanRecord) => void;
+  /**
+   * Prépare une source GIT (clone ou mise à jour) et rend son dossier et son commit vérifié ; absent : le
+   * serveur n'accepte pas de source distante. Le reste du scan ne voit qu'un dossier.
+   */
+  prepareGit?: (source: MapSource, signal?: AbortSignal) => Promise<PreparedGit>;
 }
 
 export const newScanId = (now: Date): string =>
@@ -66,17 +78,39 @@ export async function runScan(
       secretsExcluded: 0,
       errors: [],
     };
+    const remote = source.kind === 'GIT';
+    if (remote) {
+      scan.kind = 'GIT';
+      if (source.branch) scan.branch = source.branch;
+      if (source.commit) scan.requestedCommit = source.commit;
+    }
+    if (source.repoUrl) scan.repoUrl = source.repoUrl;
+    if (source.provider) scan.provider = source.provider;
     record.sources.push(scan);
     if (!source.enabled) {
       scan.state = 'DISABLED';
       continue;
     }
     let root: string;
+    let prepared: PreparedGit | undefined;
     try {
-      root = await allowedPath(source.path, options.allowedRoots);
+      if (remote) {
+        if (!options.prepareGit)
+          throw new GitSourceError('GIT_DISABLED', 'remote Git sources are not enabled on this server');
+        prepared = await options.prepareGit(source, options.signal);
+        root = prepared.root;
+        scan.repoUrl = prepared.repo.url;
+        if (prepared.repo.provider) scan.provider = prepared.repo.provider;
+      } else root = await allowedPath(source.path, options.allowedRoots);
     } catch (error) {
-      scan.state = 'DENIED';
+      // Une adresse ou un dossier refusé : DENIED ; un dépôt qui n'a pas pu être préparé : FAILED. Les autres
+      // sources continuent.
+      const refused =
+        !(error instanceof GitSourceError) ||
+        ['GIT_DISABLED', 'URL_REFUSED', 'HOST_REFUSED'].includes(error.code);
+      scan.state = refused ? 'DENIED' : 'FAILED';
       scan.errors.push(error instanceof SourceAccessError ? error.message : String(error));
+      options.onProgress?.({ ...record, sources: [...record.sources] });
       continue;
     }
     try {
@@ -86,8 +120,19 @@ export async function runScan(
       scan.secretsExcluded = read.secretsExcluded;
       scan.hash = read.hash;
       scan.errors.push(...read.limits);
-      const allowedRoot = options.allowedRoots.find((candidate) => root.startsWith(candidate)) ?? root;
-      const revision = await gitRevision(root, allowedRoot);
+      let revision: string | undefined;
+      if (prepared) {
+        revision = prepared.commit;
+        scan.revisionStatus = 'RESOLVED';
+        scan.repoPath = '';
+      } else {
+        const allowedRoot = options.allowedRoots.find((candidate) => root.startsWith(candidate)) ?? root;
+        const git = await gitInfo(root, allowedRoot);
+        revision = git.revision;
+        scan.revisionStatus = git.status;
+        if (git.repoPath !== undefined) scan.repoPath = git.repoPath;
+        if (git.note) scan.errors.push(`révision Git indéterminée : ${git.note}`);
+      }
       if (revision) scan.revision = revision;
       const found = detectTechnologies(read.files);
       scan.technologies = technologyStatuses(found);

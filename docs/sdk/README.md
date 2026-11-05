@@ -1293,6 +1293,67 @@ graphe la largeur de la zone centrale.
 d'état partagé n'est pas suivie jusqu'au Backend : elle reste non déterminée. Une décision prise dans une
 requête SQL ou une règle externe n'est pas lue.
 
+#### Sources locales et dépôts Git distants
+
+Une source est de l'un de deux types :
+
+| Type             | Ce que le serveur lit                                                                | Champs                                                                         |
+| ---------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `LOCAL` (défaut) | un dossier sous une racine autorisée (`allowedSourceRoots`) ; aucune requête réseau  | `path`, `include` ; `repoUrl` et `provider` facultatifs (liens seulement)      |
+| `GIT`            | une copie de travail que le serveur prépare lui-même sous `<workspace>/.git-sources` | `repoUrl`, `branch`, `commit` (prioritaire), `tokenEnv`, `provider`, `include` |
+
+Une source enregistrée avant cette option (sans `kind`) reste locale. Un scan peut mêler autant de
+sources locales et distantes que nécessaire, plusieurs par couche ; chaque preuve garde l'identifiant de
+sa source, si bien que deux dépôts qui ont un fichier de même chemin ne se confondent pas.
+
+**Activer les sources distantes.** Elles sont refusées tant que le serveur n'a pas d'hôte autorisé :
+`qa-crawler sdk-server --git-host github.com --git-host gitlab.example.org` (ou l'option
+`gitSources: { allowedHosts }` de `startSdkServer`). Un hôte interne (GitLab auto-hébergé sur une adresse
+privée) demande en plus `--git-allow-private`. Pour un dépôt privé, `tokenEnv` porte le **nom** d'une
+variable d'environnement du serveur (correspondant à `QA_*`) ; sa valeur n'est jamais enregistrée,
+renvoyée, écrite dans la copie de travail ni montrée dans une erreur.
+
+**Préparation sûre.** Avant chaque scan, le serveur :
+
+- vérifie l'adresse : https seulement, hôte autorisé, sans identifiants, sans paramètres ;
+- résout l'hôte et refuse une adresse interne, et toujours 169.254.x.x ;
+- récupère une seule révision : le commit demandé, sinon la branche, sinon la branche par défaut ;
+- l'extrait de force puis vérifie le commit réellement obtenu, qui est enregistré dans le scan.
+
+Les commandes git sont lancées sans shell, sans configuration système ou utilisateur, sans assistant
+d'identifiants ni invite, sans hooks, sans sous-modules, sans suivre de redirection. Les liens
+symboliques sont extraits comme de simples fichiers. Chaque opération a un délai (120 s) et le dépôt une
+taille maximale (512 Mo). Une copie de travail est réservée pendant sa préparation (scans concurrents),
+effacée si sa première préparation échoue, et supprimée quand la source est retirée de la configuration.
+
+Une source qui échoue n'arrête pas les autres. Son erreur est dite avec un code :
+
+- adresse ou hôte refusé : `URL_REFUSED`, `HOST_REFUSED`, `GIT_DISABLED` (état `DENIED`) ;
+- identifiants : `CREDENTIALS_MISSING`, `AUTH_FAILED` ;
+- révision : `BRANCH_NOT_FOUND`, `COMMIT_NOT_FOUND` ;
+- dépôt : `UNREACHABLE`, `TIMEOUT`, `LIMIT`, `BUSY` (état `FAILED`).
+
+**Révision d'une source locale.** Elle est lue dans `.git` sans lancer git, y compris pour un worktree ou un
+sous-module (fichier `.git`), tant que le dossier Git reste sous la racine autorisée ; `repoPath` situe
+la source dans son dépôt (monodépôt). Sinon `revisionStatus` vaut `UNDETERMINED`, avec la cause, ou
+`NONE` hors d'un dépôt : aucun commit n'est inventé.
+
+**« Voir le code » et « Voir sur Git ».** `GET …/cartography/evidence` accepte `revision` et `scan`. Pour
+une source distante, l'extrait est relu à la révision exacte du scan (`git show`), même après un commit
+plus récent. Un fichier ou une révision qui n'existe plus donne `unavailable` et sa cause, sans extrait.
+La réponse porte la couche, le scan et la révision. Elle porte aussi `gitUrl` quand l'hébergeur est
+connu (GitHub, GitLab, Bitbucket, Azure DevOps, ou `provider` déclaré) et que le commit est exact : le
+lien ne pointe jamais vers une branche.
+
+**Comparer deux scans.** Le rapport d'impact compare aussi les sources (`sources`) : ajoutée, supprimée,
+modifiée, inchangée ou indéterminée, avec les commits des deux côtés et le nombre d'éléments ajoutés,
+retirés ou modifiés. Un autre commit dont les fichiers lus sont identiques reste « inchangée » ; une
+source non lue dans l'un des scans est « indéterminée ».
+
+**Limites.** Entre la vérification de l'adresse et la connexion de git, l'hôte est résolu une seconde
+fois : la liste des hôtes autorisés reste la protection principale. Seul https est proposé (pas de SSH).
+Les preuves donnent une ligne, pas encore une ligne de fin.
+
 « Planifier » est affiché désactivé : la planification des scans de cartographie n'existe pas encore.
 
 **Limites.** Le corps d'une méthode n'est pas comparé entre deux scans (seule sa signature l'est).

@@ -247,6 +247,7 @@ import {
   saveConfig,
   startScan,
 } from './cartography.js';
+import type { GitPolicy } from '../../cartography/git-source.js';
 import { AccessError, AccessStore, actionOf, can, rightFor, roleIn, type Identity } from './access.js';
 import { handleIncidentRoutes } from './incidents.js';
 import { IncidentService, type HostReplay, type IncidentHost } from '../../incident/service.js';
@@ -298,6 +299,19 @@ export interface SdkServerOptions {
   allowedSourceRoots?: string[];
   /** Les noms de variables d'environnement que le serveur accepte de consulter (défaut : QA_*). */
   envNames?: RegExp;
+  /**
+   * Les sources Git distantes de la cartographie : désactivées si absentes. Seuls les hôtes listés sont
+   * joints (https), jamais une adresse interne sauf `allowPrivateAddresses` ; les copies de travail vont
+   * sous `workRoot` (défaut : `<workspace>/.git-sources`). `protocols` http et file servent aux tests.
+   */
+  gitSources?: {
+    allowedHosts: string[];
+    workRoot?: string;
+    allowPrivateAddresses?: boolean;
+    protocols?: ('https' | 'http' | 'file')[];
+    timeoutMs?: number;
+    maxRepoBytes?: number;
+  };
   env?: NodeJS.ProcessEnv;
   /** Langue de la page autonome et des rapports du moteur. */
   language?: 'fr' | 'en';
@@ -412,10 +426,24 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
   const sseClients = new Set<ServerResponse>();
   const ai = await incidentAiRuntime(options, env);
 
+  const git: GitPolicy | undefined = options.gitSources
+    ? {
+        allowedHosts: options.gitSources.allowedHosts,
+        workRoot: path.resolve(options.gitSources.workRoot ?? path.join(workspace, '.git-sources')),
+        fileRoots: rules.allowedSourceRoots,
+        env,
+        envNames,
+        ...(options.gitSources.protocols ? { protocols: options.gitSources.protocols } : {}),
+        ...(options.gitSources.allowPrivateAddresses ? { allowPrivateAddresses: true } : {}),
+        ...(options.gitSources.timeoutMs ? { timeoutMs: options.gitSources.timeoutMs } : {}),
+        ...(options.gitSources.maxRepoBytes ? { maxRepoBytes: options.gitSources.maxRepoBytes } : {}),
+      }
+    : undefined;
   const context: Context = {
     token,
     env,
     envNames,
+    ...(git ? { git } : {}),
     allowedOrigins,
     rules,
     workspace,
@@ -488,6 +516,8 @@ interface Context {
   token: string;
   env: NodeJS.ProcessEnv;
   envNames: RegExp;
+  /** La préparation des sources Git distantes (absente : refusées). */
+  git?: GitPolicy;
   allowedOrigins: Set<string>;
   rules: ProjectRules;
   workspace: string;
@@ -4341,13 +4371,13 @@ async function handleCartography(
     }
     if (part === 'config' && item === undefined && method === 'POST') {
       refuseArchived(project);
-      json(await saveConfig(project, await readJson(request), roots));
+      json(await saveConfig(project, await readJson(request), roots, new Date(), ctx.git));
       return;
     }
     if (part === 'scans' && item === undefined && method === 'POST') {
       refuseArchived(project);
       const body = await readOptionalJson(request);
-      json(await startScan(project, roots, { incremental: body.incremental }), 202);
+      json(await startScan(project, roots, { incremental: body.incremental }, ctx.git), 202);
       return;
     }
     if (part === 'scans' && item === 'current' && action === undefined && method === 'GET') {
@@ -4384,7 +4414,7 @@ async function handleCartography(
       };
       switch (part) {
         case 'summary':
-          json(await mapSummary(project, roots));
+          json(await mapSummary(project, roots, ctx.git));
           return;
         case 'features':
           json(await mapFeatures(project, listQuery(params)));
@@ -4436,11 +4466,18 @@ async function handleCartography(
     }
     if (part === 'evidence' && item === undefined && method === 'GET') {
       json(
-        await evidenceExcerpt(project, roots, {
-          source: url.searchParams.get('source'),
-          file: url.searchParams.get('file'),
-          line: url.searchParams.get('line'),
-        }),
+        await evidenceExcerpt(
+          project,
+          roots,
+          {
+            source: url.searchParams.get('source'),
+            file: url.searchParams.get('file'),
+            line: url.searchParams.get('line'),
+            revision: url.searchParams.get('revision'),
+            scan: url.searchParams.get('scan'),
+          },
+          ctx.git,
+        ),
       );
       return;
     }

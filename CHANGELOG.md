@@ -32,6 +32,16 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Cartographie : sources Git distantes.** Une source peut être un dépôt Git (`kind: 'GIT'`, `repoUrl`,
+  `branch`, `commit`, `tokenEnv`) que le serveur prépare lui-même. Les hôtes sont autorisés par
+  `--git-host`, en https seulement, et les adresses internes sont refusées. Git est lancé sans shell,
+  sans hooks, sans sous-modules, sans liens symboliques, sans redirection, avec délais et limites. Le
+  jeton est désigné par le nom d'une variable d'environnement, jamais stocké ni renvoyé. Chaque scan
+  enregistre le commit réellement analysé.
+- La révision des sources locales est lue de façon fiable (worktree, sous-module, sous-dossier d'un
+  dépôt) ou dite indéterminée. « Voir le code » relit une source distante à la révision exacte et ajoute
+  « Voir sur Git » (GitHub, GitLab, Bitbucket, Azure DevOps). L'impact compare les sources des deux
+  scans.
 - **Cartographie : Structure & Conditions.** Le scan lit les gabarits Angular (conteneurs, boutons,
   `@if`, `*ngIf`, `[hidden]`, `@else`, `[disabled]`, gestionnaires `(click)` et `(ngSubmit)`) et, côté
   Java, les méthodes de décision booléennes (boucles, prédicats, données lues) et les champs calculés

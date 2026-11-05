@@ -6,6 +6,7 @@ import type {
   MapListQuery,
   MapSource,
 } from '../core/cartography.js';
+import { GIT_PROVIDERS } from '../core/cartography.js';
 import type { QaCrawlerClient } from '../core/client.js';
 import { API_TABS, type ApiTab } from './dashboard-cartography-apis.js';
 import { readIds } from './dashboard-cartography-graph.js';
@@ -1017,6 +1018,7 @@ export class CartographyController {
           target.dataset.source ?? '',
           target.dataset.file ?? '',
           Number(target.dataset.line) || 1,
+          target.dataset.rev,
         );
         return true;
       case 'map-evidence-close':
@@ -1167,6 +1169,24 @@ export class CartographyController {
           .filter(Boolean);
       else if (field === 'layer') source.layer = value as MapLayer;
       else if (field === 'id' || field === 'name' || field === 'path') source[field] = value;
+      else if (field === 'kind') {
+        if (value === 'GIT') {
+          source.kind = 'GIT';
+          source.path = '';
+        } else delete source.kind;
+        this.host.paint();
+      } else if (field === 'provider') {
+        const provider = GIT_PROVIDERS.find((p) => p === value);
+        if (provider) source.provider = provider;
+        else delete source.provider;
+      } else if (field === 'repoUrl' || field === 'branch' || field === 'commit' || field === 'tokenEnv') {
+        // Un champ vidé est retiré (le serveur ne reçoit que ce qui est saisi).
+        const typed = value.trim();
+        if (field === 'repoUrl') source.repoUrl = typed || undefined;
+        else if (field === 'branch') source.branch = typed || undefined;
+        else if (field === 'commit') source.commit = typed || undefined;
+        else source.tokenEnv = typed || undefined;
+      }
       return true;
     }
     const criteria = (
@@ -1476,10 +1496,16 @@ export class CartographyController {
     this.ui.launching = false;
   }
 
-  private async evidence(source: string, file: string, line: number): Promise<void> {
+  private async evidence(source: string, file: string, line: number, revision?: string): Promise<void> {
     await this.act(
       async (api, projectId) => {
-        this.ui.evidence = await api.cartography.evidence(projectId, { source, file, line });
+        // La preuve est relue à la révision où elle a été relevée (si le scan l'a connue).
+        this.ui.evidence = await api.cartography.evidence(projectId, {
+          source,
+          file,
+          line,
+          ...(revision ? { revision } : {}),
+        });
         this.ui.evidenceError = undefined;
       },
       (text) => {

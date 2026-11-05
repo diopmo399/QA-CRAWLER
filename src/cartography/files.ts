@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -184,30 +184,87 @@ export async function readSource(
   };
 }
 
-/**
- * La révision Git (commit) d'un dossier, lue dans `.git` sans lancer git ; absente si illisible. La recherche
- * remonte au plus jusqu'à `stopAt` (la racine autorisée) : rien n'est lu au-dessus.
- */
-export async function gitRevision(directory: string, stopAt: string): Promise<string | undefined> {
-  let current = directory;
-  for (let depth = 0; depth < 8; depth++) {
-    const git = path.join(current, '.git');
-    const head = await readFile(path.join(git, 'HEAD'), 'utf8').catch(() => undefined);
-    if (head !== undefined) {
-      const text = head.trim();
-      if (/^[0-9a-f]{40}$/.test(text)) return text;
-      const ref = /^ref:\s*(\S+)$/.exec(text)?.[1];
-      if (!ref) return undefined;
-      const loose = await readFile(path.join(git, ref), 'utf8').catch(() => undefined);
-      if (loose && /^[0-9a-f]{40}/.test(loose.trim())) return loose.trim().slice(0, 40);
-      const packed = await readFile(path.join(git, 'packed-refs'), 'utf8').catch(() => undefined);
-      const line = packed?.split('\n').find((entry) => entry.endsWith(` ${ref}`));
-      return line ? line.slice(0, 40) : undefined;
-    }
-    const parent = path.dirname(current);
-    if (parent === current || current === stopAt || path.relative(stopAt, parent).startsWith('..'))
-      return undefined;
-    current = parent;
+/** Ce que le scan sait de Git pour un dossier : la révision, ou pourquoi elle manque. */
+export interface GitInfo {
+  revision?: string;
+  status: 'RESOLVED' | 'UNDETERMINED' | 'NONE';
+  /** Le dossier dans son dépôt, « / » comme séparateur ; vide : la racine du dépôt. */
+  repoPath?: string;
+  note?: string;
+}
+
+const HEX_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+const inside = (root: string, candidate: string): boolean => {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+};
+
+/** La référence `ref` lue dans un dossier Git (référence libre, puis `packed-refs`). */
+async function readRef(dirs: readonly string[], ref: string): Promise<string | undefined> {
+  if (!/^refs\/[A-Za-z0-9._/-]+$/.test(ref) || ref.split('/').includes('..')) return undefined;
+  for (const dir of dirs) {
+    const loose = (await readFile(path.join(dir, ref), 'utf8').catch(() => undefined))?.trim();
+    if (loose && HEX_ID.test(loose)) return loose;
+  }
+  for (const dir of dirs) {
+    const packed = await readFile(path.join(dir, 'packed-refs'), 'utf8').catch(() => undefined);
+    const line = packed?.split('\n').find((entry) => entry.endsWith(` ${ref}`));
+    const id = line?.split(' ')[0];
+    if (id && HEX_ID.test(id)) return id;
   }
   return undefined;
+}
+
+/**
+ * La révision Git (commit) d'un dossier, lue dans `.git` sans lancer git. La recherche remonte au plus
+ * jusqu'à `stopAt` (la racine autorisée) : rien n'est lu au-dessus, et un fichier `.git` (worktree,
+ * sous-module) qui renvoie hors de cette racine n'est pas suivi. Une révision illisible est dite
+ * indéterminée, avec sa cause ; aucune n'est inventée.
+ */
+export async function gitInfo(directory: string, stopAt: string): Promise<GitInfo> {
+  const top = await realpath(stopAt).catch(() => path.resolve(stopAt));
+  let current = directory;
+  for (let depth = 0; depth < 12; depth++) {
+    const marker = path.join(current, '.git');
+    const info = await lstat(marker).catch(() => undefined);
+    if (info) {
+      const repoPath = path.relative(current, directory).split(path.sep).join('/');
+      const undetermined = (note: string): GitInfo => ({ status: 'UNDETERMINED', repoPath, note });
+      let gitDir = marker;
+      if (info.isFile()) {
+        const pointer = /^gitdir:\s*(.+)$/m.exec(await readFile(marker, 'utf8').catch(() => ''))?.[1]?.trim();
+        if (!pointer) return undetermined('fichier .git illisible');
+        const target = await realpath(path.resolve(current, pointer)).catch(() => undefined);
+        if (!target) return undetermined('le fichier .git renvoie vers un dossier absent');
+        if (!inside(top, target)) return undetermined('le fichier .git renvoie hors de la racine autorisée');
+        gitDir = target;
+      } else if (!info.isDirectory()) return undetermined('.git n’est ni un dossier ni un fichier');
+      const common = (await readFile(path.join(gitDir, 'commondir'), 'utf8').catch(() => undefined))?.trim();
+      let commonDir = gitDir;
+      if (common) {
+        const target = await realpath(path.resolve(gitDir, common)).catch(() => undefined);
+        if (!target || !inside(top, target))
+          return undetermined('le dossier Git commun est absent ou hors de la racine autorisée');
+        commonDir = target;
+      }
+      const head = (await readFile(path.join(gitDir, 'HEAD'), 'utf8').catch(() => undefined))?.trim();
+      if (!head) return undetermined('HEAD illisible');
+      if (HEX_ID.test(head)) return { status: 'RESOLVED', revision: head, repoPath };
+      const ref = /^ref:\s*(\S+)$/.exec(head)?.[1];
+      if (!ref) return undetermined('HEAD de forme inconnue');
+      const revision = await readRef([gitDir, commonDir], ref);
+      return revision
+        ? { status: 'RESOLVED', revision, repoPath }
+        : undetermined(`la référence ${ref} n’a pas de commit (dépôt vide ou référence absente)`);
+    }
+    const parent = path.dirname(current);
+    if (parent === current || !inside(top, parent)) break;
+    current = parent;
+  }
+  return { status: 'NONE' };
+}
+
+/** La seule révision (compatibilité) : absente si illisible. */
+export async function gitRevision(directory: string, stopAt: string): Promise<string | undefined> {
+  return (await gitInfo(directory, stopAt)).revision;
 }

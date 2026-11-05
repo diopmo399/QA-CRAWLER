@@ -533,7 +533,7 @@ export interface QaCrawlerClient {
     /** Quelques lignes du fichier d'une preuve (jamais un fichier de secrets) ; `stale` si le fichier a changé depuis le scan. */
     evidence(
       projectId: string,
-      input: { source: string; file: string; line?: number },
+      input: { source: string; file: string; line?: number; revision?: string; scan?: string },
     ): Promise<EvidenceExcerpt>;
     /** Exploration progressive : le résumé du premier affichage (aucun graphe). */
     summary(projectId: string, options?: MapRequestOptions): Promise<MapSummary>;
@@ -1456,6 +1456,8 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
             source: input.source,
             file: input.file,
             ...(input.line !== undefined ? { line: String(input.line) } : {}),
+            ...(input.revision ? { revision: input.revision } : {}),
+            ...(input.scan ? { scan: input.scan } : {}),
           }).toString()}`,
         ),
     },

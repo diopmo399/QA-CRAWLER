@@ -23,6 +23,7 @@ import type {
   ScanRecord,
   SourceScan,
 } from '../core/cartography.js';
+import { GIT_PROVIDERS } from '../core/cartography.js';
 import type { ScenarioView } from '../core/contracts.js';
 import { can } from './dashboard-access.js';
 import { mapStrings, type MapStrings } from './dashboard-cartography-i18n.js';
@@ -318,14 +319,14 @@ const date = (iso: string | undefined, state: DashboardState): string =>
 function evidenceButton(m: MapStrings, evidence: Evidence | undefined, state: MapState): string {
   if (!evidence?.file || !evidence.sourceId || evidence.sourceId === 'scenarios' || !can(state, 'RUN'))
     return '';
-  return `<button class="lnk map-ev-btn" data-action="map-evidence" data-source="${esc(evidence.sourceId)}" data-file="${esc(evidence.file)}" data-line="${String(evidence.line ?? 1)}" title="${esc(`${evidence.file}:${String(evidence.line ?? 1)}`)}">${icon('code')}<span>${esc(m.evidence)}</span></button>`;
+  return `<button class="lnk map-ev-btn" data-action="map-evidence" data-source="${esc(evidence.sourceId)}" data-file="${esc(evidence.file)}" data-line="${String(evidence.line ?? 1)}"${evidence.revision ? ` data-rev="${esc(evidence.revision)}"` : ''} title="${esc(`${evidence.file}:${String(evidence.line ?? 1)}`)}">${icon('code')}<span>${esc(m.evidence)}</span></button>`;
 }
 /** Le chemin d'une preuve, cliquable quand son code peut être ouvert (sinon un simple texte). */
 function evidenceLink(m: MapStrings, evidence: Evidence, state: MapState, text: string): string {
   const full = `${evidence.sourceId ? `${evidence.sourceId}/` : ''}${evidence.file ?? ''}:${String(evidence.line ?? 1)}${evidence.symbol ? ` · ${evidence.symbol}` : ''}`;
   if (!evidence.file || !evidence.sourceId || evidence.sourceId === 'scenarios' || !can(state, 'RUN'))
     return `<span class="map-pv-f" title="${esc(full)}">${esc(text)}</span>`;
-  return `<button class="lnk map-pv-f" data-action="map-evidence" data-source="${esc(evidence.sourceId)}" data-file="${esc(evidence.file)}" data-line="${String(evidence.line ?? 1)}" title="${esc(`${m.g.viewCode} : ${full}`)}">${esc(text)}</button>`;
+  return `<button class="lnk map-pv-f" data-action="map-evidence" data-source="${esc(evidence.sourceId)}" data-file="${esc(evidence.file)}" data-line="${String(evidence.line ?? 1)}"${evidence.revision ? ` data-rev="${esc(evidence.revision)}"` : ''} title="${esc(`${m.g.viewCode} : ${full}`)}">${esc(text)}</button>`;
 }
 const where = (evidence: Evidence | undefined): string =>
   evidence?.file
@@ -1166,7 +1167,17 @@ function impactTab(m: MapStrings, state: MapState, summary: MapSummary): string 
     can(state, 'RUN') && report.scenarios.length > 0
       ? `<div class="map-filters"><label class="pick">${esc(m.environment)} <select data-map="impact-env"><option value="">${esc(m.noEnvironment)}</option>${environments.map((e) => `<option value="${esc(e.id)}" ${e.id === ui.impactEnv ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></label><button class="btn primary" data-action="map-impact-launch" ${ui.impactPicked.length === 0 || ui.launching ? 'disabled' : ''}>${icon('play')}<span>${esc(m.launchSelection(ui.impactPicked.length))}</span></button></div><p class="mu small">${esc(m.selectionNote)}</p>`
       : '';
-  return `<section class="card"><h2>${esc(m.impactTitle)}</h2>${pickers}</section><div class="map-impact"><section class="card"><h2>${esc(m.changes(report.changes.length))}</h2>${changes ? `<ul class="map-imp-l">${changes}</ul>` : `<p class="mu">${esc(m.noChange)}</p>`}</section><section class="card"><h2>${esc(m.impacted(report.features.length))}</h2><ul class="map-imp-l">${features}</ul></section><section class="card"><h2>${esc(m.toReplay(report.scenarios.length))}</h2><ul class="map-imp-l">${scenarios}</ul>${launch}</section></div>`;
+  const compared = report.sources ?? [];
+  const sourceRows = compared
+    .map(
+      (c) =>
+        `<li>${chip(c.status === 'MODIFIED' ? 'PROPOSED' : c.status === 'REMOVED' ? 'FAILED' : c.status === 'ADDED' ? 'COMPLETED' : c.status === 'UNDETERMINED' ? 'PARTIAL' : 'CONFIRMED', m.gs.compareStatus[c.status] ?? c.status)} <b>${esc(c.name)}</b> ${layerChip(m, c.layer)} <small class="mu">${esc(`${c.from?.revision?.slice(0, 10) ?? '—'} → ${c.to?.revision?.slice(0, 10) ?? '—'}`)} · ${esc(m.gs.compareCounts(c.changes.added, c.changes.removed, c.changes.changed))}</small><ul class="map-why"><li>${esc(c.reason)}</li></ul></li>`,
+    )
+    .join('');
+  const sourcesCard = compared.length
+    ? `<section class="card"><h2>${esc(m.gs.compareTitle(compared.length))}</h2><ul class="map-imp-l">${sourceRows}</ul></section>`
+    : '';
+  return `<section class="card"><h2>${esc(m.impactTitle)}</h2>${pickers}</section>${sourcesCard}<div class="map-impact"><section class="card"><h2>${esc(m.changes(report.changes.length))}</h2>${changes ? `<ul class="map-imp-l">${changes}</ul>` : `<p class="mu">${esc(m.noChange)}</p>`}</section><section class="card"><h2>${esc(m.impacted(report.features.length))}</h2><ul class="map-imp-l">${features}</ul></section><section class="card"><h2>${esc(m.toReplay(report.scenarios.length))}</h2><ul class="map-imp-l">${scenarios}</ul>${launch}</section></div>`;
 }
 
 // ── Scan & Découverte ─────────────────────────────────────────────────────────────────────────────
@@ -1180,16 +1191,34 @@ function scanTab(m: MapStrings, state: MapState, summary: MapSummary): string {
     .map((s, i) => {
       const input = (name: string, value: string, label: string, extra = ''): string =>
         `<label class="field"><span>${esc(label)}</span><input data-map="src-${name}" data-index="${String(i)}" value="${esc(value)}" ${editable ? '' : 'disabled'} autocomplete="off" spellcheck="false" ${extra}></label>`;
-      return `<li class="map-src-e"><div class="map-src-g">${input('id', s.id, m.srcField.id, 'maxlength="40"')}${input('name', s.name, m.srcField.name, 'maxlength="80"')}<label class="field"><span>${esc(m.srcField.layer)}</span><select data-map="src-layer" data-index="${String(i)}" ${editable ? '' : 'disabled'}>${layers.map((l) => `<option value="${l}" ${l === s.layer ? 'selected' : ''}>${esc(m.layers[l] ?? l)}</option>`).join('')}</select></label>${input('path', s.path, m.srcField.path, 'class="mono"')}${input('include', s.include.join(', '), m.srcField.include)}<label class="map-check"><input type="checkbox" data-map="src-enabled" data-index="${String(i)}" ${s.enabled ? 'checked' : ''} ${editable ? '' : 'disabled'}> ${esc(m.srcField.enabled)}</label></div>${editable ? `<button class="btn small ghost" data-action="map-src-remove" data-index="${String(i)}">${icon('close')}<span>${esc(m.removeSource)}</span></button>` : ''}</li>`;
+      const remote = s.kind === 'GIT';
+      const select = (name: string, value: string, label: string, options: [string, string][]): string =>
+        `<label class="field"><span>${esc(label)}</span><select data-map="src-${name}" data-index="${String(i)}" ${editable ? '' : 'disabled'}>${options.map(([v, l]) => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
+      const provider = select('provider', s.provider ?? '', m.gs.provider, [
+        ['', m.gs.providerAuto],
+        ...GIT_PROVIDERS.map((p): [string, string] => [p, m.gs.providers[p] ?? p]),
+      ]);
+      const place = remote
+        ? `${input('repoUrl', s.repoUrl ?? '', m.gs.repoUrl, 'class="mono" maxlength="500"')}${input('branch', s.branch ?? '', m.gs.branch, 'class="mono" maxlength="200"')}${input('commit', s.commit ?? '', m.gs.commit, 'class="mono" maxlength="64"')}${input('tokenEnv', s.tokenEnv ?? '', m.gs.tokenEnv, 'class="mono" maxlength="100"')}${provider}`
+        : `${input('path', s.path, m.srcField.path, 'class="mono"')}${input('repoUrl', s.repoUrl ?? '', m.gs.repoUrlLocal, 'class="mono" maxlength="500"')}${provider}`;
+      return `<li class="map-src-e"><div class="map-src-g">${input('id', s.id, m.srcField.id, 'maxlength="40"')}${input('name', s.name, m.srcField.name, 'maxlength="80"')}<label class="field"><span>${esc(m.srcField.layer)}</span><select data-map="src-layer" data-index="${String(i)}" ${editable ? '' : 'disabled'}>${layers.map((l) => `<option value="${l}" ${l === s.layer ? 'selected' : ''}>${esc(m.layers[l] ?? l)}</option>`).join('')}</select></label>${select(
+        'kind',
+        remote ? 'GIT' : 'LOCAL',
+        m.gs.kind,
+        [
+          ['LOCAL', m.gs.kinds.LOCAL ?? 'LOCAL'],
+          ['GIT', m.gs.kinds.GIT ?? 'GIT'],
+        ],
+      )}${place}${input('include', s.include.join(', '), m.srcField.include)}<label class="map-check"><input type="checkbox" data-map="src-enabled" data-index="${String(i)}" ${s.enabled ? 'checked' : ''} ${editable ? '' : 'disabled'}> ${esc(m.srcField.enabled)}</label></div>${editable ? `<button class="btn small ghost" data-action="map-src-remove" data-index="${String(i)}">${icon('close')}<span>${esc(m.removeSource)}</span></button>` : ''}</li>`;
     })
     .join('');
-  const editor = `<section class="card"><h2>${icon('sources')}<span>${esc(m.sourcesEditor)}</span></h2><p class="mu small">${esc(m.allowedRoots)} : ${summary.allowedRoots.length ? summary.allowedRoots.map((r) => `<code>${esc(r)}</code>`).join(' ') : '—'}</p><ul class="map-src-el">${rows}</ul>${editable ? `<div class="form-acts start"><button class="btn" data-action="map-src-add">${icon('plus')}<span>${esc(m.addSource)}</span></button><button class="btn primary" data-action="map-src-save" ${ui.sourcesBusy ? 'disabled' : ''}>${esc(m.saveSources)}</button></div>` : ''}${paneError(ui.sourcesError)}${can(state, 'RUN') && summary.allowedRoots.length > 0 ? `<div class="form-acts start"><label class="map-check"><input type="checkbox" data-map="incremental" ${ui.incremental ? 'checked' : ''}> ${esc(m.incremental)}</label>${summary.running ? `<button class="btn" data-action="map-scan-cancel">${icon('stop')}<span>${esc(m.cancelScan)}</span></button>` : `<button class="btn primary" data-action="map-scan" ${summary.config.sources.length === 0 ? 'disabled' : ''}>${icon('play')}<span>${esc(m.launchScan)}</span></button>`}</div>` : ''}</section>`;
+  const editor = `<section class="card"><h2>${icon('sources')}<span>${esc(m.sourcesEditor)}</span></h2><p class="mu small">${esc(m.allowedRoots)} : ${summary.allowedRoots.length ? summary.allowedRoots.map((r) => `<code>${esc(r)}</code>`).join(' ') : '—'}</p><p class="mu small">${esc(summary.gitHosts?.length ? m.gs.hosts(summary.gitHosts.join(', ')) : m.gs.disabled)}${summary.gitHosts?.length ? ` · ${esc(m.gs.tokenNote)}` : ''}</p><ul class="map-src-el">${rows}</ul>${editable ? `<div class="form-acts start"><button class="btn" data-action="map-src-add">${icon('plus')}<span>${esc(m.addSource)}</span></button><button class="btn primary" data-action="map-src-save" ${ui.sourcesBusy ? 'disabled' : ''}>${esc(m.saveSources)}</button></div>` : ''}${paneError(ui.sourcesError)}${can(state, 'RUN') && (summary.allowedRoots.length > 0 || Boolean(summary.gitHosts?.length)) ? `<div class="form-acts start"><label class="map-check"><input type="checkbox" data-map="incremental" ${ui.incremental ? 'checked' : ''}> ${esc(m.incremental)}</label>${summary.running ? `<button class="btn" data-action="map-scan-cancel">${icon('stop')}<span>${esc(m.cancelScan)}</span></button>` : `<button class="btn primary" data-action="map-scan" ${summary.config.sources.length === 0 ? 'disabled' : ''}>${icon('play')}<span>${esc(m.launchScan)}</span></button>`}</div>` : ''}</section>`;
   const scan = summary.running ?? summary.scan;
   const detail = scan
     ? `<section class="card"><h2>${esc(date(scan.startedAt, state))} ${chip(scan.state, m.scanState[scan.state] ?? scan.state)}</h2><ul class="map-scan-l">${scan.sources
         .map(
           (s) =>
-            `<li><b>${esc(s.name)}</b> ${layerChip(m, s.layer)} ${chip(s.state, m.sourceState[s.state] ?? s.state)}<small class="mu"> ${esc(m.files(s.files))}${s.skipped ? ` · ${esc(m.skipped(s.skipped))}` : ''}${s.secretsExcluded ? ` · ${esc(m.secrets(s.secretsExcluded))}` : ''}${s.revision ? ` · ${esc(m.revision(s.revision))}` : ''}</small><ul class="map-why">${s.technologies.map((t) => `<li>${esc(t.technology)} ${t.supported ? chip('CONFIRMED', '✓') : chip('PROPOSED', m.missingConnector)}${t.note ? ` <small class="mu">${esc(t.note)}</small>` : ''}</li>`).join('')}${s.errors
+            `<li><b>${esc(s.name)}</b> ${layerChip(m, s.layer)} ${chip(s.state, m.sourceState[s.state] ?? s.state)}<small class="mu"> ${esc(m.files(s.files))}${s.skipped ? ` · ${esc(m.skipped(s.skipped))}` : ''}${s.secretsExcluded ? ` · ${esc(m.secrets(s.secretsExcluded))}` : ''}${s.revision ? ` · ${esc(m.revision(s.revision))}` : ''}${s.revisionStatus === 'UNDETERMINED' ? ` · ${esc(m.gs.undetermined)}` : ''}${s.kind === 'GIT' ? ` · ${esc(m.gs.kinds.GIT ?? 'GIT')}${s.repoUrl ? ` <code>${esc(s.repoUrl)}</code>` : ''}${s.requestedCommit || s.branch ? ` · ${esc(m.gs.requested(s.requestedCommit ? s.requestedCommit.slice(0, 12) : (s.branch ?? '')))}` : ''}` : ''}${s.repoPath ? ` · ${esc(m.gs.repoPath(s.repoPath))}` : ''}</small><ul class="map-why">${s.technologies.map((t) => `<li>${esc(t.technology)} ${t.supported ? chip('CONFIRMED', '✓') : chip('PROPOSED', m.missingConnector)}${t.note ? ` <small class="mu">${esc(t.note)}</small>` : ''}</li>`).join('')}${s.errors
               .slice(0, 5)
               .map((e) => `<li class="warn-t">${esc(e)}</li>`)
               .join('')}</ul></li>`,
@@ -1211,9 +1240,16 @@ function scanTab(m: MapStrings, state: MapState, summary: MapSummary): string {
 function evidencePanel(m: MapStrings, ui: CartographyUi): string {
   if (!ui.evidence && !ui.evidenceError) return '';
   const e = ui.evidence;
-  const code = e
-    ? `${e.stale ? `<p class="map-note warn-t small" role="note"><b>${esc(m.p.staleEvidence)} :</b> ${esc(e.stale)}</p>` : ''}<pre class="map-code"><code>${e.lines.map((line, i) => `<span class="${e.start + i === e.line ? 'hit' : ''}"><i>${String(e.start + i)}</i>${esc(line)}</span>`).join('\n')}</code></pre>`
-    : paneError(ui.evidenceError);
+  const git = e?.gitUrl
+    ? `<p class="small"><a class="btn small" href="${esc(e.gitUrl)}" target="_blank" rel="noopener noreferrer">${icon('external')}<span>${esc(m.gs.viewOnGit)}</span></a>${e.revision ? ` <small class="mu">${esc(m.gs.revisionAt(e.revision))}</small>` : ''}</p>`
+    : e?.revision
+      ? `<p class="mu small">${esc(m.gs.revisionAt(e.revision))}</p>`
+      : '';
+  const code = e?.unavailable
+    ? `${git}<p class="map-note warn-t small" role="note"><b>${esc(m.gs.unavailable)} :</b> ${esc(e.unavailable)}</p>`
+    : e
+      ? `${git}${e.stale ? `<p class="map-note warn-t small" role="note"><b>${esc(m.p.staleEvidence)} :</b> ${esc(e.stale)}</p>` : ''}<pre class="map-code"><code>${e.lines.map((line, i) => `<span class="${e.start + i === e.line ? 'hit' : ''}"><i>${String(e.start + i)}</i>${esc(line)}</span>`).join('\n')}</code></pre>`
+      : paneError(ui.evidenceError);
   return `<aside class="map-ev" role="dialog" aria-label="${esc(e ? m.evidenceTitle(e.file, e.line) : m.evidence)}"><div class="card-h"><h2 class="mono">${esc(e ? `${e.source} · ${m.evidenceTitle(e.file, e.line)}` : m.evidence)}</h2><button class="btn small ghost icon-only" data-action="map-evidence-close" aria-label="${esc(m.closeEvidence)}">${icon('close')}</button></div>${code}</aside>`;
 }
 

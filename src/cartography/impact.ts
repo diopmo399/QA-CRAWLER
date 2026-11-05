@@ -6,6 +6,7 @@ import type {
   MapEdge,
   MapNode,
   ScenarioLink,
+  SourceComparison,
 } from '../sdk/core/cartography.js';
 
 /**
@@ -87,6 +88,88 @@ export function diffModels(from: CartographyModel, to: CartographyModel): MapCha
  * scan), avec la confiance du chemin ; ou si un champ modifié appartient à un concept qu'elle utilise (la
  * donnée circule jusqu'à elle), avec la confiance du concept.
  */
+/** La source d'un nœud : celle de sa première preuve de code. */
+const sourceOf = (node: MapNode | undefined): string | undefined =>
+  node?.evidence.find((e) => e.sourceId)?.sourceId;
+
+/**
+ * Les sources des deux scans comparées : un autre commit dont les fichiers lus sont identiques (même
+ * empreinte) n'est pas une différence ; une source non lue dans l'un des scans rend la comparaison
+ * indéterminée pour elle, sans rien conclure.
+ */
+export function compareSources(
+  from: CartographyModel,
+  to: CartographyModel,
+  changes: readonly MapChange[],
+): SourceComparison[] {
+  const before = new Map(from.scan.sources.map((s) => [s.sourceId, s]));
+  const after = new Map(to.scan.sources.map((s) => [s.sourceId, s]));
+  const nodes = new Map([...from.nodes, ...to.nodes].map((n) => [n.id, n]));
+  const counts = new Map<string, SourceComparison['changes']>();
+  for (const change of changes) {
+    const id = sourceOf(nodes.get(change.node));
+    if (!id) continue;
+    const count = counts.get(id) ?? { added: 0, removed: 0, changed: 0 };
+    if (change.change === 'ADDED') count.added++;
+    else if (change.change === 'REMOVED') count.removed++;
+    else count.changed++;
+    counts.set(id, count);
+  }
+  const read = (state: string | undefined): boolean =>
+    state === 'SCANNED' || state === 'PARTIAL' || state === 'REUSED';
+  const out: SourceComparison[] = [];
+  for (const id of new Set([...before.keys(), ...after.keys()])) {
+    const a = before.get(id);
+    const b = after.get(id);
+    const meta = b ?? a;
+    if (!meta) continue;
+    const side = (s: typeof a) =>
+      s ? { ...(s.revision ? { revision: s.revision } : {}), files: s.files, state: s.state } : undefined;
+    const changeCount = counts.get(id) ?? { added: 0, removed: 0, changed: 0 };
+    let status: SourceComparison['status'];
+    let reason: string;
+    if (!a || a.state === 'DISABLED') {
+      status = 'ADDED';
+      reason = 'source absente du premier scan';
+    } else if (!b || b.state === 'DISABLED') {
+      status = 'REMOVED';
+      reason = 'source absente du second scan';
+    } else if (!read(a.state) || !read(b.state)) {
+      status = 'UNDETERMINED';
+      reason = `source non lue dans l’un des scans (${a.state} → ${b.state})`;
+    } else if (a.hash && b.hash && a.hash === b.hash) {
+      status = 'UNCHANGED';
+      reason =
+        a.revision && b.revision && a.revision !== b.revision
+          ? 'autre commit, mêmes fichiers lus'
+          : 'mêmes fichiers lus';
+    } else if (!a.hash || !b.hash) {
+      status = 'UNDETERMINED';
+      reason = 'empreinte des fichiers absente';
+    } else {
+      const total = changeCount.added + changeCount.removed + changeCount.changed;
+      status = total > 0 ? 'MODIFIED' : 'UNCHANGED';
+      reason =
+        total > 0
+          ? 'éléments du graphe ajoutés, retirés ou modifiés'
+          : 'fichiers modifiés sans effet sur les éléments relevés (corps de méthode, commentaires…)';
+    }
+    const fromSide = side(a);
+    const toSide = side(b);
+    out.push({
+      sourceId: id,
+      name: meta.name,
+      layer: meta.layer,
+      status,
+      ...(fromSide ? { from: fromSide } : {}),
+      ...(toSide ? { to: toSide } : {}),
+      changes: changeCount,
+      reason,
+    });
+  }
+  return out.sort((x, y) => x.name.localeCompare(y.name));
+}
+
 export function computeImpact(
   from: CartographyModel,
   to: CartographyModel,
@@ -167,6 +250,7 @@ export function computeImpact(
   return {
     from: from.scan.id,
     to: to.scan.id,
+    sources: compareSources(from, to, changes),
     changes,
     features: [...features.values()]
       .map((entry) => ({ ...entry, confidence: definite(entry.confidence) }))

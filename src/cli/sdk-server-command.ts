@@ -21,6 +21,9 @@ Options:
       --port <n>               Port (default: 4310; 0 picks a free port)
       --allow-origin <url>     Origin of a host application allowed to call the API (repeatable)
       --allow-source-root <dir>  Folder under which an Angular source folder may be read (repeatable; default: none)
+      --git-host <host>        Git host from which the cartography may clone remote repositories over https
+                               (repeatable; default: none, remote Git sources refused)
+      --git-allow-private      Allow --git-host names that resolve to private addresses (self-hosted Git)
       --token-env <NAME>       Read the API token from this environment variable (default: generated and printed)
       --language <fr|en>       Language of the standalone page and of the engine reports (default: en)
       --concurrency <n>        Explorations running at the same time (default: 1)
@@ -41,6 +44,8 @@ interface SdkServerArgs {
   port: number;
   origins: string[];
   sourceRoots: string[];
+  gitHosts: string[];
+  gitAllowPrivate: boolean;
   tokenEnv?: string;
   language: 'fr' | 'en';
   concurrency: number;
@@ -60,6 +65,8 @@ export function parseSdkServerArgs(argv: readonly string[]): SdkServerArgs {
         port: { type: 'string' },
         'allow-origin': { type: 'string', multiple: true },
         'allow-source-root': { type: 'string', multiple: true },
+        'git-host': { type: 'string', multiple: true },
+        'git-allow-private': { type: 'boolean' },
         'token-env': { type: 'string' },
         language: { type: 'string' },
         concurrency: { type: 'string' },
@@ -95,6 +102,8 @@ export function parseSdkServerArgs(argv: readonly string[]): SdkServerArgs {
     port: integer('port', values.port, 0, 4310),
     origins,
     sourceRoots: (values['allow-source-root'] ?? []).map((root) => path.resolve(root)),
+    gitHosts: (values['git-host'] ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean),
+    gitAllowPrivate: values['git-allow-private'] ?? false,
     ...(values['token-env'] !== undefined ? { tokenEnv: values['token-env'] } : {}),
     language,
     concurrency: integer('concurrency', values.concurrency, 1, 1),
@@ -149,6 +158,14 @@ export async function runSdkServerCli(argv: string[], runtime: SdkServerRuntime 
       port: args.port,
       allowedOrigins: args.origins,
       allowedSourceRoots: args.sourceRoots,
+      ...(args.gitHosts.length > 0
+        ? {
+            gitSources: {
+              allowedHosts: args.gitHosts,
+              ...(args.gitAllowPrivate ? { allowPrivateAddresses: true } : {}),
+            },
+          }
+        : {}),
       language: args.language,
       concurrency: args.concurrency,
       access: args.access,

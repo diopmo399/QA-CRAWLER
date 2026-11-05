@@ -10,6 +10,18 @@ import {
 } from '../../cartography/coverage.js';
 import { applyDecisions } from '../../cartography/decisions.js';
 import { allowedPath, isReadableFile, SourceAccessError } from '../../cartography/files.js';
+import {
+  gitFileUrl,
+  gitShow,
+  GitSourceError,
+  isBranchName,
+  isCommitId,
+  parseRepoUrl,
+  prepareGitSource,
+  removeWorkdirs,
+  workdirOf,
+  type GitPolicy,
+} from '../../cartography/git-source.js';
 import { computeImpact } from '../../cartography/impact.js';
 import {
   apiSheet,
@@ -40,6 +52,7 @@ import {
 } from '../../cartography/store.js';
 import {
   DECISION_KINDS,
+  GIT_PROVIDERS,
   MAP_LAYERS,
   SUPPORTED_TECHNOLOGIES,
   type ActionRow,
@@ -116,6 +129,7 @@ export async function saveConfig(
   input: unknown,
   allowedRoots: readonly string[],
   now = new Date(),
+  git?: GitPolicy,
 ): Promise<CartographyConfig> {
   const raw = input && typeof input === 'object' ? (input as { sources?: unknown }).sources : undefined;
   if (!Array.isArray(raw)) throw new CartographyInputError(400, 'INVALID_INPUT', 'sources must be an array');
@@ -148,8 +162,23 @@ export async function saveConfig(
         'INVALID_INPUT',
         `${where}.layer must be one of ${MAP_LAYERS.join(', ')}`,
       );
-    const folder = text(source.path, 1024);
-    if (!folder) throw new CartographyInputError(400, 'INVALID_INPUT', `${where}.path is required`);
+    if (source.kind !== undefined && source.kind !== 'LOCAL' && source.kind !== 'GIT')
+      throw new CartographyInputError(400, 'INVALID_INPUT', `${where}.kind must be LOCAL or GIT`);
+    const remote = source.kind === 'GIT';
+    const provider =
+      source.provider === undefined || source.provider === ''
+        ? undefined
+        : GIT_PROVIDERS.find((candidate) => candidate === source.provider);
+    if (source.provider !== undefined && source.provider !== '' && !provider)
+      throw new CartographyInputError(
+        400,
+        'INVALID_INPUT',
+        `${where}.provider must be one of ${GIT_PROVIDERS.join(', ')}`,
+      );
+    const folder = remote ? '' : text(source.path, 1024);
+    if (folder === undefined)
+      throw new CartographyInputError(400, 'INVALID_INPUT', `${where}.path is required`);
+    const remoteFields = gitFields(source, where, remote, git);
     const include: unknown[] = Array.isArray(source.include) ? (source.include as unknown[]) : [];
     if (
       include.length > 20 ||
@@ -165,7 +194,7 @@ export async function saveConfig(
       );
     const enabled = source.enabled !== false;
     // Le dossier est vérifié à l'enregistrement (sous une racine autorisée, sans lien qui en sorte).
-    if (enabled)
+    if (enabled && !remote)
       try {
         await allowedPath(folder, allowedRoots);
       } catch (error) {
@@ -179,14 +208,88 @@ export async function saveConfig(
       id,
       name,
       layer,
+      ...(remote ? { kind: 'GIT' as const } : {}),
       path: folder,
       include: include.map((value) => String(value).trim()),
       enabled,
+      ...remoteFields,
+      ...(provider ? { provider } : {}),
     });
   }
+  const before = await readConfig(project.dir);
   const config: CartographyConfig = { schema: 1, sources, updatedAt: now.toISOString() };
   await writeConfig(project.dir, config);
+  // Les copies de travail des sources GIT retirées (ou devenues locales) sont effacées.
+  if (git) {
+    const kept = new Set(sources.filter((s) => s.kind === 'GIT').map((s) => s.id));
+    await removeWorkdirs(
+      git,
+      project.dir,
+      before.sources.filter((s) => s.kind === 'GIT' && !kept.has(s.id)).map((s) => s.id),
+    );
+  }
   return config;
+}
+
+/**
+ * Les champs Git d'une source : pour une source GIT, l'adresse contrôlée (protocole, hôte autorisé, sans
+ * identifiants), la branche, le commit et le nom de la variable du jeton ; pour une source locale, une
+ * adresse facultative qui ne sert qu'aux liens « Voir sur Git » (aucune requête réseau).
+ */
+function gitFields(
+  source: Record<string, unknown>,
+  where: string,
+  remote: boolean,
+  git: GitPolicy | undefined,
+): Pick<MapSource, 'repoUrl' | 'branch' | 'commit' | 'tokenEnv'> {
+  const url = text(source.repoUrl, 500);
+  if (!remote) {
+    if (!url) return {};
+    try {
+      const parsed = parseRepoUrl(url, {
+        allowedHosts: [new URL(url).hostname.toLowerCase()],
+        protocols: ['https', 'http'],
+      });
+      return { repoUrl: parsed.url };
+    } catch (error) {
+      throw new CartographyInputError(400, 'INVALID_INPUT', `${where}.repoUrl: ${(error as Error).message}`);
+    }
+  }
+  if (!url)
+    throw new CartographyInputError(400, 'INVALID_INPUT', `${where}.repoUrl is required for a GIT source`);
+  let repoUrl: string;
+  try {
+    repoUrl = parseRepoUrl(url, git).url;
+  } catch (error) {
+    throw new CartographyInputError(
+      422,
+      'SOURCE_DENIED',
+      `${where}.repoUrl: ${error instanceof GitSourceError ? error.message : String(error)}`,
+    );
+  }
+  const branch = text(source.branch, 200);
+  if (branch && !isBranchName(branch))
+    throw new CartographyInputError(400, 'INVALID_INPUT', `${where}.branch is not a valid branch name`);
+  const commit = text(source.commit, 64)?.toLowerCase();
+  if (commit && !isCommitId(commit))
+    throw new CartographyInputError(
+      400,
+      'INVALID_INPUT',
+      `${where}.commit must be a full commit identifier (40 hexadecimal characters)`,
+    );
+  const tokenEnv = text(source.tokenEnv, 100);
+  if (tokenEnv && !(git?.envNames ?? /^QA_[A-Z0-9_]+$/).test(tokenEnv))
+    throw new CartographyInputError(
+      400,
+      'INVALID_INPUT',
+      `${where}.tokenEnv: the server does not read this variable (its name must match the allowed names)`,
+    );
+  return {
+    repoUrl,
+    ...(branch ? { branch } : {}),
+    ...(commit ? { commit } : {}),
+    ...(tokenEnv ? { tokenEnv } : {}),
+  };
 }
 
 /** Lancer un scan (incrémental par défaut) ; un seul à la fois par projet. */
@@ -194,13 +297,14 @@ export async function startScan(
   project: CartographyProject,
   allowedRoots: readonly string[],
   options: { incremental?: unknown },
+  git?: GitPolicy,
 ): Promise<ScanRecord> {
   if (JOBS.has(project.dir))
     throw new CartographyInputError(409, 'SCAN_RUNNING', 'a scan is already running for this project');
   const config = await readConfig(project.dir);
   if (config.sources.filter((source) => source.enabled).length === 0)
     throw new CartographyInputError(409, 'NO_SOURCE', 'no enabled source is configured');
-  if (allowedRoots.length === 0)
+  if (allowedRoots.length === 0 && config.sources.some((source) => source.enabled && source.kind !== 'GIT'))
     throw new CartographyInputError(
       409,
       'NO_ALLOWED_ROOT',
@@ -235,6 +339,12 @@ export async function startScan(
         incremental,
         ...(previous ? { previous: { facts: previous.facts, sources: previous.model.scan.sources } } : {}),
         signal: controller.signal,
+        ...(git
+          ? {
+              prepareGit: (source: MapSource, signal?: AbortSignal) =>
+                prepareGitSource(source, project.dir, git, signal),
+            }
+          : {}),
         onProgress: (record) => {
           job.record = record;
         },
@@ -479,7 +589,14 @@ export async function impactOf(project: CartographyProject, input: unknown): Pro
 export async function evidenceExcerpt(
   project: CartographyProject,
   allowedRoots: readonly string[],
-  query: { source?: string | null; file?: string | null; line?: string | null },
+  query: {
+    source?: string | null;
+    file?: string | null;
+    line?: string | null;
+    revision?: string | null;
+    scan?: string | null;
+  },
+  git?: GitPolicy,
 ): Promise<EvidenceExcerpt> {
   const config = await readConfig(project.dir);
   const source = config.sources.find((entry) => entry.id === query.source);
@@ -491,37 +608,80 @@ export async function evidenceExcerpt(
       'INVALID_INPUT',
       'file must be a relative path to a readable source file',
     );
-  let real: string;
-  try {
-    const root = await allowedPath(source.path, allowedRoots);
-    real = await allowedPath(path.join(root, file), [root]);
-  } catch (error) {
-    throw new CartographyInputError(
-      422,
-      'SOURCE_DENIED',
-      error instanceof SourceAccessError ? error.message : String(error),
-    );
-  }
-  let content: string;
-  try {
-    content = await readFile(real, 'utf8');
-  } catch {
-    throw new CartographyInputError(404, 'NOT_FOUND', 'file not found');
+  const requested = query.revision?.trim().toLowerCase();
+  if (requested && !isCommitId(requested))
+    throw new CartographyInputError(400, 'INVALID_INPUT', 'revision must be a full commit identifier');
+  // Le scan de la preuve (celui demandé, sinon le dernier) : sa révision, son dépôt, la couche.
+  const scans = await listScans(project.dir);
+  const record = (query.scan ? scans.find((s) => s.id === query.scan) : undefined) ?? scans[0];
+  const scanned = record?.sources.find((s) => s.sourceId === source.id);
+  const revision = requested ?? scanned?.revision;
+  const repoFile = scanned?.repoPath ? `${scanned.repoPath}/${file}` : file;
+  const gitUrl = gitFileUrl(
+    scanned?.repoUrl ?? source.repoUrl,
+    scanned?.provider ?? source.provider,
+    revision,
+    repoFile,
+    Number.parseInt(query.line ?? '', 10) || undefined,
+  );
+  const context = {
+    source: source.id,
+    file,
+    layer: source.layer,
+    ...(record ? { scanId: record.id } : {}),
+    ...(revision ? { revision } : {}),
+    ...(gitUrl ? { gitUrl } : {}),
+  };
+  const unavailable = (reason: string): EvidenceExcerpt => ({
+    ...context,
+    line: Math.max(Number.parseInt(query.line ?? '1', 10) || 1, 1),
+    start: 1,
+    lines: [],
+    unavailable: reason,
+  });
+  let content: string | undefined;
+  let modified: string | undefined;
+  if (source.kind === 'GIT') {
+    // Une source distante se lit dans sa copie de travail, à la révision exacte du scan.
+    if (!git) return unavailable('les sources Git distantes ne sont pas activées sur ce serveur');
+    if (!revision) return unavailable('la révision analysée est inconnue');
+    content = await gitShow(await workdirOf(git, project.dir, source.id), revision, file, git);
+    if (content === undefined)
+      return unavailable(
+        `le fichier ou la révision ${revision.slice(0, 12)} n’est plus dans la copie de travail : relancez un scan`,
+      );
+  } else {
+    let real: string;
+    try {
+      const root = await allowedPath(source.path, allowedRoots);
+      real = await allowedPath(path.join(root, file), [root]);
+    } catch (error) {
+      if (error instanceof SourceAccessError && /does not exist/.test(error.message))
+        return unavailable('le fichier n’existe plus dans le dossier de la source');
+      throw new CartographyInputError(
+        422,
+        'SOURCE_DENIED',
+        error instanceof SourceAccessError ? error.message : String(error),
+      );
+    }
+    try {
+      content = await readFile(real, 'utf8');
+      modified = (await stat(real)).mtime.toISOString();
+    } catch {
+      return unavailable('le fichier n’est pas lisible');
+    }
   }
   const all = content.split(/\r?\n/);
   const line = Math.min(Math.max(Number.parseInt(query.line ?? '1', 10) || 1, 1), all.length);
   const start = Math.max(1, line - 10);
-  // Une preuve est périmée si le fichier a changé depuis le scan qui l'a relevée.
-  const [latest] = await listScans(project.dir);
-  const scannedAt = latest?.finishedAt ?? latest?.startedAt;
-  const modified = (await stat(real)).mtime.toISOString();
+  // Une preuve locale est périmée si le fichier a changé depuis le scan qui l'a relevée.
+  const scannedAt = record?.finishedAt ?? record?.startedAt;
   return {
-    source: source.id,
-    file,
+    ...context,
     line,
     start,
     lines: all.slice(start - 1, start + 19).map((entry) => entry.slice(0, 400)),
-    ...(scannedAt && modified > scannedAt
+    ...(scannedAt && modified && modified > scannedAt
       ? {
           stale: `le fichier a été modifié le ${modified}, après le scan du ${scannedAt} : relancez un scan pour mettre la preuve à jour`,
         }
@@ -682,6 +842,7 @@ export function listQuery(params: URLSearchParams): MapListQuery {
 export async function mapSummary(
   project: CartographyProject,
   allowedRoots: readonly string[],
+  git?: Pick<GitPolicy, 'allowedHosts'>,
 ): Promise<MapSummary> {
   const [config, scans] = await Promise.all([readConfig(project.dir), listScans(project.dir)]);
   const running = runningScan(project);
@@ -695,6 +856,7 @@ export async function mapSummary(
   return {
     config,
     allowedRoots: [...allowedRoots],
+    ...(git ? { gitHosts: [...git.allowedHosts] } : {}),
     supported: SUPPORTED_TECHNOLOGIES,
     scans,
     ...(running ? { running } : {}),
