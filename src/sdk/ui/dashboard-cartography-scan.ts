@@ -46,10 +46,26 @@ const VARIABLE = /^[A-Z_][A-Z0-9_]*$/;
 const ABSOLUTE = /^(\/|[A-Za-z]:[\\/]|\\\\)/;
 
 /** Les erreurs de chaque source, dans l'ordre de la liste (les mêmes règles que le serveur, sans réseau). */
+/** Un chemin sous une racine (séparateurs et lettre de lecteur Windows normalisés). */
+export function underRoot(candidate: string, root: string): boolean {
+  const norm = (p: string): string => {
+    const x = p.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+    return /^[A-Za-z]:/.test(x) ? x.toLowerCase() : x;
+  };
+  const a = norm(candidate);
+  const r = norm(root);
+  return r === '' || a === r || a.startsWith(`${r}/`);
+}
+
+/**
+ * Les erreurs de chaque source, dans l'ordre de la liste (les mêmes règles que le serveur, sans réseau).
+ * Avec `allowedRoots`, un dossier local activé doit être sous l'une des racines que le serveur autorise.
+ */
 export function sourceIssues(
   m: MapStrings,
   sources: readonly MapSource[],
   gitHosts: readonly string[] | undefined,
+  allowedRoots?: readonly string[],
 ): SourceIssues[] {
   const e = m.sd.errors;
   const ids = sources.map((s) => s.id.trim());
@@ -75,6 +91,9 @@ export function sourceIssues(
     } else {
       if (!s.path.trim()) out.path = e.pathRequired;
       else if (!ABSOLUTE.test(s.path.trim())) out.path = e.pathAbsolute;
+      else if (allowedRoots && s.enabled && allowedRoots.length === 0) out.path = e.noRoots;
+      else if (allowedRoots && s.enabled && !allowedRoots.some((root) => underRoot(s.path, root)))
+        out.path = m.sd.outsideRoots(allowedRoots.join(', '));
       const url = s.repoUrl?.trim();
       if (url) {
         const problem = urlProblem(m, url, undefined, false);
@@ -110,6 +129,34 @@ function urlProblem(
   if (remote && (parsed.protocol === 'http:' || parsed.protocol === 'file:')) return undefined;
   if (!remote && parsed.protocol === 'http:') return undefined;
   return e.urlHttps;
+}
+
+/** Une source activée que la configuration du serveur refusera, quoi qu'on saisisse (racine, dépôt distant). */
+export function configBlocked(
+  sources: readonly MapSource[],
+  gitHosts: readonly string[] | undefined,
+  allowedRoots: readonly string[],
+): boolean {
+  return sources.some((s) =>
+    !s.enabled
+      ? false
+      : s.kind === 'GIT'
+        ? !gitHosts
+        : Boolean(s.path.trim()) && !allowedRoots.some((root) => underRoot(s.path, root)),
+  );
+}
+
+/** Une erreur du serveur à l'enregistrement, dite en clair (le texte d'origine reste à la suite). */
+export function explainSaveError(m: MapStrings, text: string): string {
+  const known: [RegExp, string][] = [
+    [/no allowed source root is configured/i, m.sd.errors.noRoots ?? ''],
+    [/outside the allowed source roots/i, m.sd.serverOutside],
+    [/does not exist or is not readable/i, m.sd.serverMissing],
+    [/GIT_DISABLED/, m.sd.errors.gitDisabled ?? ''],
+    [/HOST_REFUSED/, m.sd.serverHost],
+  ];
+  const hit = known.find(([pattern]) => pattern.test(text));
+  return hit ? `${hit[1]} (${text})` : text;
 }
 
 export const issueCount = (issues: readonly SourceIssues[]): number =>
@@ -260,7 +307,8 @@ function sourceCard(
 
 function sourcesPanel(m: MapStrings, ui: CartographyUi, summary: MapSummary, h: ScanViewHelpers): string {
   const sources = ui.sources ?? summary.config.sources;
-  const issues = sourceIssues(m, sources, summary.gitHosts);
+  const issues = sourceIssues(m, sources, summary.gitHosts, summary.allowedRoots);
+  const blocked = configBlocked(sources, summary.gitHosts, summary.allowedRoots);
   const count = issueCount(issues);
   const git = Boolean(summary.gitHosts?.length);
   const add = h.canEdit
@@ -270,6 +318,12 @@ function sourcesPanel(m: MapStrings, ui: CartographyUi, summary: MapSummary, h: 
     ? summary.allowedRoots.map((r) => `<code>${esc(r)}</code>`).join(' ')
     : '—';
   const info = `<p class="mu small">${esc(m.sd.sourcesSub)}</p><p class="mu small">${esc(m.allowedRoots)} : ${roots}</p><p class="mu small">${esc(git ? m.gs.hosts(summary.gitHosts?.join(', ') ?? '') : m.gs.disabled)}${git ? ` · ${esc(m.gs.tokenNote)}` : ''}</p>`;
+  const needRoot = summary.allowedRoots.length === 0;
+  const needGit = !git;
+  const command =
+    needRoot || needGit
+      ? `<div class="sd-cmd" id="sd-cmd" role="note"><b>${icon('info')}${esc(m.sd.cmdTitle)}</b>${needRoot ? `<p class="small">${esc(m.sd.cmdRoot)}</p><code>qa-crawler sdk-server --workspace &lt;${esc(m.sd.cmdWorkspace)}&gt; --allow-source-root &lt;${esc(m.sd.cmdParent)}&gt;</code>` : ''}${needGit ? `<p class="small">${esc(m.sd.cmdGit)}</p><code>--git-host &lt;${esc(m.sd.cmdHost)}&gt;</code><p class="small mu">${esc(m.sd.cmdGitNote)}</p>` : ''}</div>`
+      : '';
   const list = sources.length
     ? `<ul class="sd-src-l">${sources.map((s, i) => sourceCard(m, ui, summary, h, s, i, issues[i] ?? {})).join('')}</ul>`
     : `<p class="mu sd-empty">${esc(m.sd.noSources)}</p>`;
@@ -278,14 +332,14 @@ function sourcesPanel(m: MapStrings, ui: CartographyUi, summary: MapSummary, h: 
       ? `<p class="err" role="alert">${icon('alert')}${esc(m.sd.fixErrors(count))}</p>`
       : '';
   const save = h.canEdit
-    ? `<div class="form-acts start"><button class="btn primary" data-action="map-src-save" ${ui.sourcesBusy ? 'disabled' : ''}>${icon('save')}<span>${esc(m.saveSources)}</span></button><small class="mu">${esc(m.sd.requiredNote)}</small></div>`
+    ? `<div class="form-acts start"><button class="btn primary" data-action="map-src-save" ${ui.sourcesBusy || blocked ? 'disabled' : ''}${blocked ? ' aria-describedby="sd-cmd"' : ''}>${icon('save')}<span>${esc(m.saveSources)}</span></button><small class="mu">${esc(blocked ? m.sd.saveBlocked : m.sd.requiredNote)}</small></div>`
     : '';
   const runnable = summary.allowedRoots.length > 0 || git;
   const run =
     h.canRun && runnable
       ? `<div class="sd-run"><label class="map-check"><input type="checkbox" data-map="incremental" ${ui.incremental ? 'checked' : ''}> ${esc(m.incremental)}</label>${summary.running ? `<button class="btn" data-action="map-scan-cancel">${icon('stop')}<span>${esc(m.cancelScan)}</span></button>` : `<button class="btn primary" data-action="map-scan" ${summary.config.sources.length === 0 ? 'disabled' : ''}>${icon('play')}<span>${esc(m.launchScan)}</span></button>`}</div>`
       : '';
-  return `<section class="card sd-sources"><div class="sd-h"><h2>${icon('layers')}<span>${esc(m.sourcesEditor)}</span></h2><span class="pill mu">${esc(m.sd.count(sources.length))}</span>${add}</div>${info}${list}${errors}${save}${h.paneError(ui.sourcesError)}${run}</section>`;
+  return `<section class="card sd-sources"><div class="sd-h"><h2>${icon('layers')}<span>${esc(m.sourcesEditor)}</span></h2><span class="pill mu">${esc(m.sd.count(sources.length))}</span>${add}</div>${info}${command}${list}${errors}${save}${h.paneError(ui.sourcesError)}${run}</section>`;
 }
 
 const durationOf = (scan: ScanRecord): string | undefined => {
@@ -683,6 +737,7 @@ export const SCAN_CSS = `
 .sd-menu-i{display:flex;gap:8px;align-items:center;border:0;background:transparent;padding:8px 10px;border-radius:8px;cursor:pointer;font:inherit;text-align:left;color:inherit}.sd-menu-i:hover{background:var(--qa-color-surface-2)}.sd-menu-i[disabled]{opacity:.55;cursor:not-allowed}.sd-menu-i.danger{color:#b91c1c}.sd-menu-i .ico{width:15px;height:15px}
 .sd-menu-l .map-ev-btn{padding:8px 10px}
 .sd-add>summary{display:inline-flex;gap:6px;align-items:center}
+.sd-cmd{border:1px solid var(--qa-color-border);border-left:4px solid #b45309;border-radius:10px;padding:10px 12px;margin:8px 0;background:var(--qa-color-surface-2);display:flex;flex-direction:column;gap:4px}.sd-cmd b{display:flex;gap:6px;align-items:center;font-size:13px}.sd-cmd b .ico{width:15px;height:15px;color:#b45309}.sd-cmd p{margin:4px 0 0}.sd-cmd code{display:block;font-family:var(--qa-font-mono,ui-monospace,monospace);font-size:12px;background:var(--qa-color-surface);border:1px solid var(--qa-color-border);border-radius:6px;padding:6px 8px;overflow-x:auto;white-space:pre;user-select:all}
 .sd-run{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--qa-color-border)}
 .sd-empty{padding:16px 0}
 .sd-meta{display:flex;gap:6px;align-items:center;margin:0 0 10px;font-size:12.5px}.sd-meta .ico{width:14px;height:14px}

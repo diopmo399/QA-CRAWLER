@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { ImpactReport, MapSource, MapSummary, ScanRecord } from '../../src/sdk/core/cartography.js';
 import { mapStrings } from '../../src/sdk/ui/dashboard-cartography-i18n.js';
 import {
+  configBlocked,
+  explainSaveError,
   filterRows,
   impactRows,
   impactView,
   issueCount,
   scanView,
   sourceIssues,
+  underRoot,
   type ScanViewHelpers,
 } from '../../src/sdk/ui/dashboard-cartography-scan.js';
 import { emptyCartographyUi } from '../../src/sdk/ui/dashboard-cartography.js';
@@ -321,5 +324,44 @@ describe('impact analysis view', () => {
     // Le menu d'une ligne ouvre la preuve et la fonctionnalité atteinte.
     expect(html).toContain('data-action="map-evidence" data-file="src/app/app.routes.ts"');
     expect(html).toContain('data-action="map-feature" data-feature="f1"');
+  });
+});
+
+describe('server configuration: allowed roots and Git hosts, said before saving', () => {
+  it('a path is under a root with Windows drive letters and separators normalised, never by prefix only', () => {
+    expect(underRoot('C:\\Sources\\app', 'c:/sources')).toBe(true);
+    expect(underRoot('/srv/front', '/srv')).toBe(true);
+    expect(underRoot('/srv-other/front', '/srv')).toBe(false);
+    expect(underRoot('/srv', '/srv/')).toBe(true);
+  });
+
+  it('no allowed root, or a folder outside them: the path is flagged; a disabled source is not', () => {
+    expect(sourceIssues(m, [local()], undefined, [])[0]?.path).toBe(m.sd.errors.noRoots);
+    expect(sourceIssues(m, [local({ path: '/data/front' })], undefined, ['/srv'])[0]?.path).toBe(
+      m.sd.outsideRoots('/srv'),
+    );
+    expect(
+      sourceIssues(m, [local({ path: '/data/front', enabled: false })], undefined, ['/srv'])[0]?.path,
+    ).toBeUndefined();
+    expect(sourceIssues(m, [local()], undefined, ['/srv'])[0]?.path).toBeUndefined();
+  });
+
+  it('saving is disabled while the server would refuse, and the command to run is shown', () => {
+    expect(configBlocked([local()], undefined, [])).toBe(true);
+    expect(configBlocked([git()], undefined, ['/srv'])).toBe(true);
+    expect(configBlocked([local(), git()], ['github.com'], ['/srv'])).toBe(false);
+    expect(configBlocked([local({ path: '' })], undefined, [])).toBe(false);
+    const summary = { ...summaryOf([local()], []), allowedRoots: [] } as MapSummary;
+    const html = scanView(m, emptyCartographyUi(), summary, h);
+    expect(html).toMatch(/data-action="map-src-save" disabled aria-describedby="sd-cmd"/);
+    expect(html).toContain('--allow-source-root &lt;');
+    expect(html).toContain('--git-host &lt;');
+    expect(html).toContain(m.sd.errors.noRoots);
+  });
+
+  it('a server refusal is explained in plain words, its original text kept', () => {
+    const raw = 'sources[0].path: no allowed source root is configured on the server (allowedSourceRoots)';
+    expect(explainSaveError(m, raw)).toBe(`${m.sd.errors.noRoots ?? ''} (${raw})`);
+    expect(explainSaveError(m, 'something else')).toBe('something else');
   });
 });

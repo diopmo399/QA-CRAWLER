@@ -30,7 +30,7 @@ const fr = {
   noScan:
     'Aucun scan pour ce projet. Configurez ses sources (onglet « Scan & Découverte »), puis lancez un scan.',
   noRoot:
-    'Le serveur n’autorise aucun dossier de sources (option allowedSourceRoots) : aucun scan n’est possible tant qu’un administrateur ne l’a pas configuré.',
+    'Le serveur n’autorise aucun dossier de sources : relancez-le avec --allow-source-root <dossier> (ou --git-host pour un dépôt distant) ; la commande est rappelée dans Scan & Découverte.',
   running: (done: number, total: number) => `Scan en cours… ${String(done)} source(s) sur ${String(total)}`,
   layers: {
     FRONTEND: 'Front',
@@ -621,7 +621,23 @@ const fr = {
       tokenInvalid: 'Nom de variable invalide (majuscules, chiffres et _, ex. QA_GIT_TOKEN).',
       includeInvalid: 'Sous-dossiers relatifs, sans « .. ».',
       gitDisabled: 'Les dépôts distants sont désactivés sur ce serveur (option --git-host).',
+      noRoots:
+        'Le serveur n’autorise aucun dossier local : relancez-le avec --allow-source-root et le dossier parent de ce chemin.',
     } as Record<string, string>,
+    outsideRoots: (roots: string) =>
+      `Ce dossier n’est pas sous un dossier autorisé par le serveur (${roots}) : ajoutez son dossier parent avec --allow-source-root.`,
+    serverOutside: 'Ce dossier n’est pas sous un dossier autorisé par le serveur (--allow-source-root).',
+    serverMissing: 'Ce dossier n’existe pas ou n’est pas lisible par le serveur.',
+    serverHost: 'Cet hôte Git n’est pas autorisé sur ce serveur (--git-host).',
+    saveBlocked: 'Enregistrement impossible tant que le serveur n’autorise pas ces sources (voir ci-dessus).',
+    cmdTitle: 'Configuration du serveur à compléter',
+    cmdRoot: 'Pour analyser un dossier local, relancez le serveur avec la racine qui contient vos sources :',
+    cmdWorkspace: 'dossier de travail',
+    cmdParent: 'dossier parent des sources',
+    cmdGit: 'Pour un dépôt Git distant, ajoutez l’hôte autorisé :',
+    cmdHost: 'hôte Git, ex. github.com',
+    cmdGitNote:
+      'Ajoutez --git-allow-private pour un hôte interne, et définissez le jeton dans une variable QA_… avant de lancer le serveur.',
     hostRefused: (h: string) => `L’hôte ${h} n’est pas autorisé sur ce serveur.`,
     fixErrors: (n: number) => `${String(n)} erreur(s) à corriger avant l’enregistrement.`,
     tokenMissing: (name: string) => `Jeton absent : la variable ${name} n’a pas de valeur sur le serveur.`,
@@ -1265,7 +1281,7 @@ const en: MapStrings = {
   noProject: 'Pick a project in the menu to see its map.',
   noScan: 'No scan yet for this project. Configure its sources (« Scan & Discovery »), then run a scan.',
   noRoot:
-    'The server allows no source folder (allowedSourceRoots option): no scan is possible until an administrator configures it.',
+    'The server allows no source folder: restart it with --allow-source-root <folder> (or --git-host for a remote repository); the command is shown in Scan & Discovery.',
   running: (done, total) => `Scanning… ${String(done)} of ${String(total)} source(s)`,
   layers: {
     FRONTEND: 'Front',
@@ -1526,7 +1542,23 @@ const en: MapStrings = {
       tokenInvalid: 'Invalid variable name (uppercase, digits and _, e.g. QA_GIT_TOKEN).',
       includeInvalid: 'Relative sub-folders, without “..”.',
       gitDisabled: 'Remote repositories are disabled on this server (--git-host option).',
+      noRoots:
+        'The server allows no local folder: restart it with --allow-source-root and the parent folder of this path.',
     },
+    outsideRoots: (roots) =>
+      `This folder is not under a folder allowed by the server (${roots}): add its parent folder with --allow-source-root.`,
+    serverOutside: 'This folder is not under a folder allowed by the server (--allow-source-root).',
+    serverMissing: 'This folder does not exist or the server cannot read it.',
+    serverHost: 'This Git host is not allowed on this server (--git-host).',
+    saveBlocked: 'Saving is not possible until the server allows these sources (see above).',
+    cmdTitle: 'Server configuration to complete',
+    cmdRoot: 'To scan a local folder, restart the server with the root that contains your sources:',
+    cmdWorkspace: 'working folder',
+    cmdParent: 'parent folder of the sources',
+    cmdGit: 'For a remote Git repository, add the allowed host:',
+    cmdHost: 'Git host, e.g. github.com',
+    cmdGitNote:
+      'Add --git-allow-private for an internal host, and set the token in a QA_… variable before starting the server.',
     hostRefused: (h) => `The host ${h} is not allowed on this server.`,
     fixErrors: (n) => `${String(n)} error(s) to fix before saving.`,
     tokenMissing: (name) => `Token missing: the variable ${name} has no value on the server.`,

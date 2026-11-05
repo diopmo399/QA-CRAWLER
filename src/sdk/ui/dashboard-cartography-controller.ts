@@ -10,7 +10,7 @@ import { GIT_PROVIDERS } from '../core/cartography.js';
 import type { QaCrawlerClient } from '../core/client.js';
 import { API_TABS, type ApiTab } from './dashboard-cartography-apis.js';
 import { readIds } from './dashboard-cartography-graph.js';
-import { issueCount, sourceIssues } from './dashboard-cartography-scan.js';
+import { explainSaveError, issueCount, sourceIssues } from './dashboard-cartography-scan.js';
 import {
   BOTTOM_TABS,
   SHEET_TABS,
@@ -1267,6 +1267,12 @@ export class CartographyController {
         else if (field === 'commit') source.commit = typed || undefined;
         else source.tokenEnv = typed || undefined;
       }
+      // Une saisie validée (sortie du champ) redessine la carte : ses erreurs et l'état d'enregistrement
+      // suivent. Le dessin attend que le focus soit posé sur le champ suivant, qui le garde alors.
+      if (committed && field !== 'kind')
+        setTimeout(() => {
+          this.host.paint();
+        }, 0);
       return true;
     }
     const criteria = (
@@ -1501,7 +1507,9 @@ export class CartographyController {
     const sources = this.draft();
     // Les erreurs connues avant l'envoi sont dites sur place, la première reçoit le focus.
     const locale = mapStrings(this.host.state.t.locale);
-    const problems = issueCount(sourceIssues(locale, sources, this.ui.summary?.gitHosts));
+    const problems = issueCount(
+      sourceIssues(locale, sources, this.ui.summary?.gitHosts, this.ui.summary?.allowedRoots),
+    );
     if (problems > 0) {
       this.ui.srcTried = true;
       this.ui.sourcesError = undefined;
@@ -1523,7 +1531,8 @@ export class CartographyController {
         const summary = await api.cartography.summary(projectId);
         if (this.projectId === projectId) this.ui.summary = summary;
       },
-      (text) => {
+      (raw) => {
+        const text = explainSaveError(locale, raw);
         this.ui.sourcesError = text;
         if (this.ui.tab !== 'scan') this.ui.error = text;
       },
