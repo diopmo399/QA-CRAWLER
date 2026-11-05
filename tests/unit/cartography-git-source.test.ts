@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -192,7 +192,9 @@ describe('preparing a remote repository (local file:// repositories)', () => {
     expect(existsSync(path.join(pinned.root, 'src/app/b.component.ts'))).toBe(false);
     // Le dossier de travail est sous la racine du serveur, propre à la source et au projet.
     expect(pinned.root).toBe(await workdirOf(policy(), 'p1', 'front'));
-    expect(path.relative(path.join(base, 'work'), pinned.root).startsWith('..')).toBe(false);
+    // Chemins réels des deux côtés (Windows : noms courts du dossier temporaire).
+    const work = await realpath(path.join(base, 'work'));
+    expect(path.relative(work, pinned.root).startsWith('..')).toBe(false);
   });
 
   it('a symbolic link of the repository is checked out as a plain file, never followed', async () => {
@@ -200,7 +202,11 @@ describe('preparing a remote repository (local file:// repositories)', () => {
     const info = await lstat(path.join(root, 'src/app/escape.ts'));
     expect(info.isSymbolicLink()).toBe(false);
     const read = await readSource(root, []);
-    expect(read.files.find((f) => f.path === 'src/app/escape.ts')?.text).toBe('/etc/hostname');
+    // Le texte du fichier est la cible du lien (sous Windows, Node y ajoute la lettre du lecteur), jamais le
+    // contenu du fichier visé.
+    expect(read.files.find((f) => f.path === 'src/app/escape.ts')?.text).toMatch(
+      /^([A-Za-z]:)?\/etc\/hostname$/,
+    );
   });
 
   it('a hook planted in the working copy is never executed', async () => {
