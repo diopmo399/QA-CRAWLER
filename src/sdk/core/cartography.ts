@@ -493,6 +493,13 @@ export interface MapChange {
   name: string;
   change: 'ADDED' | 'REMOVED' | 'CHANGED';
   detail: string[];
+  /** La source et la couche de l'élément (absentes des rapports d'avant). */
+  source?: string;
+  layer?: MapLayer;
+  /** Les fonctionnalités qui atteignent l'élément par le graphe (chemin démontré ou probable). */
+  features?: { id: string; name: string }[];
+  /** Une preuve de code de l'élément (dans le scan qui le porte). */
+  evidence?: Evidence;
 }
 
 /** Une source comparée entre deux scans : un autre commit n'est pas une différence si les fichiers lus sont identiques. */

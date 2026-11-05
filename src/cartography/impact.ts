@@ -247,11 +247,34 @@ export function computeImpact(
   }
   const definite = (c: MapConfidence): 'CONFIRMED' | 'PROBABLE' =>
     c === 'CONFIRMED' ? 'CONFIRMED' : 'PROBABLE';
+  // Chaque changement porte sa source, sa couche, sa preuve et les fonctionnalités qui l'atteignent.
+  const nodes = new Map([...from.nodes, ...to.nodes].map((n) => [n.id, n]));
+  const reached = (id: string): { id: string; name: string }[] => {
+    const out = new Map<string, string>();
+    for (const model of [to, from])
+      for (const feature of model.features)
+        if (feature.status !== 'REJECTED' && feature.reach[id] && feature.reach[id] !== 'UNKNOWN')
+          out.set(feature.id, feature.name);
+    return [...out].map(([id, name]) => ({ id, name }));
+  };
+  const enriched = changes.map((change) => {
+    const node = nodes.get(change.node);
+    const evidence = node?.evidence.find((e) => e.file);
+    const source = sourceOf(node);
+    const hit = reached(change.node);
+    return {
+      ...change,
+      ...(source ? { source } : {}),
+      ...(node ? { layer: node.layer } : {}),
+      ...(hit.length ? { features: hit } : {}),
+      ...(evidence ? { evidence } : {}),
+    };
+  });
   return {
     from: from.scan.id,
     to: to.scan.id,
     sources: compareSources(from, to, changes),
-    changes,
+    changes: enriched,
     features: [...features.values()]
       .map((entry) => ({ ...entry, confidence: definite(entry.confidence) }))
       .sort((a, b) => RANK[b.confidence] - RANK[a.confidence] || a.name.localeCompare(b.name)),

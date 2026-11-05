@@ -10,6 +10,7 @@ import { GIT_PROVIDERS } from '../core/cartography.js';
 import type { QaCrawlerClient } from '../core/client.js';
 import { API_TABS, type ApiTab } from './dashboard-cartography-apis.js';
 import { readIds } from './dashboard-cartography-graph.js';
+import { issueCount, sourceIssues } from './dashboard-cartography-scan.js';
 import {
   BOTTOM_TABS,
   SHEET_TABS,
@@ -971,20 +972,99 @@ export class CartographyController {
       case 'map-export':
         void this.export();
         return true;
-      case 'map-src-add':
-        this.draft().push({
-          id: `source-${String(this.draft().length + 1)}`,
+      case 'map-src-add': {
+        const sources = this.draft();
+        sources.push({
+          id: `source-${String(sources.length + 1)}`,
           name: '',
           layer: 'FRONTEND',
+          ...(target.dataset.kind === 'GIT' ? { kind: 'GIT' as const } : {}),
           path: '',
           include: [],
           enabled: true,
         });
+        ui.srcClosed = ui.srcClosed.filter((i) => i !== sources.length - 1);
+        this.host.paint();
+        this.focus(`#sd-${String(sources.length - 1)}-name`);
+        return true;
+      }
+      case 'map-src-remove': {
+        const index = Number(target.dataset.index);
+        this.draft().splice(index, 1);
+        ui.srcClosed = ui.srcClosed.filter((i) => i !== index).map((i) => (i > index ? i - 1 : i));
         this.host.paint();
         return true;
-      case 'map-src-remove':
-        this.draft().splice(Number(target.dataset.index), 1);
+      }
+      case 'map-src-toggle': {
+        const index = Number(target.dataset.index);
+        ui.srcClosed = ui.srcClosed.includes(index)
+          ? ui.srcClosed.filter((i) => i !== index)
+          : [...ui.srcClosed, index];
         this.host.paint();
+        this.focus(`#sd-src-${String(index)} .sd-tg`);
+        return true;
+      }
+      case 'map-src-focus': {
+        const index = (ui.sources ?? ui.summary?.config.sources ?? []).findIndex(
+          (s) => s.id === target.dataset.id,
+        );
+        if (index < 0) return true;
+        ui.srcClosed = ui.srcClosed.filter((i) => i !== index);
+        ui.tab = 'scan';
+        this.host.paint();
+        this.focus(`#sd-src-${String(index)} .sd-tg`);
+        return true;
+      }
+      case 'map-scans-all':
+        ui.scansAll = !ui.scansAll;
+        this.host.paint();
+        return true;
+      case 'map-scan-details':
+        ui.tab = 'scan';
+        this.host.paint();
+        this.focus('#map-scan-summary');
+        return true;
+      case 'map-scan-compare': {
+        const latest = ui.summary?.scans[0]?.id;
+        if (!latest || !target.dataset.id) return true;
+        ui.impactFrom = target.dataset.id;
+        ui.impactTo = latest;
+        ui.tab = 'impact';
+        void this.impact();
+        return true;
+      }
+      case 'map-impact-swap': {
+        const scans = ui.summary?.scans ?? [];
+        const from = ui.impactFrom || scans[1]?.id || '';
+        const to = ui.impactTo || scans[0]?.id || '';
+        ui.impactFrom = to;
+        ui.impactTo = from;
+        this.host.paint();
+        this.focus('[data-action="map-impact-swap"]');
+        return true;
+      }
+      case 'map-impact-kind':
+        ui.impactKind = target.dataset.kind ?? 'ALL';
+        ui.impactLimit = 50;
+        this.host.paint();
+        this.focus(`[data-action="map-impact-kind"][data-kind="${ui.impactKind}"]`);
+        return true;
+      case 'map-impact-filters':
+        ui.showImpactFilters = !ui.showImpactFilters;
+        this.host.paint();
+        this.focus('[data-action="map-impact-filters"]');
+        return true;
+      case 'map-impact-more':
+        ui.impactLimit += 50;
+        this.host.paint();
+        return true;
+      case 'map-impact-detail':
+        ui.impactKind = 'ALL';
+        this.host.paint();
+        this.focus('#sd-imp-detail');
+        return true;
+      case 'map-focus':
+        this.focus(`#${target.dataset.target ?? ''}`);
         return true;
       case 'map-src-save':
         void this.saveSources();
@@ -1315,9 +1395,27 @@ export class CartographyController {
         return true;
       case 'impact-from':
         ui.impactFrom = value;
+        this.host.paint();
         return true;
       case 'impact-to':
         ui.impactTo = value;
+        this.host.paint();
+        return true;
+      case 'imp-q':
+        // La recherche porte sur le rapport déjà chargé : seul l'affichage change.
+        if (ui.impactQ === value) return true;
+        ui.impactQ = value;
+        ui.impactLimit = 50;
+        if (committed) this.host.paint();
+        else this.searchLater(() => Promise.resolve());
+        return true;
+      case 'imp-layer':
+        ui.impactLayer = value;
+        this.host.paint();
+        return true;
+      case 'imp-source':
+        ui.impactSource = value;
+        this.host.paint();
         return true;
       case 'impact-env':
         ui.impactEnv = value;
@@ -1391,8 +1489,28 @@ export class CartographyController {
     this.host.paint();
   }
 
+  /** Met le focus sur un élément de l'écran après l'affichage (et le fait voir). */
+  private focus(selector: string): void {
+    if (selector === '#') return;
+    const element = this.host.root.querySelector<HTMLElement>(selector);
+    element?.scrollIntoView({ block: 'nearest' });
+    element?.focus();
+  }
+
   private async saveSources(): Promise<void> {
     const sources = this.draft();
+    // Les erreurs connues avant l'envoi sont dites sur place, la première reçoit le focus.
+    const locale = mapStrings(this.host.state.t.locale);
+    const problems = issueCount(sourceIssues(locale, sources, this.ui.summary?.gitHosts));
+    if (problems > 0) {
+      this.ui.srcTried = true;
+      this.ui.sourcesError = undefined;
+      this.ui.srcClosed = [];
+      this.host.paint();
+      this.focus('.sd-sources [aria-invalid="true"]');
+      return;
+    }
+    this.ui.srcTried = false;
     this.ui.sourcesBusy = true;
     this.ui.sourcesError = undefined;
     this.host.paint();
@@ -1456,6 +1574,7 @@ export class CartographyController {
           ...(to ? { to } : {}),
         });
         this.ui.impact = report;
+        this.ui.impactLimit = 50;
         // Une proposition : les scénarios dont l'impact est démontré sont cochés ; rien n'est lancé.
         this.ui.impactPicked = report.scenarios
           .filter((s) => s.confidence === 'CONFIRMED')

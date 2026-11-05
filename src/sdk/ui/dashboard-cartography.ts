@@ -20,10 +20,8 @@ import type {
   MapStructure,
   MapSubgraph,
   MapSummary,
-  ScanRecord,
   SourceScan,
 } from '../core/cartography.js';
-import { GIT_PROVIDERS } from '../core/cartography.js';
 import type { ScenarioView } from '../core/contracts.js';
 import { can } from './dashboard-access.js';
 import { mapStrings, type MapStrings } from './dashboard-cartography-i18n.js';
@@ -38,6 +36,7 @@ import {
   type SheetTab,
   type StructTab,
 } from './dashboard-cartography-structure.js';
+import { impactView, SCAN_CSS, scanView, type ScanViewHelpers } from './dashboard-cartography-scan.js';
 import { header, icon } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
@@ -215,6 +214,17 @@ export interface CartographyUi {
   condCriteria: ListCriteria;
   actionsPage?: MapPage<ActionRow>;
   actCriteria: ListCriteria;
+  /** Scan & Découverte : les cartes de source repliées (par rang), une tentative d'enregistrement faite. */
+  srcClosed: number[];
+  srcTried: boolean;
+  scansAll: boolean;
+  /** Analyse d'impact : critères du tableau des changements. */
+  impactQ: string;
+  impactKind: string;
+  impactLayer: string;
+  impactSource: string;
+  showImpactFilters?: boolean;
+  impactLimit: number;
 }
 
 export const emptyCartographyUi = (): CartographyUi => ({
@@ -259,6 +269,14 @@ export const emptyCartographyUi = (): CartographyUi => ({
   bottomTab: 'elements',
   condCriteria: emptyCriteria(10),
   actCriteria: emptyCriteria(10),
+  srcClosed: [],
+  srcTried: false,
+  scansAll: false,
+  impactQ: '',
+  impactKind: 'ALL',
+  impactLayer: '',
+  impactSource: '',
+  impactLimit: 50,
   lnBundles: [],
 });
 
@@ -412,10 +430,23 @@ export function cartographyView(input: DashboardState): string {
         ? `<p class="map-run" role="status"><span class="spin" aria-hidden="true"></span>${esc(m.running(running.sources.length, summary.config.sources.filter((s) => s.enabled).length))}</p>`
         : '',
     summary.stale ? `<p class="map-note warn-t" role="note">${esc(m.p.stale)}</p>` : '',
-    summary.scan?.state === 'PARTIAL' ? `<p class="map-note warn-t" role="note">${esc(m.p.partial)}</p>` : '',
+    summary.scan?.state === 'PARTIAL'
+      ? `<p class="map-note warn-t sd-note" role="note"><span>${esc(m.p.partial)}</span><button class="btn small" data-action="map-scan-details">${icon('external')}<span>${esc(m.sd.details)}</span></button></p>`
+      : '',
   ].join('');
   let content: string;
-  if (ui.tab === 'scan') content = scanTab(m, state, summary);
+  const scanHelpers: ScanViewHelpers = {
+    chip,
+    conf: (value) => conf(m, value),
+    layerChip: (layer) => layerChip(m, layer),
+    date: (iso) => date(iso, state),
+    paneError,
+    evidence: (e) => evidenceButton(m, e, state),
+    canEdit: can(state, 'MANAGE_PROJECTS') && state.project?.state !== 'ARCHIVED',
+    canRun: can(state, 'RUN'),
+    environments: state.project?.environments ?? [],
+  };
+  if (ui.tab === 'scan') content = scanView(m, ui, summary, scanHelpers);
   else if (!summary.scan) content = `<section class="card msg"><p class="mu">${esc(m.noScan)}</p></section>`;
   else if (ui.tab === 'overview') content = overviewTab(m, state, summary);
   else if (ui.tab === 'features') content = explorerTab(m, state);
@@ -438,7 +469,14 @@ export function cartographyView(input: DashboardState): string {
       scenarios: ui.scenarios ?? [],
       summary,
     });
-  else content = impactTab(m, state, summary);
+  else {
+    const report = ui.impact;
+    const launch =
+      report && can(state, 'RUN') && report.scenarios.length > 0
+        ? `<div class="map-filters"><label class="pick">${esc(m.environment)} <select data-map="impact-env"><option value="">${esc(m.noEnvironment)}</option>${scanHelpers.environments.map((e) => `<option value="${esc(e.id)}" ${e.id === ui.impactEnv ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></label><button class="btn primary" data-action="map-impact-launch" ${ui.impactPicked.length === 0 || ui.launching ? 'disabled' : ''}>${icon('play')}<span>${esc(m.launchSelection(ui.impactPicked.length))}</span></button></div><p class="mu small">${esc(m.selectionNote)}</p>`
+        : '';
+    content = impactView(m, ui, summary, scanHelpers, { launch });
+  }
   return `<div class="map">${head}${tabs}${banners}${content}${evidencePanel(m, ui)}</div>`;
 }
 
@@ -1117,126 +1155,6 @@ function traceTab(m: MapStrings, state: MapState): string {
   return `<section class="card"><label class="pick">${esc(m.col.feature)} <select data-map="trace-feature">${options}</select></label></section>${chainCard(m, detail)}<section class="card wide"><h2>${esc(m.edgesTitle(detail.edges.length))}</h2>${detail.truncated ? `<p class="map-note warn-t small">${esc(m.p.truncated(detail.edges.length, 1))}</p>` : ''}<div class="tbl-w"><table class="tbl map-tbl"><thead><tr><th>${esc(m.col.from)}</th><th>${esc(m.col.kind)}</th><th>${esc(m.col.to)}</th><th>${esc(m.col.confidence)}</th><th>${esc(m.col.reason)}</th><th>${esc(m.col.evidence)}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 
-// ── Impact entre deux scans ───────────────────────────────────────────────────────────────────────
-
-function impactTab(m: MapStrings, state: MapState, summary: MapSummary): string {
-  const ui = state.map;
-  const scans: ScanRecord[] = summary.scans;
-  if (scans.length < 2)
-    return `<section class="card"><h2>${esc(m.impactTitle)}</h2><p class="mu">${esc(m.impactNeedTwo)}</p></section>`;
-  const scanOption = (id: string, selected: string): string => {
-    const scan = scans.find((s) => s.id === id);
-    return `<option value="${esc(id)}" ${id === selected ? 'selected' : ''}>${esc(scan ? `${date(scan.startedAt, state)} · ${m.scanState[scan.state] ?? scan.state}` : id)}</option>`;
-  };
-  const from = ui.impactFrom || scans[1]?.id || '';
-  const to = ui.impactTo || scans[0]?.id || '';
-  const pickers = `<div class="map-filters"><label class="pick">${esc(m.impactFrom)} <select data-map="impact-from">${scans.map((s) => scanOption(s.id, from)).join('')}</select></label><label class="pick">${esc(m.impactTo)} <select data-map="impact-to">${scans.map((s) => scanOption(s.id, to)).join('')}</select></label><button class="btn primary" data-action="map-impact" ${ui.impactBusy ? 'disabled' : ''}>${icon('refresh')}<span>${esc(m.impactRun)}</span></button></div><p class="mu small">${esc(m.limitNote)}</p>${paneError(ui.impactError)}`;
-  const report = ui.impact;
-  if (!report) return `<section class="card"><h2>${esc(m.impactTitle)}</h2>${pickers}</section>`;
-  const changes = report.changes
-    .slice(0, 200)
-    .map(
-      (c) =>
-        `<li>${chip(c.change === 'REMOVED' ? 'FAILED' : c.change === 'ADDED' ? 'COMPLETED' : 'PROPOSED', m.changeKind[c.change] ?? c.change)} <b>${esc(c.name)}</b> <small class="mu">${esc(c.kind)}</small>${
-          c.detail.length
-            ? `<ul class="map-why">${c.detail
-                .slice(0, 6)
-                .map((d) => `<li>${esc(d)}</li>`)
-                .join('')}</ul>`
-            : ''
-        }</li>`,
-    )
-    .join('');
-  const features = report.features
-    .map(
-      (f) =>
-        `<li>${conf(m, f.confidence)} <button class="lnk" data-action="map-feature" data-feature="${esc(f.feature)}">${esc(f.name)}</button><ul class="map-why">${f.via
-          .slice(0, 4)
-          .map((v) => `<li>${esc(v)}</li>`)
-          .join('')}</ul></li>`,
-    )
-    .join('');
-  const environments = state.project?.environments ?? [];
-  const scenarios = report.scenarios
-    .map(
-      (s) =>
-        `<li><label class="map-pickrow"><input type="checkbox" data-map="impact-pick" data-scenario="${esc(s.scenario)}" ${ui.impactPicked.includes(s.scenario) ? 'checked' : ''}> <b>${esc(s.scenario)}</b> ${conf(m, s.confidence)}</label><small class="mu">${esc(s.reason)}</small></li>`,
-    )
-    .join('');
-  const launch =
-    can(state, 'RUN') && report.scenarios.length > 0
-      ? `<div class="map-filters"><label class="pick">${esc(m.environment)} <select data-map="impact-env"><option value="">${esc(m.noEnvironment)}</option>${environments.map((e) => `<option value="${esc(e.id)}" ${e.id === ui.impactEnv ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></label><button class="btn primary" data-action="map-impact-launch" ${ui.impactPicked.length === 0 || ui.launching ? 'disabled' : ''}>${icon('play')}<span>${esc(m.launchSelection(ui.impactPicked.length))}</span></button></div><p class="mu small">${esc(m.selectionNote)}</p>`
-      : '';
-  const compared = report.sources ?? [];
-  const sourceRows = compared
-    .map(
-      (c) =>
-        `<li>${chip(c.status === 'MODIFIED' ? 'PROPOSED' : c.status === 'REMOVED' ? 'FAILED' : c.status === 'ADDED' ? 'COMPLETED' : c.status === 'UNDETERMINED' ? 'PARTIAL' : 'CONFIRMED', m.gs.compareStatus[c.status] ?? c.status)} <b>${esc(c.name)}</b> ${layerChip(m, c.layer)} <small class="mu">${esc(`${c.from?.revision?.slice(0, 10) ?? '—'} → ${c.to?.revision?.slice(0, 10) ?? '—'}`)} · ${esc(m.gs.compareCounts(c.changes.added, c.changes.removed, c.changes.changed))}</small><ul class="map-why"><li>${esc(c.reason)}</li></ul></li>`,
-    )
-    .join('');
-  const sourcesCard = compared.length
-    ? `<section class="card"><h2>${esc(m.gs.compareTitle(compared.length))}</h2><ul class="map-imp-l">${sourceRows}</ul></section>`
-    : '';
-  return `<section class="card"><h2>${esc(m.impactTitle)}</h2>${pickers}</section>${sourcesCard}<div class="map-impact"><section class="card"><h2>${esc(m.changes(report.changes.length))}</h2>${changes ? `<ul class="map-imp-l">${changes}</ul>` : `<p class="mu">${esc(m.noChange)}</p>`}</section><section class="card"><h2>${esc(m.impacted(report.features.length))}</h2><ul class="map-imp-l">${features}</ul></section><section class="card"><h2>${esc(m.toReplay(report.scenarios.length))}</h2><ul class="map-imp-l">${scenarios}</ul>${launch}</section></div>`;
-}
-
-// ── Scan & Découverte ─────────────────────────────────────────────────────────────────────────────
-
-function scanTab(m: MapStrings, state: MapState, summary: MapSummary): string {
-  const ui = state.map;
-  const editable = can(state, 'MANAGE_PROJECTS') && state.project?.state !== 'ARCHIVED';
-  const sources = ui.sources ?? summary.config.sources;
-  const layers = ['FRONTEND', 'BFF', 'BACKEND', 'API', 'DATABASE', 'EVENTS', 'OTHER'];
-  const rows = sources
-    .map((s, i) => {
-      const input = (name: string, value: string, label: string, extra = ''): string =>
-        `<label class="field"><span>${esc(label)}</span><input data-map="src-${name}" data-index="${String(i)}" value="${esc(value)}" ${editable ? '' : 'disabled'} autocomplete="off" spellcheck="false" ${extra}></label>`;
-      const remote = s.kind === 'GIT';
-      const select = (name: string, value: string, label: string, options: [string, string][]): string =>
-        `<label class="field"><span>${esc(label)}</span><select data-map="src-${name}" data-index="${String(i)}" ${editable ? '' : 'disabled'}>${options.map(([v, l]) => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
-      const provider = select('provider', s.provider ?? '', m.gs.provider, [
-        ['', m.gs.providerAuto],
-        ...GIT_PROVIDERS.map((p): [string, string] => [p, m.gs.providers[p] ?? p]),
-      ]);
-      const place = remote
-        ? `${input('repoUrl', s.repoUrl ?? '', m.gs.repoUrl, 'class="mono" maxlength="500"')}${input('branch', s.branch ?? '', m.gs.branch, 'class="mono" maxlength="200"')}${input('commit', s.commit ?? '', m.gs.commit, 'class="mono" maxlength="64"')}${input('tokenEnv', s.tokenEnv ?? '', m.gs.tokenEnv, 'class="mono" maxlength="100"')}${provider}`
-        : `${input('path', s.path, m.srcField.path, 'class="mono"')}${input('repoUrl', s.repoUrl ?? '', m.gs.repoUrlLocal, 'class="mono" maxlength="500"')}${provider}`;
-      return `<li class="map-src-e"><div class="map-src-g">${input('id', s.id, m.srcField.id, 'maxlength="40"')}${input('name', s.name, m.srcField.name, 'maxlength="80"')}<label class="field"><span>${esc(m.srcField.layer)}</span><select data-map="src-layer" data-index="${String(i)}" ${editable ? '' : 'disabled'}>${layers.map((l) => `<option value="${l}" ${l === s.layer ? 'selected' : ''}>${esc(m.layers[l] ?? l)}</option>`).join('')}</select></label>${select(
-        'kind',
-        remote ? 'GIT' : 'LOCAL',
-        m.gs.kind,
-        [
-          ['LOCAL', m.gs.kinds.LOCAL ?? 'LOCAL'],
-          ['GIT', m.gs.kinds.GIT ?? 'GIT'],
-        ],
-      )}${place}${input('include', s.include.join(', '), m.srcField.include)}<label class="map-check"><input type="checkbox" data-map="src-enabled" data-index="${String(i)}" ${s.enabled ? 'checked' : ''} ${editable ? '' : 'disabled'}> ${esc(m.srcField.enabled)}</label></div>${editable ? `<button class="btn small ghost" data-action="map-src-remove" data-index="${String(i)}">${icon('close')}<span>${esc(m.removeSource)}</span></button>` : ''}</li>`;
-    })
-    .join('');
-  const editor = `<section class="card"><h2>${icon('sources')}<span>${esc(m.sourcesEditor)}</span></h2><p class="mu small">${esc(m.allowedRoots)} : ${summary.allowedRoots.length ? summary.allowedRoots.map((r) => `<code>${esc(r)}</code>`).join(' ') : '—'}</p><p class="mu small">${esc(summary.gitHosts?.length ? m.gs.hosts(summary.gitHosts.join(', ')) : m.gs.disabled)}${summary.gitHosts?.length ? ` · ${esc(m.gs.tokenNote)}` : ''}</p><ul class="map-src-el">${rows}</ul>${editable ? `<div class="form-acts start"><button class="btn" data-action="map-src-add">${icon('plus')}<span>${esc(m.addSource)}</span></button><button class="btn primary" data-action="map-src-save" ${ui.sourcesBusy ? 'disabled' : ''}>${esc(m.saveSources)}</button></div>` : ''}${paneError(ui.sourcesError)}${can(state, 'RUN') && (summary.allowedRoots.length > 0 || Boolean(summary.gitHosts?.length)) ? `<div class="form-acts start"><label class="map-check"><input type="checkbox" data-map="incremental" ${ui.incremental ? 'checked' : ''}> ${esc(m.incremental)}</label>${summary.running ? `<button class="btn" data-action="map-scan-cancel">${icon('stop')}<span>${esc(m.cancelScan)}</span></button>` : `<button class="btn primary" data-action="map-scan" ${summary.config.sources.length === 0 ? 'disabled' : ''}>${icon('play')}<span>${esc(m.launchScan)}</span></button>`}</div>` : ''}</section>`;
-  const scan = summary.running ?? summary.scan;
-  const detail = scan
-    ? `<section class="card"><h2>${esc(date(scan.startedAt, state))} ${chip(scan.state, m.scanState[scan.state] ?? scan.state)}</h2><ul class="map-scan-l">${scan.sources
-        .map(
-          (s) =>
-            `<li><b>${esc(s.name)}</b> ${layerChip(m, s.layer)} ${chip(s.state, m.sourceState[s.state] ?? s.state)}<small class="mu"> ${esc(m.files(s.files))}${s.skipped ? ` · ${esc(m.skipped(s.skipped))}` : ''}${s.secretsExcluded ? ` · ${esc(m.secrets(s.secretsExcluded))}` : ''}${s.revision ? ` · ${esc(m.revision(s.revision))}` : ''}${s.revisionStatus === 'UNDETERMINED' ? ` · ${esc(m.gs.undetermined)}` : ''}${s.kind === 'GIT' ? ` · ${esc(m.gs.kinds.GIT ?? 'GIT')}${s.repoUrl ? ` <code>${esc(s.repoUrl)}</code>` : ''}${s.requestedCommit || s.branch ? ` · ${esc(m.gs.requested(s.requestedCommit ? s.requestedCommit.slice(0, 12) : (s.branch ?? '')))}` : ''}` : ''}${s.repoPath ? ` · ${esc(m.gs.repoPath(s.repoPath))}` : ''}</small><ul class="map-why">${s.technologies.map((t) => `<li>${esc(t.technology)} ${t.supported ? chip('CONFIRMED', '✓') : chip('PROPOSED', m.missingConnector)}${t.note ? ` <small class="mu">${esc(t.note)}</small>` : ''}</li>`).join('')}${s.errors
-              .slice(0, 5)
-              .map((e) => `<li class="warn-t">${esc(e)}</li>`)
-              .join('')}</ul></li>`,
-        )
-        .join('')}</ul>${
-        Object.keys(scan.counts).length
-          ? `<p class="mu small">${esc(m.counts)} : ${esc(
-              Object.entries(scan.counts)
-                .map(([k, v]) => `${k} ${String(v)}`)
-                .join(' · '),
-            )}</p>`
-          : ''
-      }</section>`
-    : '';
-  const history = `<section class="card"><h2>${esc(m.history(summary.scans.length))}</h2>${summary.scans.length ? `<ul class="map-scan-h">${summary.scans.map((s) => `<li>${chip(s.state, m.scanState[s.state] ?? s.state)} ${esc(date(s.startedAt, state))} <small class="mu">${s.incremental ? `${esc(m.incrementalShort)} · ` : ''}${esc(m.edgesCount(s.edges))}</small></li>`).join('')}</ul>` : `<p class="mu">${esc(m.noHistory)}</p>`}</section>`;
-  return `<div class="map-scan">${editor}${detail}${history}</div>`;
-}
-
 function evidencePanel(m: MapStrings, ui: CartographyUi): string {
   if (!ui.evidence && !ui.evidenceError) return '';
   const e = ui.evidence;
@@ -1253,7 +1171,8 @@ function evidencePanel(m: MapStrings, ui: CartographyUi): string {
   return `<aside class="map-ev" role="dialog" aria-label="${esc(e ? m.evidenceTitle(e.file, e.line) : m.evidence)}"><div class="card-h"><h2 class="mono">${esc(e ? `${e.source} · ${m.evidenceTitle(e.file, e.line)}` : m.evidence)}</h2><button class="btn small ghost icon-only" data-action="map-evidence-close" aria-label="${esc(m.closeEvidence)}">${icon('close')}</button></div>${code}</aside>`;
 }
 
-export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}
+export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}${SCAN_CSS}
+.sd-note{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sd-note span{flex:1 1 auto}
 .map{display:flex;flex-direction:column;gap:14px}
 .map-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
 .map-head .hd{flex:1 1 460px;flex-direction:column;align-items:flex-start}

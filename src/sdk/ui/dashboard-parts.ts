@@ -116,6 +116,7 @@ const ICONS: Record<string, string> = {
   network:
     '<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-2h12v2"/>',
   arrowRight: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  swap: '<path d="M7 7h13l-3-3M17 17H4l3 3"/>',
   filter: '<path d="M4 5h16l-6 7.5V19l-4-2v-4.5z"/>',
 };
 
