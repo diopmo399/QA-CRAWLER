@@ -1591,9 +1591,19 @@ export class QaCrawlerDashboard extends Base {
         }
       } else if (route.view === 'cartography') {
         if (route.tab) (this.state.map ??= emptyCartographyUi()).tab = route.tab;
+        // Affichage progressif : dès que le projet et le résumé sont là, l'écran se montre ; la liste, la
+        // fonctionnalité et ses champs arrivent ensuite, chacun dans son panneau, sans attendre toute la chaîne.
+        const reveal = (): void => {
+          if (generation !== this.generation || this.state.project?.id !== route.projectId) return;
+          if (!this.state.map?.summary) return;
+          this.state.phase = 'ready';
+          this.state.error = undefined;
+          this.state.shown = undefined;
+          this.paint();
+        };
         await Promise.all([
-          this.loadProject(api, route.projectId, generation),
-          this.cartography.load(api, route.projectId, () => generation === this.generation),
+          this.loadProject(api, route.projectId, generation).then(reveal),
+          this.cartography.load(api, route.projectId, () => generation === this.generation, reveal),
         ]);
       } else if (route.view === 'tests') {
         const [, recordings] = await Promise.all([

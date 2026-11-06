@@ -518,7 +518,7 @@ export async function cartographyView(
       },
     };
   }
-  const state = await stateOf(project, stored, decisions);
+  const state = await stateOf(project, stored.model.scan.id, decisions, () => Promise.resolve(stored));
   const model = state.index.model;
   return {
     ...base,
@@ -780,17 +780,24 @@ export function cacheStats(): { hits: number; misses: number } {
 
 async function stateOf(
   project: CartographyProject,
-  stored: StoredScan,
+  scanId: string,
   decisions: readonly MapDecision[],
+  load: () => Promise<StoredScan>,
 ): Promise<ProgressiveState> {
-  const indexKey = `${stored.model.scan.id}|${String(decisions.length)}|${decisions.at(-1)?.id ?? ''}`;
+  const indexKey = `${scanId}|${String(decisions.length)}|${decisions.at(-1)?.id ?? ''}`;
   let entry = CACHE.get(project.dir);
   if (!entry || entry.indexKey !== indexKey) {
     STATS.misses += 1;
+    // Le scan (modèle et faits) n'est relu que pour construire l'index : un index en cache le dispense.
     entry = {
       indexKey,
-      index: Promise.resolve().then(() => buildIndex(applyDecisions(stored.model, decisions))),
+      index: load().then((stored) => buildIndex(applyDecisions(stored.model, decisions))),
     };
+    // Une lecture en échec n'est pas gardée : la requête suivante la refait.
+    const failed = entry;
+    failed.index.catch(() => {
+      if (CACHE.get(project.dir) === failed) CACHE.delete(project.dir);
+    });
     CACHE.delete(project.dir);
     CACHE.set(project.dir, entry);
     while (CACHE.size > MAX_CACHE) {
@@ -842,16 +849,23 @@ async function stateOf(
 async function progressive(
   project: CartographyProject,
   scanId?: string,
+  known?: { scans: readonly ScanRecord[] },
 ): Promise<ProgressiveState | undefined> {
-  const [decisions, scans] = await Promise.all([readDecisions(project.dir), listScans(project.dir)]);
+  const [decisions, scans] = await Promise.all([
+    readDecisions(project.dir),
+    known ? Promise.resolve(known.scans) : listScans(project.dir),
+  ]);
   const chosen = scanId ?? scans[0]?.id;
   if (!chosen) return undefined;
-  const stored = await readScan(project.dir, chosen);
-  if (!stored) {
+  if (!scans.some((s) => s.id === chosen)) {
     if (scanId) throw new CartographyInputError(404, 'NOT_FOUND', 'scan not found');
     return undefined;
   }
-  return stateOf(project, stored, decisions);
+  return stateOf(project, chosen, decisions, async () => {
+    const stored = await readScan(project.dir, chosen);
+    if (!stored) throw new CartographyInputError(404, 'NOT_FOUND', 'scan not found');
+    return stored;
+  });
 }
 
 async function required(project: CartographyProject, scanId?: string): Promise<ProgressiveState> {
@@ -898,7 +912,7 @@ export async function mapSummary(
 ): Promise<MapSummary> {
   const [config, scans] = await Promise.all([readConfig(project.dir), listScans(project.dir)]);
   const running = runningScan(project);
-  const state = await progressive(project);
+  const state = await progressive(project, undefined, { scans });
   const scan = state?.index.model.scan;
   const index = state?.index;
   const concepts = index?.model.concepts ?? [];

@@ -337,6 +337,26 @@ describe('SDK cartography — real server, real engine', () => {
     const again = (await client.cartography.summary(project.id)).performance.cache;
     expect(again.misses).toBe(cached.misses);
     expect(again.hits).toBeGreaterThan(cached.hits);
+    // Un index en cache dispense de relire le scan complet : rendu illisible un instant, il n'est pas réclamé.
+    const scanFile = path.join(
+      workspace,
+      project.id,
+      'cartography',
+      'scans',
+      `${summary.scan?.id ?? ''}.json`,
+    );
+    const content = await readFile(scanFile);
+    await writeFile(scanFile, '{ unreadable');
+    try {
+      const [served, page, opened] = await Promise.all([
+        client.cartography.summary(project.id),
+        client.cartography.features(project.id, { size: 2 }),
+        client.cartography.feature(project.id, createId),
+      ]);
+      expect([served.scan?.id, page.total, opened.feature.id]).toEqual([summary.scan?.id, 4, createId]);
+    } finally {
+      await writeFile(scanFile, content);
+    }
     // Une association manuelle d'un scénario au champ invalide l'index ; des requêtes concurrentes ne le
     // reconstruisent qu'une fois, et la fiche montre l'association, d'origine manuelle.
     await client.cartography.decide(project.id, {

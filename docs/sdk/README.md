@@ -1130,8 +1130,16 @@ recalculée quand les révisions des scénarios ou les 50 dernières exécutions
 ou une décision change la clé : l'index est reconstruit à la requête suivante, une seule fois même
 si plusieurs requêtes arrivent ensemble (elles partagent le même calcul). Le cache garde 16 projets
 (le plus ancien sort) ; les succès et les reconstructions sont comptés dans `summary.performance`.
-L'écran garde aussi les 40 dernières réponses de la version en cours. Les liens qui reliaient les
-mêmes nœuds par le même type sont fusionnés au scan (leurs preuves réunies).
+L'écran garde aussi les 40 dernières réponses de la version en cours (fiches de fonctionnalité, pages de
+champs par requête, fiches de champ) : revenir sur une fonctionnalité visitée ne relit rien. Les liens
+qui reliaient les mêmes nœuds par le même type sont fusionnés au scan (leurs preuves réunies).
+
+**Premier chargement.** Un scan est écrit en JSON compact (`scans/<id>.json`) avec, à côté, son relevé
+léger (`scans/<id>.record.json`, quelques ko) : lister les scans ne relit jamais les modèles et les faits.
+Un scan écrit avant ces relevés est lu une fois, puis son relevé est écrit (aucune donnée n'est perdue ni
+réécrite). Le scan complet n'est lu que pour construire l'index ; un index en cache en dispense, et le
+résumé ne liste les scans qu'une fois. L'écran se montre dès que le projet et le résumé sont arrivés : la
+liste, la fonctionnalité choisie et ses champs suivent, chacun dans son panneau, sans bloquer l'écran.
 
 **États, preuves, scénarios.** Une preuve renvoie la source, le fichier, la ligne, le symbole, la
 justification, la confiance et la version du scan ; un extrait dont le fichier a changé depuis le

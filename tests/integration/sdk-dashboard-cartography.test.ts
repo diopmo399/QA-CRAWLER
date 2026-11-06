@@ -138,6 +138,48 @@ describe('Dashboard — functional map, in Chromium', () => {
     expect(calls.filter(fullGraph)).toEqual([]);
   }, 60_000);
 
+  it('shows the summary before the rest of the chain, then keeps what it read: a visited feature reopens without a request', async () => {
+    // La liste des fonctionnalités est retenue côté réseau : l'écran se montre déjà, utilisable, avec ses KPI.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(/\/cartography\/features\?/, async (route) => {
+      await held;
+      await route.continue();
+    });
+    try {
+      await page.goto(`${server.url}/dashboard`);
+      await dashboard().locator('select[data-action="project-context"]').selectOption(project.id);
+      await dashboard().locator('.drawer [data-action="nav"][data-view="cartography"]').click();
+      await dashboard().locator('.map-kpis').waitFor();
+      expect(await dashboard().locator('main.main').getAttribute('inert')).toBeNull();
+      expect(await dashboard().locator('main.main').getAttribute('aria-busy')).toBeNull();
+      expect(await dashboard().locator('.map-flist .map-item').count()).toBe(0);
+      release();
+      await dashboard().locator('.map-flist .map-item').first().waitFor();
+    } finally {
+      release();
+      await page.unroute(/\/cartography\/features\?/);
+    }
+    // Une fonctionnalité déjà ouverte se rouvre sans requête : sa fiche et sa page de champs sont gardées.
+    // (Deux autres que « Request create », dont le test suivant suit les requêtes de la première ouverture.)
+    const items = dashboard().locator('.map-flist .map-item').filter({ hasNotText: 'Request create' });
+    const first = (await items.nth(0).getAttribute('data-feature')) ?? '';
+    const second = (await items.nth(1).getAttribute('data-feature')) ?? '';
+    await dashboard().locator(`.map-item[data-feature="${second}"]`).click();
+    await dashboard().locator(`.map-item[data-feature="${second}"][aria-pressed="true"]`).waitFor();
+    await page.waitForLoadState('networkidle');
+    const mark = calls.length;
+    await dashboard().locator(`.map-item[data-feature="${first}"]`).click();
+    await dashboard().locator(`.map-item[data-feature="${first}"][aria-pressed="true"]`).waitFor();
+    await page.waitForLoadState('networkidle');
+    const id = encodeURIComponent(first);
+    expect(
+      calls.slice(mark).filter((call) => call.includes(`id=${id}`) && /\/feature(-fields)?\?/.test(call)),
+    ).toEqual([]);
+  }, 60_000);
+
   it('level 1 → 2 → 3: Request create, its fields, then the trace of Company name, loaded on demand', async () => {
     await dashboard().locator('.map-tabs [data-action="map-tab"][data-tab="features"]').click();
     await dashboard().locator('input[data-map="f-q"]').fill('request create');

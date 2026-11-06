@@ -1,10 +1,12 @@
 import type {
   FeatureDetail,
+  FieldRow,
   FieldSheet,
   MapDecisionInput,
   MapEdgeKind,
   MapLayer,
   MapListQuery,
+  MapPage,
   MapSource,
 } from '../core/cartography.js';
 import {
@@ -66,8 +68,11 @@ export class CartographyController {
   private readonly inflight = new Map<MapPane, AbortController>();
   /** Le projet affiché : un autre projet repart d'un état vide. */
   private projectOfState?: string;
-  /** Les fiches déjà lues, valables pour une version des données (nouveau scan, décision : nouvelle version). */
-  private readonly cache = new Map<string, FeatureDetail | FieldSheet>();
+  /**
+   * Les fiches et les pages de champs déjà lues, valables pour une version des données (nouveau scan,
+   * décision : nouvelle version) : revenir sur une fonctionnalité visitée ne relit rien.
+   */
+  private readonly cache = new Map<string, FeatureDetail | FieldSheet | MapPage<FieldRow>>();
   private version = 0;
 
   constructor(private readonly host: CartographyHost) {}
@@ -82,7 +87,7 @@ export class CartographyController {
     return route.view === 'cartography' ? route.projectId : undefined;
   }
 
-  private remember<T extends FeatureDetail | FieldSheet>(key: string, value: T): T {
+  private remember<T extends FeatureDetail | FieldSheet | MapPage<FieldRow>>(key: string, value: T): T {
     this.cache.delete(key);
     if (this.cache.size >= CACHE_MAX) {
       const oldest = this.cache.keys().next().value;
@@ -151,8 +156,16 @@ export class CartographyController {
     };
   }
 
-  /** Le premier affichage : le résumé, une page de fonctionnalités ; la sélection gardée est relue. */
-  async load(api: QaCrawlerClient, projectId: string, current: () => boolean): Promise<void> {
+  /**
+   * Le premier affichage : le résumé, une page de fonctionnalités ; la sélection gardée est relue.
+   * `progress` est appelé à chaque étape montrable (résumé, puis liste) pour un affichage progressif.
+   */
+  async load(
+    api: QaCrawlerClient,
+    projectId: string,
+    current: () => boolean,
+    progress: () => void = () => undefined,
+  ): Promise<void> {
     if (this.projectOfState !== projectId) {
       const tab = this.ui.tab;
       this.host.state.map = { ...emptyCartographyUi(), tab };
@@ -172,8 +185,10 @@ export class CartographyController {
       this.ui.sources = undefined;
     if (summary.running) this.poll(projectId);
     if (!summary.scan) return;
+    progress();
     await this.loadFeatures();
     if (!current()) return;
+    progress();
     // Une fonctionnalité est montrée d'emblée (la première de la page) : sa fiche et une page de ses champs.
     if (!this.ui.feature && this.ui.features?.items[0]) this.ui.feature = this.ui.features.items[0].id;
     await Promise.all([this.loadDetail(), this.loadFields(), this.loadSheet(), this.loadTab()]);
@@ -226,9 +241,15 @@ export class CartographyController {
       this.ui.fields = undefined;
       return;
     }
-    const page = await this.fetch('fields', (api, id, signal) =>
-      api.cartography.featureFields(id, feature, this.query(this.ui.fieldCriteria), { signal }),
-    );
+    // La clé couvre la version des données, la fonctionnalité et toute la requête (recherche, tri, page).
+    const key = `${String(this.version)}|fields|${feature}|${JSON.stringify(this.query(this.ui.fieldCriteria))}`;
+    const cached = this.cache.get(key) as MapPage<FieldRow> | undefined;
+    const page =
+      cached ??
+      (await this.fetch('fields', (api, id, signal) =>
+        api.cartography.featureFields(id, feature, this.query(this.ui.fieldCriteria), { signal }),
+      ));
+    if (page && !cached && this.ui.feature === feature) this.remember(key, page);
     if (page && this.ui.feature === feature) {
       this.ui.fields = page;
       this.ui.fieldCriteria.page = page.page;

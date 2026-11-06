@@ -4,6 +4,19 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : premier chargement
+
+- Le scan est écrit en JSON compact, et son relevé dans un fichier léger à côté (`<id>.record.json`) :
+  lister les scans ne relit plus chaque scan complet (482 ms → 1 ms sur 5 scans de 6 240 nœuds). Un scan
+  plus ancien reçoit son relevé à la première lecture ; l'élagage retire les deux fichiers.
+- Le serveur ne relit le scan complet que pour construire l'index : un index en cache en dispense (résumé
+  chaud 1 055 ms → 4 ms, page de fonctionnalités 617 ms → 4 ms), et le résumé ne liste plus les scans deux
+  fois. Une lecture en échec n'est pas gardée en cache.
+- L'écran Cartographie se montre dès que le projet et le résumé sont arrivés (premier contenu à froid
+  3 592 ms → 389 ms) ; la liste, la fonctionnalité et ses champs suivent dans leur panneau.
+- Les pages de champs d'une fonctionnalité sont gardées par version des données et par requête : rouvrir
+  une fonctionnalité visitée ne lance plus aucune requête (715 ms → 86 ms, 0 requête).
+
 ### Cartographie : moteur d'investigation
 
 - Moteur d'investigation déterministe au-dessus du graphe (`src/cartography/investigate.ts`) : objectif,

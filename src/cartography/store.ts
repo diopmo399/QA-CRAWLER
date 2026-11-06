@@ -41,10 +41,10 @@ async function readJson(file: string): Promise<unknown> {
   }
 }
 
-async function writeJson(file: string, value: unknown): Promise<void> {
+async function writeJson(file: string, value: unknown, compact = false): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${String(process.pid)}.${String(Date.now())}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`);
+  await writeFile(temporary, `${compact ? JSON.stringify(value) : JSON.stringify(value, null, 2)}\n`);
   await rename(temporary, file);
 }
 
@@ -94,12 +94,41 @@ export interface StoredScan {
   facts: SourceFacts[];
 }
 
+/**
+ * Un scan est écrit en JSON compact (le fichier complet ne se lit qu'à l'ouverture de son index), et son
+ * relevé (quelques ko) à côté : lister les scans ne relit jamais les modèles et les faits.
+ */
 export async function writeScan(projectDir: string, scan: StoredScan): Promise<void> {
-  await writeJson(path.join(scansDir(projectDir), `${scan.model.scan.id}.json`), { schema: SCHEMA, ...scan });
+  await writeJson(
+    path.join(scansDir(projectDir), `${scan.model.scan.id}.json`),
+    { schema: SCHEMA, ...scan },
+    true,
+  );
+  await writeRecord(projectDir, scan.model.scan);
   // Seuls les derniers scans sont gardés (les plus anciens d'abord retirés).
   const records = await listScans(projectDir);
-  for (const old of records.slice(KEEP_SCANS))
+  for (const old of records.slice(KEEP_SCANS)) {
     await rm(path.join(scansDir(projectDir), `${old.id}.json`), { force: true });
+    await rm(recordFile(projectDir, old.id), { force: true });
+  }
+}
+
+const recordFile = (projectDir: string, id: string): string =>
+  path.join(scansDir(projectDir), `${id}.record.json`);
+
+async function writeRecord(projectDir: string, record: ScanRecord): Promise<void> {
+  await writeJson(recordFile(projectDir, record.id), { schema: SCHEMA, record }, true);
+}
+
+/** Le relevé d'un scan : son fichier léger ; un scan d'avant ce relevé est lu une fois, puis son relevé écrit. */
+async function readRecord(projectDir: string, id: string): Promise<ScanRecord | undefined> {
+  const raw = (await readJson(recordFile(projectDir, id)).catch(() => undefined)) as
+    { schema?: number; record?: ScanRecord } | undefined;
+  if (raw?.record?.id === id) return raw.record;
+  const stored = await readScan(projectDir, id);
+  if (!stored) return undefined;
+  await writeRecord(projectDir, stored.model.scan).catch(() => undefined);
+  return stored.model.scan;
 }
 
 export async function readScan(projectDir: string, id: string): Promise<StoredScan | undefined> {
@@ -121,8 +150,8 @@ export async function listScans(projectDir: string): Promise<ScanRecord[]> {
   }
   const records: ScanRecord[] = [];
   for (const name of names.filter((entry) => /^scan-[\w-]+\.json$/.test(entry))) {
-    const stored = await readScan(projectDir, name.replace(/\.json$/, '')).catch(() => undefined);
-    if (stored) records.push(stored.model.scan);
+    const record = await readRecord(projectDir, name.replace(/\.json$/, '')).catch(() => undefined);
+    if (record) records.push(record);
   }
   return records.sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id));
 }

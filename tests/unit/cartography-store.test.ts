@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CartographyModel, Feature, MapDecision } from '../../src/sdk/core/cartography.js';
@@ -98,6 +98,41 @@ describe('cartography store', () => {
 });
 
 describe('cartography decisions', () => {
+  it('lists scans from their light records only, migrates an older scan once and prunes both files', async () => {
+    const scans = path.join(dir, 'cartography/scans');
+    await writeScan(dir, { model: modelOf('scan-a', '2026-11-04T10:00:00Z'), facts: [] });
+    const names = await readdir(scans);
+    expect(names.sort()).toEqual(['scan-a.json', 'scan-a.record.json']);
+    // Le fichier complet est compact : aucune indentation n'y gonfle le modèle.
+    expect(await readFile(path.join(scans, 'scan-a.json'), 'utf8')).not.toContain('\n  ');
+    // Lister ne relit pas le scan complet : un scan illisible garde son relevé.
+    await writeFile(path.join(scans, 'scan-a.json'), '{ not json');
+    expect((await listScans(dir)).map((s) => s.id)).toEqual(['scan-a']);
+    // Un scan écrit avant les relevés (sans fichier léger) est lu une fois, puis son relevé est écrit.
+    await writeFile(
+      path.join(scans, 'scan-b.json'),
+      JSON.stringify({ schema: 1, model: modelOf('scan-b', '2026-11-04T11:00:00Z'), facts: [] }, null, 2),
+    );
+    expect((await listScans(dir)).map((s) => s.id)).toEqual(['scan-b', 'scan-a']);
+    expect(await readdir(scans)).toContain('scan-b.record.json');
+    expect((await readScan(dir, 'scan-b'))?.model.scan.id).toBe('scan-b');
+    // Les plus anciens sont retirés avec leur relevé.
+    for (let i = 0; i < KEEP_SCANS; i += 1)
+      await writeScan(dir, {
+        model: modelOf(
+          `scan-c${String(i).padStart(2, '0')}`,
+          `2026-11-05T10:${String(i).padStart(2, '0')}:00Z`,
+        ),
+        facts: [],
+      });
+    const left = await readdir(scans);
+    expect(left).not.toContain('scan-a.json');
+    expect(left).not.toContain('scan-a.record.json');
+    expect(left).not.toContain('scan-b.record.json');
+    expect(left.filter((n) => n.endsWith('.record.json'))).toHaveLength(KEEP_SCANS);
+    expect(await listScans(dir)).toHaveLength(KEEP_SCANS);
+  });
+
   it('replays confirm, rename, merge, reject and restore without changing the scan', () => {
     const model = modelOf('scan-a', '2026-11-04T10:00:00Z', [
       feature('A', 'Create'),
