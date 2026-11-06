@@ -32,6 +32,15 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Cartographie : corrélation Angular → OpenAPI → BFF → Backend.** Contrats à références suivies (dans la
+  source seulement), paramètres, bases des `servers` ; modules Maven (propriétés, dépendances gérées,
+  générations openapi-generator et leur contrat d'entrée, y compris depuis un artefact d'une autre source) ;
+  routes héritées d'une interface ou d'une classe de base, placeholders et context-path ; endpoints déduits
+  d'une interface générée absente (probables) ; bases d'URL du frontal démontrées par `environment` ou un
+  jeton injecté (`BASE_PATH`) ; réécriture du proxy ; appels du BFF par un client Java généré ; versions de
+  contrat comparées. Chaque appel a une corrélation (confirmée, probable, non démontrée, bloquée) avec ses
+  candidats, ses causes précises et sa chaîne prouvée, visible dans l'arbre de parcours. Version des
+  analyseurs : `cartography-5`.
 - **Cartographie : alias, fabriques d'actions, branches HTTP et points d'entrée.** Le contexte d'appel suit
   les alias locaux (chaînes, réaffectations, déstructuration, retours de méthode, paramètres typés), évalue
   les fabriques d'actions quel que soit leur nom (imbriquées, génériques, fléchées) et sépare les appels

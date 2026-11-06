@@ -295,6 +295,129 @@ export interface FieldIssue {
   message: string;
 }
 
+// ── Corrélation entre couches (appel → contrat → endpoint → appel sortant) ───────────────────────
+
+/**
+ * L'état d'une correspondance : CONFIRMED (chaîne de preuves suffisante), PROBABLE (indices cohérents, une
+ * étape essentielle reste ambiguë ou déduite), UNDEMONSTRATED (aucune correspondance justifiée), BLOCKED
+ * (une source ou une information indispensable manque).
+ */
+export type CorrelationStatus = 'CONFIRMED' | 'PROBABLE' | 'UNDEMONSTRATED' | 'BLOCKED';
+
+/** Les causes précises d'une correspondance incomplète. */
+export const CORRELATION_CAUSES = [
+  'CONTRACT_NOT_FOUND',
+  'REF_UNRESOLVED',
+  'MAVEN_MODULE_MISSING',
+  'MAVEN_DEPENDENCY_AMBIGUOUS',
+  'CONTRACT_VERSION_UNKNOWN',
+  'GENERATED_INTERFACE_ABSENT',
+  'PREFIX_UNKNOWN',
+  'DYNAMIC_URL',
+  'METHOD_MISMATCH',
+  'AMBIGUOUS',
+  'CONTRACT_NOT_IMPLEMENTED',
+  'BACKEND_CALL_UNRESOLVED',
+  'NO_ENDPOINT',
+  'LAYER_MISSING',
+] as const;
+export type CorrelationCause = (typeof CORRELATION_CAUSES)[number];
+
+export interface CorrelationCandidate {
+  node: string;
+  layer: MapLayer;
+  method: string;
+  /** Le chemin exposé comparé (préfixes compris). */
+  path: string;
+  /** Pourquoi il est candidat (indices), et pourquoi il est écarté, s'il l'est. */
+  reasons: string[];
+  rejected?: string;
+}
+
+/** Une étape de la chaîne reconstruite, avec sa preuve (fichier, ligne). */
+export interface CorrelationStep {
+  kind:
+    | 'CALL'
+    | 'BASE'
+    | 'CONTRACT'
+    | 'MODULE'
+    | 'GENERATION'
+    | 'INTERFACE'
+    | 'IMPLEMENTATION'
+    | 'ENDPOINT'
+    | 'OUTGOING';
+  label: string;
+  node?: string;
+  evidence?: Evidence;
+}
+
+export interface MapCorrelation {
+  /** Le nœud de l'appel (frontal) ou de la méthode qui appelle (BFF). */
+  from: string;
+  method: string;
+  path: string;
+  status: CorrelationStatus;
+  /** La cible retenue (endpoint servi ou déduit, ou opération du contrat). */
+  target?: string;
+  /** L'opération du contrat qui décrit la cible, quand elle est établie. */
+  contract?: string;
+  candidates: CorrelationCandidate[];
+  causes: { code: CorrelationCause; message: string }[];
+  steps: CorrelationStep[];
+}
+
+/**
+ * Un contrat d'API lu dans une source. `role` : GENERATOR_INPUT (un plugin de génération le lit :
+ * contract-first), PRODUCED_FROM_CODE (le module le produit depuis ses contrôleurs : code-first),
+ * UNDETERMINED (aucune preuve de l'un ou de l'autre).
+ */
+export interface MapContract {
+  id: string;
+  source: string;
+  file: string;
+  title?: string;
+  version?: string;
+  role: 'GENERATOR_INPUT' | 'PRODUCED_FROM_CODE' | 'UNDETERMINED';
+  /** Les générations qui le lisent : module, exécution, générateur, serveur ou client. */
+  consumers: {
+    module: string;
+    execution?: string;
+    generator?: string;
+    side: 'SERVER' | 'CLIENT';
+    version?: string;
+  }[];
+  operations: number;
+  unresolved: { ref: string; cause: string }[];
+}
+
+/** La comparaison de deux versions d'un même contrat (même titre), opération par opération. */
+export interface MapContractDiff {
+  title: string;
+  from: { contract: string; version?: string };
+  to: { contract: string; version?: string };
+  identical: boolean;
+  removed: string[];
+  added: string[];
+  changed: { operation: string; what: string }[];
+}
+
+export interface MapModule {
+  source: string;
+  file: string;
+  id: string;
+  packaging?: string;
+  parent?: string;
+  dependencies: string[];
+  generations: {
+    execution?: string;
+    plugin: string;
+    generator?: string;
+    spec?: string;
+    apiPackage?: string;
+  }[];
+  unresolved: string[];
+}
+
 /** La cartographie d'un scan : graphe, fonctionnalités, champs et concepts. */
 export interface CartographyModel {
   schema: 1;
@@ -306,6 +429,11 @@ export interface CartographyModel {
   issues: FieldIssue[];
   /** Le catalogue des API et services (absent d'un scan antérieur à sa découverte : relancer un scan). */
   apis?: ApiService[];
+  /** Les correspondances entre couches et leurs causes (absent d'un scan antérieur : relancer un scan). */
+  correlations?: MapCorrelation[];
+  contracts?: MapContract[];
+  contractDiffs?: MapContractDiff[];
+  modules?: MapModule[];
 }
 
 // ── API & Services ───────────────────────────────────────────────────────────────────────────────
@@ -714,6 +842,8 @@ export interface FeatureDetail {
     negated?: true;
     unresolved?: string;
   })[];
+  /** La corrélation inter-couches des appels de la fonctionnalité (absente d'un scan antérieur). */
+  correlations?: MapCorrelation[];
   truncated: boolean;
 }
 

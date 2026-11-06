@@ -82,7 +82,7 @@ describe('custom RxJS stores, detected by behaviour', () => {
       'Flux ActivationContext.requests',
       'Flux ActivationContext.result$ (filter, switchMap)',
       'Service ActivationFacade.activate()',
-      'POST {base}/api/activation',
+      'POST https://bff.example.test/api/activation',
     ].map((label) => labels.indexOf(label));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -106,17 +106,23 @@ describe('custom RxJS stores, detected by behaviour', () => {
     );
     // Le client HTTP maison reçoit l'URL : l'appel est celui du service, avec l'URL fournie.
     const call = ui()?.calls.find((c) => c.id === 'ActivationService#activate');
-    expect(call).toMatchObject({ method: 'POST', path: '{base}/api/activation', via: 'ApiClient#post' });
+    // L'adresse de base du client vient de environment.ts (seul fichier d'environnement) : elle est démontrée.
+    expect(call).toMatchObject({
+      method: 'POST',
+      path: 'https://bff.example.test/api/activation',
+      via: 'ApiClient#post',
+      base: "environment.apiUrl = 'https://bff.example.test' (src/environments/environment.ts)",
+    });
     expect(ui()?.calls.some((c) => c.id === 'ApiClient#post')).toBe(false);
-    // L'adresse de base vient de la configuration : le lien au BFF est probable (fin du chemin), et dit pourquoi.
+    // La base est démontrée par la configuration : le lien au BFF est confirmé, et dit d'où vient la base.
     const toBff = model.edges.find(
       (e) =>
         e.from === 'METHOD:front:ActivationService#activate' &&
         e.kind === 'CALLS' &&
         model.nodes.find((n) => n.id === e.to)?.kind === 'API',
     );
-    expect(toBff?.confidence).toBe('PROBABLE');
-    expect(toBff?.reason).toMatch(/adresse de base non résolue/);
+    expect(toBff?.confidence).toBe('CONFIRMED');
+    expect(toBff?.reason).toMatch(/base : environment\.apiUrl/);
   });
 
   it('the button sheet follows the handler through the store to the HTTP call and the BFF endpoint', () => {

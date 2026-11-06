@@ -130,7 +130,11 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
   // Une enveloppe (`ApiClient.post(url, body)`) n'est pas un appel : chacun de ses appelants en est un.
   // Une méthode générique aux appels HTTP distingués par branche : ses appels sont ceux de ses branches.
   const wrappers = new Set([...rx.wrappers, ...rx.branched]);
-  const calls = [...direct.filter((call) => !wrappers.has(call.id)), ...rx.calls];
+  const corrected = new Map(rx.bases.map((entry) => [entry.id, entry]));
+  const calls = [...direct.filter((call) => !wrappers.has(call.id)), ...rx.calls].map((call) => {
+    const fix = corrected.get(call.id);
+    return fix && !call.base ? { ...call, path: fix.path, base: fix.base } : call;
+  });
   // La structure des gabarits (conteneurs, boutons, conditions) et l'origine des états lus.
   const structure = analyzeTemplates(relevant, new Set(calls.map((call) => call.id)));
   // Chaque élément interactif est relié à ce que son expression déclenche (méthode, ou méthode vue dans le
@@ -220,6 +224,57 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
     symbols: rx.symbols,
     links: rx.links,
     diagnostics: [...rx.diagnostics, ...uiDiagnostics],
+    ...(proxiesOf(files).length ? { proxies: proxiesOf(files) } : {}),
     warnings: [...graph.warnings, ...structure.warnings, ...rx.warnings],
   };
+}
+
+/** Les règles des fichiers proxy.conf.json (objet par préfixe, ou tableau de règles `context`). */
+function proxiesOf(files: readonly ReadFile[]): NonNullable<UiFacts['proxies']> {
+  const out: NonNullable<UiFacts['proxies']> = [];
+  for (const file of files.filter((f) => /(^|\/)proxy\.conf(ig)?\.json$/.test(f.path))) {
+    let doc: unknown;
+    try {
+      doc = JSON.parse(file.text);
+    } catch {
+      continue;
+    }
+    const rules: { contexts: string[]; rule: Record<string, unknown> }[] = Array.isArray(doc)
+      ? (doc as unknown[]).flatMap((r) =>
+          r && typeof r === 'object'
+            ? [
+                {
+                  contexts: ([] as unknown[])
+                    .concat((r as Record<string, unknown>).context)
+                    .filter((c): c is string => typeof c === 'string'),
+                  rule: r as Record<string, unknown>,
+                },
+              ]
+            : [],
+        )
+      : doc && typeof doc === 'object'
+        ? Object.entries(doc as Record<string, unknown>).flatMap(([context, r]) =>
+            r && typeof r === 'object' ? [{ contexts: [context], rule: r as Record<string, unknown> }] : [],
+          )
+        : [];
+    for (const { contexts, rule } of rules)
+      for (const raw of contexts) {
+        const context = raw.replace(/\/\*+$/, '') || '/';
+        const rewrites =
+          rule.pathRewrite && typeof rule.pathRewrite === 'object'
+            ? Object.entries(rule.pathRewrite as Record<string, unknown>).filter(
+                (entry): entry is [string, string] => typeof entry[1] === 'string' && entry[0].length <= 200,
+              )
+            : [];
+        const at = file.text.indexOf(JSON.stringify(raw));
+        out.push({
+          context,
+          ...(typeof rule.target === 'string' ? { target: rule.target } : {}),
+          ...(rewrites[0] ? { rewrite: { pattern: rewrites[0][0], replacement: rewrites[0][1] } } : {}),
+          file: file.path,
+          line: at < 0 ? 1 : file.text.slice(0, at).split('\n').length,
+        });
+      }
+  }
+  return out;
 }

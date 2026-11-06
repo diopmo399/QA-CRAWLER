@@ -51,6 +51,11 @@ export interface UiCall {
   /** L'URL telle qu'écrite, quand elle n'a pas pu être résolue statiquement, et pourquoi. */
   expression?: string;
   unresolved?: string;
+  /**
+   * La base de l'URL tirée de la configuration (fichiers environment, fournisseur d'un jeton injecté) :
+   * ce qui la justifie (expression, valeur, fichiers).
+   */
+  base?: string;
   loc: Loc;
 }
 
@@ -285,6 +290,17 @@ export interface UiFacts {
   symbols?: UiSymbol[];
   links?: UiLink[];
   diagnostics?: UiDiagnostic[];
+  /**
+   * Les règles du proxy de développement (proxy.conf.json) : préfixe, cible, réécriture du chemin. Une
+   * réécriture (`"^/api": ""`) est la seule preuve qui permet de retirer un préfixe pour comparer les routes.
+   */
+  proxies?: {
+    context: string;
+    target?: string;
+    rewrite?: { pattern: string; replacement: string };
+    file: string;
+    line: number;
+  }[];
   warnings: string[];
 }
 
@@ -326,7 +342,46 @@ export interface JavaEndpoint {
   requestBody?: string;
   returns?: string;
   validated?: boolean;
+  /**
+   * La route vient d'un type parent (interface générée, classe de base) : le type qui porte l'annotation et
+   * où, et le contrôleur concret qui l'expose.
+   */
+  via?: { type: string; file: string; line: number };
+  controller?: string;
   loc: Loc;
+}
+
+/**
+ * Un contrôleur concret et ses types parents : ceux lus dans la source et ceux ABSENTS (une interface générée
+ * au build, non versionnée) avec leur nom qualifié tiré des imports. Ses méthodes qui implémentent un parent
+ * absent (`@Override`, sans annotation de route lisible) sont listées : leur route ne peut venir que du
+ * contrat d'où l'interface est générée.
+ */
+export interface JavaImplementation {
+  controller: string;
+  /** Le préfixe de type que le contrôleur déclare lui-même (`@RequestMapping` de la classe), s'il existe. */
+  basePath?: string;
+  missing: { name: string; qualified?: string }[];
+  methods: { name: string; arity: number; handler: string; loc: Loc }[];
+  loc: Loc;
+}
+
+/** Un appel sur un objet dont le type est importé mais absent de la source (client généré, bibliothèque). */
+export interface JavaClientCall {
+  /** La méthode appelante (symbole). */
+  from: string;
+  type: string;
+  qualified: string;
+  operation: string;
+  loc: Loc;
+}
+
+/** Le préfixe sous lequel l'application expose ses routes, lu dans sa configuration. */
+export interface JavaExposure {
+  key: string;
+  value: string;
+  file: string;
+  line: number;
 }
 
 export interface JavaMethod {
@@ -407,6 +462,9 @@ export interface JavaFacts {
   repositoryAccess?: JavaRepositoryAccess[];
   computed?: JavaComputed[];
   decisions?: JavaDecision[];
+  implementations?: JavaImplementation[];
+  clients?: JavaClientCall[];
+  exposure?: JavaExposure[];
   warnings: string[];
 }
 
@@ -420,15 +478,39 @@ export interface JavaRepositoryAccess {
   loc: Loc;
 }
 
+export interface ApiParameter {
+  name: string;
+  /** path, query, header, cookie (OpenAPI 3) ; body, formData (Swagger 2). */
+  in: string;
+  required: boolean;
+  type?: string;
+}
+
 export interface ApiOperation {
   id: string;
   method: string;
+  /** Le chemin comparé jusqu'ici : celui de `paths`, préfixé du `basePath` d'un contrat Swagger 2. */
   path: string;
+  /** Le chemin tel qu'écrit sous `paths`, sans base. */
+  route?: string;
+  /**
+   * Les préfixes que le contrat déclare pour cette opération : chemins de ses `servers` (opération, chemin
+   * ou document, variables remplacées par leur valeur par défaut) ou `basePath` (Swagger 2).
+   */
+  bases?: string[];
   operationId?: string;
   summary?: string;
   tags: string[];
   request?: string;
   response?: string;
+  /** Paramètres du chemin et de l'opération, références résolues. */
+  params?: ApiParameter[];
+  /** Les extensions `x-…` de l'opération (valeurs simples, bornées). */
+  extensions?: Record<string, string>;
+  /** Le document qui déclare l'opération. */
+  document?: string;
+  /** Les références `$ref` de l'opération qui n'ont pas pu être suivies. */
+  unresolved?: string[];
   loc: Loc;
 }
 
@@ -456,12 +538,72 @@ export interface ApiDocument {
   /** Lien de documentation déclaré par le contrat (`externalDocs.url`), seulement s'il est http(s). */
   documentation?: string;
   servers: string[];
+  /** Les autres fichiers de la source atteints par ses `$ref`. */
+  refs?: string[];
+  /** Les références qui n'ont pas pu être suivies, et pourquoi (distante, hors de la source, absente…). */
+  unresolved?: { ref: string; cause: string }[];
 }
 
 export interface OpenApiFacts {
   operations: ApiOperation[];
   schemas: ApiSchema[];
   documents?: ApiDocument[];
+  warnings: string[];
+}
+
+/** Une dépendance Maven ; `managed` : sa version vient d'un `dependencyManagement` (module ou parent). */
+export interface MavenDependency {
+  groupId?: string;
+  artifactId: string;
+  version?: string;
+  scope?: string;
+  managed?: boolean;
+  line: number;
+}
+
+/**
+ * Une génération de code déclarée par un plugin (openapi-generator, swagger-codegen) ou une production de
+ * contrat depuis le code (springdoc). `spec` dit où est le contrat d'entrée : fichier de la source, ressource
+ * d'un artefact dépendant (dépaqueté ou sur le classpath du plugin), ou pourquoi il n'est pas établi.
+ */
+export interface MavenGeneration {
+  plugin: 'openapi-generator' | 'swagger-codegen' | 'springdoc';
+  execution?: string;
+  generator?: string;
+  library?: string;
+  inputSpec?: string;
+  spec?: { file?: string; artifact?: string; resource?: string; unresolved?: string };
+  apiPackage?: string;
+  modelPackage?: string;
+  interfaceOnly?: boolean;
+  useTags?: boolean;
+  /** Le profil qui la déclare (absente : build par défaut). */
+  profile?: string;
+  line: number;
+}
+
+export interface MavenModule {
+  /** Le pom.xml, relatif à la racine de la source. */
+  file: string;
+  groupId?: string;
+  artifactId: string;
+  version?: string;
+  packaging?: string;
+  parent?: { groupId?: string; artifactId: string; version?: string; relativePath?: string };
+  modules: string[];
+  properties: Record<string, string>;
+  dependencies: MavenDependency[];
+  managed: MavenDependency[];
+  profiles: string[];
+  generations: MavenGeneration[];
+  /** Les dossiers de sources ajoutés (build-helper) : du code généré qui peut être absent de la source. */
+  sourceDirs: string[];
+  /** Les propriétés `${…}` restées sans valeur lisible. */
+  unresolved: string[];
+}
+
+export interface MavenFacts {
+  modules: MavenModule[];
   warnings: string[];
 }
 
@@ -475,4 +617,5 @@ export interface SourceFacts {
   ui?: UiFacts;
   java?: JavaFacts;
   openapi?: OpenApiFacts;
+  maven?: MavenFacts;
 }

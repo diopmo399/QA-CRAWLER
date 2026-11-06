@@ -1401,6 +1401,68 @@ Limites : un alias passé par un objet ou un tableau (`this.handlers[0]`), une f
 non analysé, une action construite par concaténation ou lue dans la réponse d'un appel, et les éléments
 créés en TypeScript (sans gabarit) ne sont pas résolus ; ils sont dits, jamais devinés.
 
+#### Corrélation Angular → contrat OpenAPI → BFF → Backend
+
+Depuis `cartography-5`, chaque appel HTTP (frontal, ou sortant du BFF) est relié par indices multiples, et
+le résultat est gardé dans `model.correlations` : statut, cible, contrat, candidats concurrents (avec leurs
+raisons et la raison de leur rejet), causes et chaîne d'étapes prouvées (fichier, ligne).
+
+| Statut           | Sens                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------- |
+| `CONFIRMED`      | méthode et chemin identiques, préfixes justifiés, endpoint lu dans le code                |
+| `PROBABLE`       | indices cohérents, une étape déduite (interface générée absente, base de l'URL inconnue)  |
+| `UNDEMONSTRATED` | aucune correspondance justifiée (ambiguïté, méthode incompatible, contrat non implémenté) |
+| `BLOCKED`        | une source ou une information indispensable manque                                        |
+
+- **Contrats** : YAML ou JSON, OpenAPI 3 et Swagger 2 ; `$ref` suivis dans le document et vers les fichiers
+  voisins de la même source (jamais par le réseau ni hors de la source ; une référence non suivie est dite
+  avec sa cause) ; paramètres du chemin et de l'opération, bases des `servers` (variables remplacées par leur
+  défaut) ou `basePath`, extensions `x-…`. Le rôle d'un contrat est établi par les preuves
+  (`model.contracts`) : `GENERATOR_INPUT` (lu par une génération : contract-first), `PRODUCED_FROM_CODE`
+  (springdoc dans le module : code-first), sinon `UNDETERMINED`. Un endpoint n'est jamais dit implémenté
+  parce qu'il figure dans un contrat.
+- **Maven** (`model.modules`) : identité (héritée du parent), modules, propriétés `${…}` (module, parents de
+  la source, propriétés du projet), dépendances et versions gérées, profils, générations openapi-generator et
+  swagger-codegen (générateur, bibliothèque, `apiPackage`, `interfaceOnly`, `useTags`) et leur contrat
+  d'entrée : fichier de la source, ressource d'un artefact dépaqueté (maven-dependency-plugin) ou du classpath
+  du plugin, résolu dans le module de même `artifactId` d'une autre source (version comparée à celle de la
+  dépendance). Rien n'est exécuté ni téléchargé.
+- **Java** : une route déclarée sur une interface (générée et versionnée, ou écrite) ou une classe de base est
+  exposée par le contrôleur concret qui en hérite, gestionnaire = implémentation la plus dérivée ;
+  placeholders `${clé:défaut}` lus dans la configuration ; `server.servlet.context-path` (et
+  `spring.webflux.base-path`, `spring.mvc.servlet.path`) préfixe les routes exposées. Une interface générée
+  au build et absente des sources : la route est déduite du contrat d'entrée de la génération serveur dont
+  l'`apiPackage` est son package, pour la méthode `@Override` qui porte l'`operationId` d'une opération
+  rattachée à cette interface (étiquette, ou premier segment selon `useTags`) — endpoint `PROBABLE`
+  (`GENERATED_INTERFACE_ABSENT`). Une route lue sur une interface n'exige pas que l'operationId soit le nom
+  de la méthode Java.
+- **Angular** : une clé de `environment*.ts` n'est résolue que si tous les fichiers d'environnement lui donnent
+  la même valeur ; un champ affecté depuis un jeton injecté (`@Inject(BASE_PATH)`) prend la valeur du
+  fournisseur `{ provide: BASE_PATH, useValue: … }`, jamais son défaut ; la justification est dans
+  `UiCall.base`. Une enveloppe (`ApiClient.post(url)`) garde sa base résolue.
+- **Préfixes** : seuls le context-path, la base du contrat et une réécriture de `proxy.conf.json`
+  (`pathRewrite`) transforment un chemin ; aucun segment n'est retiré pour forcer une correspondance.
+- **BFF → Backend** : les appels RestTemplate/WebClient/Feign déjà lus, et les appels sur un client Java
+  généré (type importé absent des sources, package = `apiPackage` d'une génération cliente) traduits en
+  méthode et chemin par le contrat d'entrée ; lien `PROBABLE`. Les versions du contrat côté client et côté
+  serveur (même titre) sont comparées (`model.contractDiffs` : opérations supprimées, ajoutées, méthode,
+  paramètres ou corps modifiés) ; des numéros différents ne suffisent pas à conclure à une incompatibilité.
+- **Causes** : `CONTRACT_NOT_FOUND`, `REF_UNRESOLVED` (une référence de l'opération visée n'est pas suivie),
+  `MAVEN_MODULE_MISSING`, `MAVEN_DEPENDENCY_AMBIGUOUS`, `CONTRACT_VERSION_UNKNOWN`,
+  `GENERATED_INTERFACE_ABSENT`, `PREFIX_UNKNOWN`, `DYNAMIC_URL`, `METHOD_MISMATCH`, `AMBIGUOUS`,
+  `CONTRACT_NOT_IMPLEMENTED`, `BACKEND_CALL_UNRESOLVED`, `NO_ENDPOINT`, `LAYER_MISSING`. Une méthode
+  `@Override` dont l'interface absente n'est produite par aucune génération lisible, ou qu'aucune opération
+  ne nomme, porte la raison dans son nœud (`detail.correlation`).
+  Une opération d'un contrat d'entrée serveur que rien n'implémente porte `implemented: false` et sa raison.
+
+L'arbre de parcours montre sous chaque appel une **corrélation** repliée (statut, chaîne, causes, candidats,
+liens vers le code) ; `FeatureDetail.correlations` la porte pour les appels de la fonctionnalité.
+
+Limites : le code généré n'est pas lu (le préfixe de type d'une interface générée absente reste inconnu) ;
+les profils Maven et Spring ne sont pas choisis (tous sont lus) ; les dépendances indirectes hors des
+sources analysées ne sont pas résolues ; un `proxy.conf.js` (code) n'est pas lu ; les routes d'une
+passerelle externe (configuration hors des sources) ne sont pas connues.
+
 #### Onglets Angular
 
 Les onglets sont lus dans les gabarits, sans exécuter le code. Un groupe d'onglets et chacun de ses

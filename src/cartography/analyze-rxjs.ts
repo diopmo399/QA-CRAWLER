@@ -248,6 +248,8 @@ export interface RxjsFacts {
   wrappers: string[];
   /** Les méthodes génériques dont les appels HTTP sont distingués par branche (`Classe#méthode@L12`). */
   branched: string[];
+  /** Les chemins corrigés par une base que la configuration démontre (environment, jeton injecté). */
+  bases: { id: string; path: string; base: string }[];
   /** Le flux lu par un membre d'un composant (`canActivate$`, ou `store` + `status$`). */
   streamOf: (component: string, member: string, path: readonly string[]) => string | undefined;
   /**
@@ -280,6 +282,7 @@ export function analyzeRxjs(
   const classes = new Map<string, ClassInfo>();
   const constants = new Map<string, string | null>();
   const functions = new Map<string, ModuleFn | null>();
+  externals = externalsOf(ts, files);
   for (const file of files) {
     if (!/\.ts$/.test(file.path) || /\.(spec|test|d)\.ts$/.test(file.path)) continue;
     if (file.text.length > MAX_FILE_BYTES) {
@@ -295,7 +298,11 @@ export function analyzeRxjs(
       warnings.push(`${file.path}: RxJS analysis failed (${(error as Error).message})`);
     }
   }
-  return resolve(ts, classes, knownCalls, warnings, constants, functions);
+  try {
+    return resolve(ts, classes, knownCalls, warnings, constants, functions);
+  } finally {
+    externals = undefined;
+  }
 }
 
 /** Une fonction de module (déclarée ou fléchée) : ses paramètres, ses retours, ses constantes locales. */
@@ -1623,6 +1630,126 @@ interface Url {
   /** Le paramètre de la méthode qui porte l'URL (enveloppe : ApiClient.post(url, body)). */
   param?: number;
   expression: string;
+  /** Ce qui justifie une base tirée de la configuration (environment, jeton injecté). */
+  evidence?: string[];
+}
+
+/**
+ * Les valeurs que la configuration de l'application démontre : clés des fichiers `environment*.ts` (une clé
+ * n'est résolue que si TOUS ces fichiers la déclarent avec la même valeur), fournisseurs de jetons
+ * (`{ provide: BASE_PATH, useValue: … }`, un seul ou tous identiques), et champs affectés depuis un jeton
+ * injecté (`@Inject(BASE_PATH) basePath` → `this.basePath = basePath`).
+ */
+interface Externals {
+  env: Map<string, { value?: string; files: string[]; values: string[] }>;
+  tokens: Map<string, { value?: string; how: string }>;
+  injected: Map<string, string>;
+}
+let externals: Externals | undefined;
+
+const ENV_FILE = /(^|\/)environments?\/environment[\w.-]*\.ts$/;
+
+function externalsOf(ts: TypeScriptModule, files: readonly ReadFile[]): Externals {
+  const env = new Map<string, { value?: string; files: string[]; values: string[] }>();
+  const envFiles = files.filter((f) => ENV_FILE.test(f.path));
+  const perFile = new Map<string, Map<string, string>>();
+  for (const file of envFiles) {
+    const sf = ts.createSourceFile(file.path, file.text, ts.ScriptTarget.Latest, true);
+    const found = new Map<string, string>();
+    const flatten = (prefix: string, obj: TS.ObjectLiteralExpression): void => {
+      for (const prop of obj.properties) {
+        if (!ts.isPropertyAssignment(prop)) continue;
+        const key = `${prefix}.${prop.name.getText(sf).replace(/^['"]|['"]$/g, '')}`;
+        const init = prop.initializer;
+        if (ts.isStringLiteral(init) || ts.isNoSubstitutionTemplateLiteral(init)) found.set(key, init.text);
+        else if (ts.isObjectLiteralExpression(init)) flatten(key, init);
+      }
+    };
+    sf.forEachChild((node) => {
+      if (!ts.isVariableStatement(node)) return;
+      for (const decl of node.declarationList.declarations)
+        if (ts.isIdentifier(decl.name) && decl.initializer && ts.isObjectLiteralExpression(decl.initializer))
+          flatten(decl.name.text, decl.initializer);
+    });
+    perFile.set(file.path, found);
+  }
+  const keys = new Set([...perFile.values()].flatMap((m) => [...m.keys()]));
+  for (const key of keys) {
+    const values = [...perFile.entries()].map(([file, m]) => ({ file, value: m.get(key) }));
+    const distinct = [...new Set(values.map((v) => v.value ?? '∅'))];
+    env.set(key, {
+      ...(distinct.length === 1 && distinct[0] !== '∅' ? { value: distinct[0] } : {}),
+      files: values.map((v) => v.file),
+      values: values.map((v) => `${v.file.split('/').pop() ?? v.file} : ${v.value ?? 'absente'}`),
+    });
+  }
+  const valueOf = (expr: TS.Expression): string | undefined => {
+    if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) return expr.text;
+    if (ts.isPropertyAccessExpression(expr)) return env.get(expr.getText())?.value;
+    return undefined;
+  };
+  const tokens = new Map<string, { value?: string; how: string }>();
+  const injected = new Map<string, string>();
+  for (const file of files) {
+    if (!/\.ts$/.test(file.path) || /\.(spec|test|d)\.ts$/.test(file.path)) continue;
+    if (!/useValue|@Inject\(/.test(file.text)) continue;
+    const sf = ts.createSourceFile(file.path, file.text, ts.ScriptTarget.Latest, true);
+    const visit = (node: TS.Node): void => {
+      if (ts.isObjectLiteralExpression(node)) {
+        const get = (name: string) =>
+          node.properties.find(
+            (p): p is TS.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText(sf) === name,
+          )?.initializer;
+        const provide = get('provide');
+        const use = get('useValue');
+        if (provide && use && ts.isIdentifier(provide)) {
+          const value = valueOf(use);
+          const how = `{ provide: ${provide.text}, useValue: ${use.getText(sf)} } (${file.path})`;
+          const before = tokens.get(provide.text);
+          tokens.set(
+            provide.text,
+            before && before.value !== value
+              ? { how: `${before.how} ; ${how}` }
+              : { ...(value !== undefined ? { value } : {}), how },
+          );
+        }
+      }
+      if (ts.isClassDeclaration(node) && node.name) {
+        const ctor = node.members.find((m): m is TS.ConstructorDeclaration => ts.isConstructorDeclaration(m));
+        const byParam = new Map<string, string>();
+        for (const param of ctor?.parameters ?? []) {
+          const decorators = ts.canHaveDecorators(param) ? (ts.getDecorators(param) ?? []) : [];
+          for (const d of decorators)
+            if (
+              ts.isCallExpression(d.expression) &&
+              ts.isIdentifier(d.expression.expression) &&
+              d.expression.expression.text === 'Inject' &&
+              d.expression.arguments[0] &&
+              ts.isIdentifier(d.expression.arguments[0]) &&
+              ts.isIdentifier(param.name)
+            )
+              byParam.set(param.name.text, d.expression.arguments[0].text);
+        }
+        const className = node.name.text;
+        const assign = (n: TS.Node): void => {
+          if (
+            ts.isBinaryExpression(n) &&
+            n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+            ts.isPropertyAccessExpression(n.left) &&
+            n.left.expression.kind === ts.SyntaxKind.ThisKeyword &&
+            ts.isIdentifier(n.right) &&
+            byParam.has(n.right.text)
+          )
+            injected.set(`${className}.${n.left.name.text}`, byParam.get(n.right.text) ?? '');
+          n.forEachChild(assign);
+        };
+        if (ctor?.body && byParam.size > 0) assign(ctor.body);
+      }
+      node.forEachChild(visit);
+    };
+    visit(sf);
+  }
+  return { env, tokens, injected };
 }
 
 /** '/api/x' · `${this.base}/x` · base + '/x' · constante · propriété ; un paramètre devient {url}. */
@@ -1635,12 +1762,39 @@ function urlOf(
 ): Url {
   if (!expr) return { expression: '' };
   const text = expr.getText().slice(0, 200);
+  const evidence: string[] = [];
   const part = (node: TS.Expression, first: boolean): { route: string; param?: number } => {
-    const inner = depth < 5 ? urlOf(ts, node, info, method, depth + 1) : { expression: '' };
+    const inner: Url = depth < 5 ? urlOf(ts, node, info, method, depth + 1) : { expression: '' };
+    if (inner.evidence) evidence.push(...inner.evidence);
     if (inner.route !== undefined)
       return { route: inner.route, ...(inner.param !== undefined ? { param: inner.param } : {}) };
     return { route: first ? '{base}' : '{param}' };
   };
+  const proven = (): Pick<Url, 'evidence'> => (evidence.length ? { evidence: [...new Set(evidence)] } : {});
+  // Une clé des fichiers environment, démontrée par tous.
+  if (ts.isPropertyAccessExpression(expr) && expr.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+    const entry = externals?.env.get(expr.getText());
+    if (entry?.value !== undefined)
+      return {
+        route: entry.value,
+        expression: text,
+        evidence: [`${expr.getText()} = '${entry.value}' (${entry.files.join(', ')})`],
+      };
+  }
+  // Un champ affecté depuis un jeton injecté : sa valeur est celle du fournisseur du jeton, pas son défaut.
+  if (ts.isPropertyAccessExpression(expr) && expr.expression.kind === ts.SyntaxKind.ThisKeyword) {
+    const token = externals?.injected.get(`${info.name}.${expr.name.text}`);
+    if (token !== undefined) {
+      const provider = externals?.tokens.get(token);
+      if (provider?.value !== undefined)
+        return {
+          route: provider.value,
+          expression: text,
+          evidence: [`this.${expr.name.text} vient du jeton ${token} : ${provider.how}`],
+        };
+      return { expression: text };
+    }
+  }
   if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr))
     return { route: expr.text, expression: text };
   if (ts.isParenthesizedExpression(expr)) return urlOf(ts, expr.expression, info, method, depth);
@@ -1664,13 +1818,18 @@ function urlOf(
       route += p.route + span.literal.text;
       if (p.param !== undefined) param = p.param;
     });
-    return { route, ...(param !== undefined ? { param } : {}), expression: text };
+    return { route, ...(param !== undefined ? { param } : {}), expression: text, ...proven() };
   }
   if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
     const left = part(expr.left, true);
     const right = part(expr.right, false);
     const param = left.param ?? right.param;
-    return { route: left.route + right.route, ...(param !== undefined ? { param } : {}), expression: text };
+    return {
+      route: left.route + right.route,
+      ...(param !== undefined ? { param } : {}),
+      expression: text,
+      ...proven(),
+    };
   }
   return { expression: text };
 }
@@ -1689,6 +1848,7 @@ function resolve(
   const links = new Map<string, UiLink>();
   const diagnostics: UiDiagnostic[] = [];
   const calls = new Map<string, UiCall>();
+  const bases = new Map<string, { path: string; base: string }>();
   const methodId = (c: ClassInfo, m: string): string => `${c.name}#${m}`;
   const streamId = (c: ClassInfo, s: string): string => `${c.name}.${s}`;
   const classOfDep = (c: ClassInfo, via: string): ClassInfo | undefined =>
@@ -1850,6 +2010,8 @@ function resolve(
     verbParam?: number;
     route: string;
     param: number;
+    /** Ce qui justifie la base que l'enveloppe ajoute (configuration). */
+    evidence?: string[];
   }
   const wrappers = new Map<string, Wrapper>();
   /**
@@ -1875,6 +2037,7 @@ function resolve(
           id: branchId,
           owner: c.name,
           method: site.verb,
+          ...(url.evidence ? { base: url.evidence.join(' ; ') } : {}),
           ...(url.route !== undefined
             ? { path: url.route.replace(/\?.*$/, '') }
             : {
@@ -1893,21 +2056,32 @@ function resolve(
         const id = methodId(c, m.name);
         // Une enveloppe reçoit l'URL entière (éventuellement après une adresse de base) ; un paramètre qui
         // n'est qu'un segment (`/api/requests/${id}`) reste un segment variable.
-        if (url.param !== undefined && url.route !== undefined && /^(\{base\})?\{url\}/.test(url.route)) {
+        // La base devant l'URL reçue peut être résolue (`https://h`, `/api`) : elle ne finit pas par une barre,
+        // contrairement à un segment variable (`/api/requests/{url}`).
+        if (
+          url.param !== undefined &&
+          url.route !== undefined &&
+          /^(\{base\}|[^{}]*[^/{}])?\{url\}/.test(url.route)
+        ) {
           wrappers.set(id, {
             ...(h.verb ? { verb: h.verb } : {}),
             ...(h.verbParam !== undefined ? { verbParam: h.verbParam } : {}),
             route: url.route,
             param: url.param,
+            ...(url.evidence ? { evidence: url.evidence } : {}),
           });
           continue;
         }
         if (url.route !== undefined) url.route = url.route.replace(/\{url\}/g, '{param}');
+        // Une base démontrée par la configuration corrige aussi un appel déjà lu par l'analyse directe.
+        if (url.evidence && url.route !== undefined)
+          bases.set(id, { path: url.route.replace(/\?.*$/, ''), base: url.evidence.join(' ; ') });
         if (knownCalls.has(id) || calls.has(id) || !h.verb) continue;
         calls.set(id, {
           id,
           owner: c.name,
           method: h.verb,
+          ...(url.evidence ? { base: url.evidence.join(' ; ') } : {}),
           ...(url.route !== undefined
             ? { path: url.route.replace(/\?.*$/, '') }
             : {
@@ -2418,12 +2592,19 @@ function resolve(
           ? verbArg.text.toUpperCase()
           : undefined);
       if (verb) {
-        const route = url.route !== undefined ? wrapper.route.replace('{url}', url.route) : undefined;
+        // Un paramètre de l'appelant dans l'URL qu'il passe n'est qu'un segment variable.
+        const route =
+          url.route !== undefined
+            ? wrapper.route.replace('{url}', url.route.replace(/\{url\}/g, '{param}'))
+            : undefined;
         calls.set(caller, {
           id: caller,
           owner: c.name,
           method: verb,
           via: t.id,
+          ...(url.evidence || wrapper.evidence
+            ? { base: [...(wrapper.evidence ?? []), ...(url.evidence ?? [])].join(' ; ') }
+            : {}),
           ...(route !== undefined
             ? { path: route.replace(/\?.*$/, '') }
             : {
@@ -3101,6 +3282,7 @@ function resolve(
     entryOf,
     diagnostics,
     calls: [...calls.values()],
+    bases: [...bases.entries()].map(([id, entry]) => ({ id, ...entry })),
     wrappers: [...wrappers.keys()],
     branched: [...branched.keys()],
     streamOf,

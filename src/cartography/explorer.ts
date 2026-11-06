@@ -1,5 +1,6 @@
 import type {
   ApiCatalog,
+  MapCorrelation,
   ApiFeatureUse,
   ApiRow,
   ApiScenarioUse,
@@ -376,6 +377,11 @@ export function featureDetail(
           ? { unresolved: n.detail.unresolved }
           : {}),
       })),
+    // La corrélation inter-couches des appels de la fonctionnalité (appel → contrat → endpoint), bornée.
+    ...((): { correlations?: MapCorrelation[] } => {
+      const list = (index.model.correlations ?? []).filter((c) => used.has(c.from)).slice(0, 60);
+      return list.length ? { correlations: list } : {};
+    })(),
     truncated,
   };
 }

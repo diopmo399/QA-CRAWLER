@@ -663,11 +663,37 @@ function journeyCard(m: MapStrings, state: MapState, detail: FeatureDetail): str
       : '';
     return `<span class="jr-l"><span class="jr-k">${esc(kind)}</span> <b>${esc(n?.label ?? n?.name ?? id)}</b>${times > 1 ? ` <span class="mu">${esc(j.times(times))}</span>` : ''} ${e ? conf(m, e.confidence) : ''}${conds}${event}${ctx}${e ? badges(e) : ''} ${code}</span>`;
   };
+  // La corrélation inter-couches d'un appel : statut, chaîne prouvée, causes et candidats, repliée.
+  const correlationsOf = new Map<string, NonNullable<FeatureDetail['correlations']>>();
+  for (const c of detail.correlations ?? [])
+    correlationsOf.set(c.from, [...(correlationsOf.get(c.from) ?? []), c]);
+  // Montrée une fois : un appel atteint par deux chemins de l'arbre ne répète pas sa corrélation.
+  const corrShown = new Set<string>();
+  const corr = (id: string): string =>
+    (corrShown.has(id) ? [] : (corrShown.add(id), correlationsOf.get(id) ?? []))
+      .map((c) => {
+        const status = c.status === 'CONFIRMED' ? 'ok' : c.status === 'PROBABLE' ? 'prob' : 'warn';
+        const steps = c.steps
+          .map(
+            (st) =>
+              `<li><span class="jr-k">${esc(j.corr.kinds[st.kind] ?? st.kind)}</span> ${esc(st.label)}${st.evidence?.file ? ` ${evidenceLink(m, st.evidence, state, `${st.evidence.file.split('/').pop() ?? st.evidence.file}:${String(st.evidence.line ?? 1)}`)}` : ''}</li>`,
+          )
+          .join('');
+        const causes = c.causes.map((x) => `<li><code>${esc(x.code)}</code> ${esc(x.message)}</li>`).join('');
+        const candidates = c.candidates
+          .map(
+            (x) =>
+              `<li>${esc(`${x.method} ${x.path}`)} <small class="mu">${esc(x.reasons.join(' ; '))}</small>${x.rejected ? ` <span class="jr-b warn">${esc(x.rejected)}</span>` : ''}</li>`,
+          )
+          .join('');
+        return `<details class="jr-corr" data-corr="${esc(c.status)}"><summary>${esc(j.corr.title)} <span class="jr-b ${status}">${esc(j.corr.status[c.status] ?? c.status)}</span> <small class="mono">${esc(`${c.method} ${c.path}`.trim())}</small></summary><p class="small"><b>${esc(j.corr.steps)}</b></p><ol class="jr-cs">${steps}</ol>${causes ? `<p class="small"><b>${esc(j.corr.causes)}</b></p><ul class="jr-cs">${causes}</ul>` : ''}${candidates ? `<p class="small"><b>${esc(j.corr.candidates)}</b></p><ul class="jr-cs">${candidates}</ul>` : ''}</details>`;
+      })
+      .join('');
   const branch = (id: string, e: MapEdge | undefined, depth: number, times: number): string => {
     const children = out.get(id) ?? [];
     if (children.length === 0 || (expanded.has(id) && e)) {
       const seen = children.length > 0 ? ` <span class="mu small">↩ ${esc(j.seen)}</span>` : '';
-      return `<li class="jr-leaf">${line(id, e, times)}${seen}</li>`;
+      return `<li class="jr-leaf">${line(id, e, times)}${seen}${expanded.has(id) && e ? '' : corr(id)}</li>`;
     }
     expanded.add(id);
     if (depth >= JOURNEY_DEPTH)
@@ -686,7 +712,7 @@ function journeyCard(m: MapStrings, state: MapState, detail: FeatureDetail): str
     const shown = list.slice(0, 30);
     const rest = list.length - shown.length;
     const inner = shown.map((g) => branch(g.edge.to, g.edge, depth + 1, g.count)).join('');
-    return `<li><details ${depth < 3 ? 'open' : ''}><summary>${line(id, e, times)}</summary><ul class="jr">${inner}${rest > 0 ? `<li class="mu small">${esc(j.more(rest))}</li>` : ''}</ul></details></li>`;
+    return `<li><details ${depth < 3 ? 'open' : ''}><summary>${line(id, e, times)}</summary>${corr(id)}<ul class="jr">${inner}${rest > 0 ? `<li class="mu small">${esc(j.more(rest))}</li>` : ''}</ul></details></li>`;
   };
   const tree = roots.map((r) => branch(r.id, undefined, 0, 1)).join('');
   const legend = `<p class="mu small jr-legend"><span class="jr-b cond">${esc(j.legend.cond)}</span><span class="jr-b async">${esc(j.legend.async)}</span><span class="jr-b data">${esc(j.legend.data)}</span><span class="jr-b ctx">${esc(j.legend.ctx)}</span></p>`;
@@ -1407,6 +1433,12 @@ export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_C
 .jr-b.ctx{background:#eef8f0;color:#1d6b33;border-color:#c5e6cf}
 .jr-b.ev{background:#f3edfd;color:#5b2ca0;border-color:#dccbf6;font-family:var(--mono,ui-monospace,monospace)}
 .jr-b.warn{background:#fdecec;color:#9b1c1c;border-color:#f5c6c6}
+.jr-b.ok{background:#e9f7ee;color:#1d6b33;border-color:#c5e6cf}
+.jr-b.prob{background:#fdf3e4;color:#8a4b06;border-color:#f3d7ae}
+.jr-corr{margin:4px 0 6px 18px;padding:4px 8px;border-left:2px solid var(--line,#d9dee6);font-size:12px;min-width:0}
+.jr-corr summary{cursor:pointer;color:var(--muted,#5b6472)}
+.jr-cs{margin:2px 0 6px;padding-left:18px;overflow-wrap:anywhere}
+.jr-cs li{margin:2px 0}
 .jr-legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .map-link{padding:8px;border:1px solid var(--qa-color-border);border-radius:8px}
 .map-filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}

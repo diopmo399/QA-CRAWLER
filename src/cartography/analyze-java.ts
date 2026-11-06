@@ -8,10 +8,12 @@ import {
   type JavaTypeDecl,
 } from '../incident/code/java-parser.js';
 import type { ReadFile } from './files.js';
+import { javaHierarchy, type Parsed } from './java-hierarchy.js';
 import type {
   JavaClass,
   JavaComputed,
   JavaDecision,
+  JavaExposure,
   JavaFacts,
   JavaField,
   JavaMapping,
@@ -28,6 +30,8 @@ import type {
  * @JsonProperty), les entités JPA (table, colonnes, @Column), les dépôts Spring Data et les correspondances
  * EXPLICITES entre champs (`a.setX(b.getY())`, `Type.builder().x(b.getY())`). Rien n'est exécuté.
  */
+/** Les clés qui préfixent toutes les routes exposées par l'application. */
+const EXPOSURE_KEYS = ['server.servlet.context-path', 'spring.webflux.base-path', 'spring.mvc.servlet.path'];
 const SPRING_CONFIG = /(^|\/)application(-[\w.-]+)?\.(ya?ml|properties)$/i;
 const WRITE_OPERATION = /^(save|delete|remove|update|insert|persist|merge)/;
 const REPOSITORY_BASE =
@@ -383,6 +387,7 @@ export function analyzeJava(
   const uses: ReturnType<typeof mappingsOf>['uses'] = [];
   const computed: JavaComputed[] = [];
   const decisions: JavaDecision[] = [];
+  const parsed: Parsed[] = [];
   for (const file of files.filter((entry) => entry.path.endsWith('.java'))) {
     const result = analyzeJavaSource(sourceId, layer, file.path, file.text, properties);
     index = {
@@ -399,6 +404,7 @@ export function analyzeJava(
       warnings.push(`unreadable Java file: ${file.path}`);
       continue;
     }
+    parsed.push({ file: file.path, java });
     classes.push(...classesOf(file.path, java));
     const found = mappingsOf(file.path, java, file.text);
     mappings.push(...found.mappings);
@@ -508,29 +514,62 @@ export function analyzeJava(
       loc: { file: call.file, line: call.line },
     };
   });
+  // Les routes héritées (interface, classe de base), les interfaces absentes (générées au build) et les appels
+  // sur un client généré : lus sur toute la source.
+  const arityOf = (id: string): number | undefined => {
+    const params = symbols.get(id)?.detail?.params;
+    return Array.isArray(params) ? params.length : undefined;
+  };
+  const hierarchy = javaHierarchy(
+    parsed,
+    properties,
+    (owner, name, arity) => {
+      const all = methods.filter((m) => m.owner === owner && m.name === name);
+      const hit = all.find((m) => arityOf(m.id) === arity) ?? (all.length === 1 ? all[0] : undefined);
+      return hit ? { id: hit.id, file: hit.loc.file, line: hit.loc.line } : undefined;
+    },
+    uses,
+    (owner, name) => methods.find((m) => m.owner === owner && m.name === name)?.id,
+  );
+  // Le préfixe d'exposition de l'application (context-path, base-path), lu dans sa configuration.
+  const exposure: JavaExposure[] = [];
+  for (const file of files.filter((entry) => SPRING_CONFIG.test(entry.path)))
+    for (const [key, value] of Object.entries(readSpringProperties(file.path, file.text)))
+      if (EXPOSURE_KEYS.includes(key) && value.trim() && value.trim() !== '/') {
+        const leaf = key.split('.').pop() ?? key;
+        const at = file.text.split(/\r?\n/).findIndex((text) => text.includes(leaf) || text.includes(key));
+        exposure.push({ key, value: value.trim(), file: file.path, line: at < 0 ? 1 : at + 1 });
+      }
+
   return {
     classes,
-    endpoints: index.endpoints.map((endpoint) => {
-      const handler = symbols.get(endpoint.symbolId);
-      const detail = handler?.detail ?? {};
-      return {
-        id: `${endpoint.method} ${endpoint.path}`,
-        method: endpoint.method,
-        path: endpoint.path,
-        handler: endpoint.symbolId,
-        handlerName: `${ownerOf(endpoint.symbolId).split('.').pop() ?? ''}.${
-          handler?.name
-            .replace(/~\d+$/, '')
-            .replace(/\(.*\)$/, '')
-            .split('.')
-            .pop() ?? ''
-        }`,
-        ...(typeof detail.requestBody === 'string' ? { requestBody: detail.requestBody } : {}),
-        ...(typeof detail.returns === 'string' ? { returns: detail.returns } : {}),
-        ...(typeof detail.validated === 'boolean' ? { validated: detail.validated } : {}),
-        loc: { file: handler?.file ?? '', line: handler?.line ?? 1 },
-      };
-    }),
+    endpoints: index.endpoints
+      .map((endpoint) => {
+        const handler = symbols.get(endpoint.symbolId);
+        const detail = handler?.detail ?? {};
+        return {
+          id: `${endpoint.method} ${endpoint.path}`,
+          method: endpoint.method,
+          path: endpoint.path,
+          handler: endpoint.symbolId,
+          handlerName: `${ownerOf(endpoint.symbolId).split('.').pop() ?? ''}.${
+            handler?.name
+              .replace(/~\d+$/, '')
+              .replace(/\(.*\)$/, '')
+              .split('.')
+              .pop() ?? ''
+          }`,
+          ...(typeof detail.requestBody === 'string' ? { requestBody: detail.requestBody } : {}),
+          ...(typeof detail.returns === 'string' ? { returns: detail.returns } : {}),
+          ...(typeof detail.validated === 'boolean' ? { validated: detail.validated } : {}),
+          loc: { file: handler?.file ?? '', line: handler?.line ?? 1 },
+        };
+      })
+      .concat(
+        hierarchy.endpoints.filter(
+          (e) => !index.endpoints.some((x) => x.symbolId === e.handler && `${x.method} ${x.path}` === e.id),
+        ),
+      ),
     methods,
     outgoing,
     calls: index.calls.map((call) => ({
@@ -543,6 +582,9 @@ export function analyzeJava(
     repositoryAccess,
     computed,
     decisions,
+    ...(hierarchy.implementations.length ? { implementations: hierarchy.implementations } : {}),
+    ...(hierarchy.clients.length ? { clients: hierarchy.clients } : {}),
+    ...(exposure.length ? { exposure } : {}),
     warnings,
   };
 }

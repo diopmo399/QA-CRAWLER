@@ -1,0 +1,91 @@
+openapi: 3.0.3
+info:
+  title: Demandes API
+  version: 2.1.0
+servers:
+  - url: https://bff.example.test/{base}
+    variables:
+      base:
+        default: api
+paths:
+  /demandes/{demandeId}/validation:
+    parameters:
+      - $ref: '#/components/parameters/DemandeId'
+    post:
+      tags: [Demandes]
+      operationId: validerDemande
+      x-audit: obligatoire
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: './schemas.yaml#/components/schemas/Decision'
+      responses:
+        '200':
+          description: validée
+  /demandes/{demandeId}:
+    get:
+      tags: [Demandes]
+      operationId: lireDemande
+      parameters:
+        - $ref: '#/components/parameters/DemandeId'
+        - name: details
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: la demande
+  /demandes/{demandeId}/brouillon:
+    delete:
+      tags: [Demandes]
+      operationId: supprimerBrouillon
+      parameters:
+        - $ref: '#/components/parameters/DemandeId'
+      responses:
+        '204':
+          description: supprimé
+  /dossiers/{dossierId}:
+    get:
+      tags: [Dossiers]
+      operationId: getDossierById
+      parameters:
+        - name: dossierId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: le dossier
+  /demandes/historique:
+    get:
+      tags: [Historique]
+      operationId: historiqueDemandes
+      responses:
+        '200':
+          description: liste
+  /dossiers/historique:
+    get:
+      tags: [Historique]
+      operationId: historiqueDossiers
+      responses:
+        '200':
+          description: liste
+  /rapports/{id}:
+    get:
+      tags: [Rapports]
+      operationId: lireRapport
+      parameters:
+        - $ref: './commun.yaml#/components/parameters/Id'
+      responses:
+        '200':
+          description: rapport
+components:
+  parameters:
+    DemandeId:
+      name: demandeId
+      in: path
+      required: true
+      schema:
+        type: integer

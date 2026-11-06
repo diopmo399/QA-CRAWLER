@@ -12,11 +12,28 @@ import type {
   MapNode,
   MapNodeKind,
   MapSource,
+  MapContract,
+  MapContractDiff,
+  MapCorrelation,
+  MapModule,
+  CorrelationStep,
 } from '../sdk/core/cartography.js';
 import type { CodeEndpoint } from '../sdk/core/incident-contracts.js';
 import { matchEndpoint, normalizePath } from '../incident/code/paths.js';
 import { membersOf } from './analyze-template.js';
 import type { Loc, SourceFacts } from './facts.js';
+import {
+  apiNamesOf,
+  ContractIndex,
+  joinRoute,
+  matchCall,
+  operationsFor,
+  packageOf,
+  sideOf,
+  type Cause,
+  type Match,
+  type Target,
+} from './correlate.js';
 
 /**
  * LE GRAPHE FONCTIONNEL, construit à partir des faits de toutes les sources. Chaque lien dit pourquoi il
@@ -29,6 +46,17 @@ import type { Loc, SourceFacts } from './facts.js';
  * Deux champs ne sont jamais fusionnés parce qu'ils portent le même nom : seuls des liens les relient.
  */
 const RANK: Record<MapConfidence, number> = { CONFIRMED: 2, PROBABLE: 1, UNKNOWN: 0 };
+/** Les causes sans doublon (même code, même message). */
+const dedupeCauses = (causes: readonly Cause[]): Cause[] => {
+  const seen = new Set<string>();
+  return causes.filter((c) => {
+    const key = `${c.code}|${c.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 export const weakest = (...values: MapConfidence[]): MapConfidence =>
   values.reduce<MapConfidence>((low, value) => (RANK[value] < RANK[low] ? value : low), 'CONFIRMED');
 
@@ -82,6 +110,10 @@ export interface GraphOutput {
   features: Feature[];
   concepts: FieldConcept[];
   issues: FieldIssue[];
+  correlations?: MapCorrelation[];
+  contracts?: MapContract[];
+  contractDiffs?: MapContractDiff[];
+  modules?: MapModule[];
 }
 
 /** Le type normalisé d'un champ, pour comparer les couches (text, number, date, boolean). */
@@ -174,9 +206,20 @@ export function buildGraph(input: GraphInput): GraphOutput {
     sourceId: string;
     requestBody?: string;
     layer: MapLayer;
+    /**
+     * Les chemins sous lesquels il est atteint (préfixe d'exposition, bases du contrat) et ce qui les
+     * justifie ; INFERRED : endpoint déduit d'une interface générée absente (route du contrat).
+     */
+    exposed?: string[];
+    why?: string[];
+    kind?: 'SERVED' | 'INFERRED';
   }
   const served: Served[] = [];
   const contracts: Served[] = [];
+  /** Le nœud de chaque opération de contrat (source|opération). */
+  const opNodes = new Map<string, string>();
+  const opNodeOf = (sourceId: string, opId: string): string =>
+    opNodes.get(`${sourceId}|${opId}`) ?? `API:${sourceId}:${opId}`;
   const javaClasses = new Map<
     string,
     { sourceId: string; layer: MapLayer; cls: NonNullable<SourceFacts['java']>['classes'][number] }[]
@@ -365,6 +408,8 @@ export function buildGraph(input: GraphInput): GraphOutput {
     if (facts.java) {
       const java = facts.java;
       const backLayer: MapLayer = layer === 'BFF' ? 'BFF' : 'BACKEND';
+      // Le préfixe sous lequel l'application expose ses routes (context-path…), lu dans sa configuration.
+      const exposure = java.exposure?.[0];
       for (const cls of java.classes) {
         javaClasses.set(cls.name, [
           ...(javaClasses.get(cls.name) ?? []),
@@ -532,8 +577,23 @@ export function buildGraph(input: GraphInput): GraphOutput {
             ...(endpoint.requestBody ? { requestBody: endpoint.requestBody } : {}),
             ...(endpoint.returns ? { returns: endpoint.returns } : {}),
             ...(endpoint.validated !== undefined ? { validated: endpoint.validated } : {}),
+            ...(endpoint.via ? { declaredBy: endpoint.via.type, controller: endpoint.controller ?? '' } : {}),
+            ...(exposure ? { exposedPath: joinRoute(exposure.value, endpoint.path) } : {}),
           },
         );
+        // Une route héritée : l'annotation est sur un type parent (interface, classe de base).
+        if (endpoint.via)
+          nodes
+            .get(id)
+            ?.evidence.push(
+              ev(
+                src,
+                { file: endpoint.via.file, line: endpoint.via.line },
+                'STATIC_CODE',
+                'CONFIRMED',
+                `route déclarée par ${endpoint.via.type}, exposée par ${endpoint.controller ?? ''}`,
+              ),
+            );
         edge(
           id,
           `METHOD:${endpoint.handler}`,
@@ -557,6 +617,11 @@ export function buildGraph(input: GraphInput): GraphOutput {
           sourceId: src,
           ...(endpoint.requestBody ? { requestBody: endpoint.requestBody } : {}),
           layer: backLayer,
+          kind: 'SERVED',
+          exposed: [exposure ? joinRoute(exposure.value, endpoint.path) : endpoint.path],
+          why: exposure
+            ? [`préfixe ${exposure.key} = ${exposure.value} (${exposure.file}:${String(exposure.line)})`]
+            : [],
         });
       }
       for (const call of java.calls)
@@ -620,8 +685,13 @@ export function buildGraph(input: GraphInput): GraphOutput {
           );
       }
       for (const op of facts.openapi.operations) {
+        // Un contrat produit depuis le code vit dans la source de ses contrôleurs : son opération ne doit pas
+        // se confondre avec l'endpoint servi de même méthode et même chemin.
+        const clash = nodes.get(`API:${src}:${op.id}`);
+        const opId = clash && clash.layer !== 'API' ? `API:${src}:contract:${op.id}` : `API:${src}:${op.id}`;
+        opNodes.set(`${src}|${op.id}`, opId);
         const id = node(
-          `API:${src}:${op.id}`,
+          opId,
           'API',
           'API',
           op.id,
@@ -634,17 +704,22 @@ export function buildGraph(input: GraphInput): GraphOutput {
             tags: op.tags,
             ...(op.request ? { requestBody: op.request } : {}),
             ...(op.response ? { response: op.response } : {}),
+            ...(op.unresolved ? { unresolvedRefs: op.unresolved } : {}),
           },
         );
         if (op.request)
           edge(id, `DTO:${src}:${op.request}`, 'READS', 'CONFIRMED', 'corps de requête du contrat', [
             ev(src, op.loc, 'OPENAPI', 'CONFIRMED'),
           ]);
+        // Le chemin documenté : avec chaque base du contrat (servers, basePath), et tel qu'écrit.
+        const documented = (op.bases ?? []).map((base) => joinRoute(base, op.route ?? op.path));
         contracts.push({
           endpoint: { applicationId: src, layer: 'BACKEND', method: op.method, path: op.path, symbolId: id },
           sourceId: src,
           ...(op.request ? { requestBody: op.request } : {}),
           layer: 'API',
+          exposed: [...new Set([...documented, op.path])],
+          why: documented.length ? [`base déclarée par le contrat : ${(op.bases ?? []).join(', ')}`] : [],
         });
       }
     }
@@ -663,33 +738,220 @@ export function buildGraph(input: GraphInput): GraphOutput {
     return nodes.has(`FIELD:${src}:${cls}.${key}`) ? `FIELD:${src}:${cls}.${key}` : undefined;
   };
 
-  // ── Appels entre couches (chemin + méthode HTTP) ──────────────────────────────────────────────
-  const findServed = (
-    method: string,
-    path: string,
-    layers: readonly MapLayer[],
-  ): { target: Served; how: 'EXACT' | 'SUFFIX' } | undefined => {
-    for (const layer of layers) {
-      const pool = (layer === 'API' ? contracts : served).filter((entry) => entry.layer === layer);
-      const exact = matchEndpoint({ endpoints: pool.map((entry) => entry.endpoint) }, method, path);
-      if (exact) {
-        const target = pool.find((entry) => entry.endpoint === exact);
-        if (target) return { target, how: 'EXACT' };
+  // ── Contrats, modules, endpoints déduits d'une interface générée absente ──────────────────────
+  const contractIndex = new ContractIndex(input.facts);
+  const correlations: MapCorrelation[] = [];
+  /** Les étapes et causes de la déduction d'un endpoint (module, génération, contrat, interface, méthode). */
+  const derivation = new Map<string, { steps: CorrelationStep[]; causes: Cause[] }>();
+  /** Les opérations d'un contrat d'entrée serveur que rien n'implémente, et pourquoi. */
+  const notImplemented = new Map<string, string>();
+  const usedOps = new Set<string>();
+  const serverInputs: {
+    sourceId: string;
+    module: string;
+    contract: NonNullable<ReturnType<ContractIndex['resolveSpec']>['contract']>;
+  }[] = [];
+  for (const { sourceId, module } of input.facts.flatMap((f) =>
+    (f.maven?.modules ?? []).map((module) => ({ sourceId: f.sourceId, module })),
+  ))
+    for (const g of module.generations)
+      if (sideOf(g) === 'SERVER') {
+        const resolved = contractIndex.resolveSpec(sourceId, module, g);
+        if (resolved.contract)
+          serverInputs.push({
+            sourceId,
+            module: `${module.groupId ?? '?'}:${module.artifactId}`,
+            contract: resolved.contract,
+          });
       }
-      // Une adresse de base non résolue (`${environment.apiUrl}/requests`) : le reste du chemin, en suffixe.
-      const segments = normalizePath(path).split('/').filter(Boolean);
-      const rest = segments.slice(segments.findIndex((segment) => segment !== '{}'));
-      if (rest.length > 0 && rest.length < segments.length) {
-        const suffix = pool.find(
-          (entry) =>
-            (entry.endpoint.method === method || entry.endpoint.method === '*') &&
-            normalizePath(entry.endpoint.path).endsWith(`/${rest.join('/')}`),
+  const flagHandler = (handler: string, why: string): void => {
+    const detail = nodes.get(`METHOD:${handler}`)?.detail;
+    if (detail) detail.correlation = why;
+  };
+  for (const facts of input.facts) {
+    const src = facts.sourceId;
+    const java = facts.java;
+    if (!java) continue;
+    const layer: MapLayer = (sourceById.get(src)?.layer ?? facts.layer) === 'BFF' ? 'BFF' : 'BACKEND';
+    const exposure = java.exposure?.[0];
+    for (const impl of java.implementations ?? []) {
+      const owner = contractIndex.moduleOf(src, impl.loc.file);
+      for (const missing of impl.missing) {
+        const pkg = missing.qualified ? packageOf(missing.qualified) : '';
+        const generation = owner?.module.generations.find(
+          (g) => g.apiPackage === pkg && sideOf(g) === 'SERVER',
         );
-        if (suffix) return { target: suffix, how: 'SUFFIX' };
+        if (!owner || !generation) {
+          for (const m of impl.methods)
+            flagHandler(
+              m.handler,
+              `interface ${missing.qualified ?? missing.name} absente des sources, et produite par aucune génération serveur lisible ${owner ? `du module ${owner.module.artifactId}` : '(aucun pom.xml pour ce fichier)'} : route non démontrée`,
+            );
+          continue;
+        }
+        const resolved = contractIndex.resolveSpec(owner.sourceId, owner.module, generation);
+        const contract = resolved.contract;
+        if (!contract) {
+          for (const m of impl.methods)
+            flagHandler(
+              m.handler,
+              `interface ${missing.name} générée par ${generation.execution ?? generation.generator ?? ''} : ${resolved.causes.map((c) => c.message).join(' ; ')}`,
+            );
+          continue;
+        }
+        const ops = contractIndex.operations(contract);
+        const genEv = ev(
+          owner.sourceId,
+          { file: owner.module.file, line: generation.line },
+          'STATIC_CODE',
+          'CONFIRMED',
+          `génération ${generation.execution ?? ''}`,
+        );
+        for (const m of impl.methods) {
+          const found = operationsFor(ops, generation, missing.name, m.name);
+          const op = found[0];
+          if (!op || found.length > 1) {
+            flagHandler(
+              m.handler,
+              found.length > 1
+                ? `${String(found.length)} opérations du contrat ${contract.doc.file} donnent ${missing.name}.${m.name} : aucune n’est choisie`
+                : `aucune opération du contrat ${contract.doc.file} n’a pour operationId ${m.name} dans l’interface ${missing.name}`,
+            );
+            continue;
+          }
+          const route = op.route ?? op.path;
+          const opNode = opNodeOf(contract.sourceId, op.id);
+          usedOps.add(opNode);
+          const id = node(
+            `API:${src}:${op.method} ${route}`,
+            'API',
+            layer,
+            `${op.method} ${route}`,
+            ev(
+              src,
+              m.loc,
+              'STATIC_CODE',
+              'PROBABLE',
+              `endpoint déduit : ${impl.controller}.${m.name} implémente ${missing.name}, générée depuis ${contract.doc.file}`,
+              m.handler,
+            ),
+            {
+              httpMethod: op.method,
+              path: route,
+              handler: `${impl.controller}.${m.name}`,
+              inferred: true,
+              generatedInterface: missing.qualified ?? missing.name,
+              ...(op.request ? { requestBody: op.request } : {}),
+              ...(exposure ? { exposedPath: joinRoute(exposure.value, route) } : {}),
+            },
+          );
+          edge(
+            id,
+            `METHOD:${m.handler}`,
+            'DEPENDS_ON',
+            'PROBABLE',
+            `méthode qui implémente l’opération ${op.operationId ?? op.id} de l’interface générée ${missing.name}`,
+            [ev(src, m.loc, 'STATIC_CODE', 'PROBABLE')],
+          );
+          edge(
+            id,
+            opNode,
+            'DEPENDS_ON',
+            'CONFIRMED',
+            `route tirée du contrat ${contract.doc.file} lu par la génération ${generation.execution ?? generation.generator ?? ''}`,
+            [ev(contract.sourceId, op.loc, 'OPENAPI', 'CONFIRMED')],
+          );
+          served.push({
+            endpoint: {
+              applicationId: src,
+              layer: layer === 'BFF' ? 'BFF' : 'BACKEND',
+              method: op.method,
+              path: route,
+              symbolId: id,
+            },
+            sourceId: src,
+            layer,
+            kind: 'INFERRED',
+            exposed: [exposure ? joinRoute(exposure.value, route) : route],
+            why: [
+              ...(exposure
+                ? [`préfixe ${exposure.key} = ${exposure.value} (${exposure.file}:${String(exposure.line)})`]
+                : []),
+              'route tirée du contrat (interface générée absente des sources)',
+            ],
+          });
+          derivation.set(id, {
+            steps: [
+              {
+                kind: 'MODULE',
+                label: `module ${owner.module.groupId ?? '?'}:${owner.module.artifactId}:${owner.module.version ?? '?'}`,
+                evidence: genEv,
+              },
+              {
+                kind: 'GENERATION',
+                label: `génération ${generation.execution ?? ''} (${generation.generator ?? ''}, apiPackage ${pkg})`,
+                evidence: genEv,
+              },
+              ...resolved.steps.map((st): CorrelationStep => ({ kind: 'CONTRACT', label: st.label })),
+              {
+                kind: 'INTERFACE',
+                label: `interface ${missing.qualified ?? missing.name} : générée au build, absente des sources`,
+              },
+              {
+                kind: 'IMPLEMENTATION',
+                label: `${impl.controller}.${m.name} (@Override, operationId ${op.operationId ?? ''})`,
+                node: `METHOD:${m.handler}`,
+                evidence: ev(src, m.loc, 'STATIC_CODE', 'CONFIRMED'),
+              },
+            ],
+            causes: [
+              {
+                code: 'GENERATED_INTERFACE_ABSENT',
+                message: `l’interface ${missing.name} est générée au build : la route vient du contrat et le préfixe de type de l’interface n’est pas lisible`,
+              },
+              ...resolved.causes,
+            ],
+          });
+        }
+        for (const op of ops)
+          if (
+            !usedOps.has(opNodeOf(contract.sourceId, op.id)) &&
+            apiNamesOf(op, generation).has(missing.name)
+          )
+            notImplemented.set(
+              opNodeOf(contract.sourceId, op.id),
+              `${impl.controller} implémente ${missing.name} sans méthode pour ${op.operationId ?? op.id}`,
+            );
       }
     }
-    return undefined;
-  };
+  }
+  // Une opération d'un contrat lu par une génération SERVEUR, que ni un endpoint lu ni un endpoint déduit
+  // n'expose dans le module : déclarée, non implémentée.
+  for (const input of serverInputs)
+    for (const op of contractIndex.operations(input.contract)) {
+      const opNode = opNodeOf(input.contract.sourceId, op.id);
+      if (usedOps.has(opNode) || notImplemented.has(opNode)) continue;
+      const route = op.route ?? op.path;
+      const exposed = matchEndpoint(
+        { endpoints: served.filter((e) => e.sourceId === input.sourceId).map((e) => e.endpoint) },
+        op.method,
+        route,
+      );
+      if (!exposed)
+        notImplemented.set(
+          opNode,
+          `aucun contrôleur du module ${input.module} n’implémente ${op.operationId ?? op.id} (${op.method} ${route})`,
+        );
+    }
+  for (const [opNode, why] of notImplemented) {
+    const detail = nodes.get(opNode)?.detail;
+    if (detail) {
+      detail.implemented = false;
+      detail.implementation = why;
+    }
+  }
+
+  // ── Appels entre couches (chemin + méthode HTTP) ──────────────────────────────────────────────
   const layersPresent = new Set(
     input.sources.filter((source) => source.enabled).map((source) => source.layer),
   );
@@ -699,6 +961,132 @@ export function buildGraph(input: GraphInput): GraphOutput {
       : from === 'BFF'
         ? ['BACKEND', 'API']
         : ['API'];
+
+  // Les cibles d'une couche : chaque chemin exposé (préfixes justifiés) d'un endpoint ou d'une opération.
+  const targetCache = new Map<MapLayer, Target[]>();
+  const servedByNode = new Map<string, Served>();
+  const targetsOf = (layer: MapLayer): Target[] => {
+    const cached = targetCache.get(layer);
+    if (cached) return cached;
+    const list = (layer === 'API' ? contracts : served)
+      .filter((entry) => entry.layer === layer)
+      .flatMap((entry) => {
+        servedByNode.set(entry.endpoint.symbolId, entry);
+        return (entry.exposed ?? [entry.endpoint.path]).map((p): Target => ({
+          node: entry.endpoint.symbolId,
+          layer,
+          kind: layer === 'API' ? 'CONTRACT' : (entry.kind ?? 'SERVED'),
+          method: entry.endpoint.method,
+          path: p,
+          why: entry.why ?? [],
+        }));
+      });
+    targetCache.set(layer, list);
+    return list;
+  };
+  const implementingLayers = (['BFF', 'BACKEND'] as const).filter((l) => layersPresent.has(l));
+  /**
+   * La corrélation d'un appel avec les couches en aval, dans l'ordre : la première couche qui en démontre
+   * une cible l'emporte ; les causes des autres sont gardées. Le résultat est noté dans `correlations`.
+   */
+  const correlateCall = (
+    from: string,
+    call: { method: string; path: string; baseUnknown: boolean },
+    layers: readonly MapLayer[],
+    steps: CorrelationStep[],
+    extra: Cause[] = [],
+    inferredCall = false,
+  ): { match: Match; found?: { target: Served; how: 'EXACT' | 'SUFFIX'; path: string } } => {
+    const causes: Cause[] = [...extra];
+    const candidates: MapCorrelation['candidates'] = [];
+    let chosen: Match | undefined;
+    for (const layer of layers) {
+      const match = matchCall(call, targetsOf(layer));
+      candidates.push(...match.candidates);
+      causes.push(...match.causes);
+      if (match.target) {
+        chosen = match;
+        break;
+      }
+    }
+    const target = chosen?.target;
+    const entry = target ? servedByNode.get(target.node) : undefined;
+    const chain = target ? derivation.get(target.node) : undefined;
+    if (target?.kind === 'CONTRACT' && implementingLayers.length > 0)
+      causes.push({
+        code: 'CONTRACT_NOT_IMPLEMENTED',
+        message:
+          notImplemented.get(target.node) ??
+          `l’opération ${target.method} ${target.path} est décrite par le contrat, mais aucun endpoint des sources ${implementingLayers.join(', ')} analysées ne l’expose`,
+      });
+    if (!target && causes.length === 0)
+      causes.push(
+        implementingLayers.length === 0 && !layers.includes('API')
+          ? {
+              code: 'LAYER_MISSING',
+              message: `aucune source ${layers.join(', ')} n’est analysée : l’appel ne peut pas être suivi`,
+            }
+          : {
+              code: 'NO_ENDPOINT',
+              message: `aucun endpoint ni opération de contrat ne correspond à ${call.method} ${call.path}`,
+            },
+      );
+    if (chain) causes.push(...chain.causes);
+    const status: MapCorrelation['status'] = !target
+      ? causes.some((c) => c.code === 'LAYER_MISSING')
+        ? 'BLOCKED'
+        : 'UNDEMONSTRATED'
+      : target.kind === 'CONTRACT' && implementingLayers.length > 0
+        ? 'UNDEMONSTRATED'
+        : inferredCall && chosen?.status === 'CONFIRMED'
+          ? 'PROBABLE'
+          : (chosen?.status ?? 'UNDEMONSTRATED');
+    correlations.push({
+      from,
+      method: call.method,
+      path: call.path,
+      status,
+      ...(target ? { target: target.node } : {}),
+      candidates: candidates.slice(0, 12),
+      causes: dedupeCauses(causes),
+      steps: [
+        ...steps,
+        ...(chain?.steps ?? []),
+        // Une route héritée : le type parent qui la déclare (interface générée versionnée, classe de base).
+        ...(target && typeof nodes.get(target.node)?.detail.declaredBy === 'string'
+          ? [
+              {
+                kind: 'INTERFACE' as const,
+                label: `route déclarée par ${String(nodes.get(target.node)?.detail.declaredBy)}, exposée par ${String(nodes.get(target.node)?.detail.controller)} (${String(nodes.get(target.node)?.detail.handler)})`,
+                ...(nodes.get(target.node)?.evidence[1]
+                  ? { evidence: nodes.get(target.node)?.evidence[1] }
+                  : {}),
+              },
+            ]
+          : []),
+        ...(target
+          ? [
+              {
+                kind: target.kind === 'CONTRACT' ? ('CONTRACT' as const) : ('ENDPOINT' as const),
+                label: `${target.method} ${target.path}${target.why.length ? ` — ${target.why.join(' ; ')}` : ''}`,
+                node: target.node,
+              },
+            ]
+          : []),
+      ],
+    });
+    return {
+      match: chosen ?? { status: 'UNDEMONSTRATED', candidates, causes },
+      ...(target && entry && chosen?.how
+        ? { found: { target: entry, how: chosen.how, path: target.path } }
+        : {}),
+    };
+  };
+  const matchText = (match: Match, method: string, p: string): string => {
+    const first = match.causes.find((c) => c.code !== 'PREFIX_UNKNOWN');
+    if (!first) return `aucun endpoint ne correspond à ${method} ${p}`;
+    return first.code === 'AMBIGUOUS' ? `correspondance ambiguë : ${first.message}` : first.message;
+  };
 
   /** Le corps envoyé vers un endpoint : champ par champ, par le nom JSON (liaison Jackson). */
   const bindBody = (
@@ -786,74 +1174,104 @@ export function buildGraph(input: GraphInput): GraphOutput {
             [ev(src, read.loc, 'STATIC_CODE', 'CONFIRMED')],
           );
         }
-      // Appel frontal → endpoint servi (BFF, backend) ou opération du contrat.
+      // Appel frontal → endpoint servi (BFF, backend), déduit, ou opération du contrat : corrélation.
       for (const call of ui.calls) {
         const id = `METHOD:${src}:${call.id}`;
-        if (!call.path) continue;
-        const found = findServed(call.method, call.path, downstream('FRONTEND'));
         const callDetail = nodes.get(id)?.detail;
-        if (!found) {
-          if (callDetail) callDetail.match = `aucun endpoint ne correspond à ${call.method} ${call.path}`;
+        const callStep: CorrelationStep = {
+          kind: 'CALL',
+          label: `${call.method} ${call.path ?? call.expression ?? ''}${call.via ? ` (par ${call.via})` : ''}`,
+          node: id,
+          evidence: ev(src, call.loc, 'STATIC_CODE', 'CONFIRMED'),
+        };
+        if (!call.path) {
+          if (call.unresolved)
+            correlations.push({
+              from: id,
+              method: call.method,
+              path: call.expression ?? '',
+              status: 'UNDEMONSTRATED',
+              candidates: [],
+              causes: [
+                {
+                  code: 'DYNAMIC_URL',
+                  message: `${call.unresolved}${call.expression ? ` (${call.expression})` : ''}`,
+                },
+              ],
+              steps: [callStep],
+            });
           continue;
         }
-        // Un chemin qui garde une part inconnue ({base}, {param}) et que plusieurs endpoints satisfont : aucun
-        // n'est choisi au hasard.
-        const callPath = call.path;
-        if (callPath.includes('{')) {
-          // Forte : même forme (paramètre contre paramètre) ; faible : un paramètre de l'appel couvre un
-          // segment littéral. Une adresse de base inconnue en tête ne compare que la fin du chemin.
-          const segments = normalizePath(callPath).split('/').filter(Boolean);
-          const rest = segments.slice(
-            Math.max(
-              0,
-              segments.findIndex((segment) => segment !== '{}'),
-            ),
-          );
-          const tailOnly = rest.length < segments.length;
-          const strength = (entry: Served): 'STRONG' | 'WEAK' | undefined => {
-            if (entry.endpoint.method !== call.method && entry.endpoint.method !== '*') return undefined;
-            const target = normalizePath(entry.endpoint.path).split('/').filter(Boolean);
-            const mine = tailOnly ? rest : segments;
-            if (tailOnly ? target.length < mine.length : target.length !== mine.length) return undefined;
-            const theirs = target.slice(target.length - mine.length);
-            let weak = false;
-            for (let i = 0; i < mine.length; i += 1) {
-              if (mine[i] === theirs[i]) continue;
-              if (mine[i] === '{}') weak = true;
-              else return undefined;
-            }
-            return weak ? 'WEAK' : 'STRONG';
-          };
-          const pool = served.filter((entry) => entry.layer === found.target.layer);
-          const strong = [
-            ...new Map(
-              pool.filter((e) => strength(e) === 'STRONG').map((e) => [e.endpoint.symbolId, e]),
-            ).values(),
-          ];
-          const weakOnes = [
-            ...new Map(
-              pool.filter((e) => strength(e) === 'WEAK').map((e) => [e.endpoint.symbolId, e]),
-            ).values(),
-          ];
-          const ambiguous =
-            strong.length > 1 ? strong : strong.length === 0 && weakOnes.length > 1 ? weakOnes : [];
-          if (ambiguous.length > 1) {
-            if (callDetail)
-              callDetail.match = `correspondance ambiguë : ${String(ambiguous.length)} endpoints correspondent à ${call.method} ${call.path} (${ambiguous
-                .slice(0, 3)
-                .map((entry) => `${entry.endpoint.method} ${entry.endpoint.path}`)
-                .join(', ')})`;
-            continue;
+        // Une réécriture du proxy démontrée par la configuration (`"^/api": ""`) : le chemin reçu en aval.
+        const local = normalizePath(call.path);
+        const proxy = (ui.proxies ?? []).find(
+          (p) => p.rewrite && (local === p.context || local.startsWith(`${p.context.replace(/\/$/, '')}/`)),
+        );
+        let rewritten: string | undefined;
+        if (proxy?.rewrite)
+          try {
+            rewritten = local.replace(new RegExp(proxy.rewrite.pattern), proxy.rewrite.replacement) || '/';
+          } catch {
+            rewritten = undefined;
           }
+        const baseSteps: CorrelationStep[] = [
+          callStep,
+          ...(call.base ? [{ kind: 'BASE' as const, label: call.base }] : []),
+        ];
+        let result = rewritten
+          ? correlateCall(
+              id,
+              { method: call.method, path: rewritten, baseUnknown: false },
+              downstream('FRONTEND'),
+              [
+                ...baseSteps,
+                {
+                  kind: 'BASE',
+                  label: `réécriture du proxy « ${proxy?.rewrite?.pattern ?? ''} » → « ${proxy?.rewrite?.replacement ?? ''} » : ${rewritten}`,
+                  ...(proxy
+                    ? {
+                        evidence: ev(src, { file: proxy.file, line: proxy.line }, 'STATIC_CODE', 'CONFIRMED'),
+                      }
+                    : {}),
+                },
+              ],
+            )
+          : undefined;
+        const usedRewrite = result?.found !== undefined;
+        if (!result?.found) {
+          if (result) correlations.pop();
+          result = correlateCall(
+            id,
+            { method: call.method, path: call.path, baseUnknown: call.path.startsWith('{base}') },
+            downstream('FRONTEND'),
+            baseSteps,
+          );
         }
-        const confidence: MapConfidence = found.how === 'EXACT' ? 'CONFIRMED' : 'PROBABLE';
+        if (!result.found) {
+          if (callDetail) callDetail.match = matchText(result.match, call.method, call.path);
+          continue;
+        }
+        const found = result.found;
+        const confidence: MapConfidence =
+          found.how === 'EXACT' && found.target.kind !== 'INFERRED' ? 'CONFIRMED' : 'PROBABLE';
         const why =
-          found.how === 'EXACT'
-            ? `méthode et chemin identiques (${call.method} ${call.path})`
-            : `adresse de base non résolue : ${call.path} correspond à ${found.target.endpoint.path} par la fin du chemin`;
-        edge(id, found.target.endpoint.symbolId, 'CALLS', confidence, why, [
-          ev(src, call.loc, 'STATIC_CODE', confidence),
-        ]);
+          found.target.kind === 'INFERRED'
+            ? `${call.method} ${call.path} correspond à l’endpoint déduit ${found.target.endpoint.method} ${found.path} (route du contrat, interface générée absente)`
+            : found.how === 'EXACT'
+              ? `méthode et chemin identiques (${call.method} ${call.path})${found.path !== found.target.endpoint.path ? ` ; chemin exposé ${found.path}` : ''}`
+              : `adresse de base non résolue : ${call.path} correspond à ${found.target.endpoint.path} par la fin du chemin`;
+        edge(
+          id,
+          found.target.endpoint.symbolId,
+          'CALLS',
+          confidence,
+          `${why}${call.base ? ` ; base : ${call.base}` : ''}${
+            usedRewrite && proxy?.rewrite
+              ? ` ; réécriture du proxy ${proxy.file} « ${proxy.rewrite.pattern} » → « ${proxy.rewrite.replacement} »`
+              : ''
+          }`,
+          [ev(src, call.loc, 'STATIC_CODE', confidence)],
+        );
         const sent = ui.flows
           .filter((flow) => flow.call === call.id && flow.field)
           .map((flow) => ({
@@ -915,7 +1333,20 @@ export function buildGraph(input: GraphInput): GraphOutput {
       const layer: MapLayer = (sourceById.get(src)?.layer ?? facts.layer) === 'BFF' ? 'BFF' : 'BACKEND';
       for (const out of facts.java.outgoing) {
         if (!out.path || !out.method) continue;
-        const found = findServed(out.method, out.path, downstream(layer));
+        const result = correlateCall(
+          `METHOD:${out.from}`,
+          { method: out.method, path: out.path, baseUnknown: /^\{/.test(out.path) },
+          downstream(layer),
+          [
+            {
+              kind: 'OUTGOING',
+              label: `${out.method} ${out.path}${out.client ? ` (${out.client})` : ''}`,
+              node: `METHOD:${out.from}`,
+              evidence: ev(src, out.loc, 'STATIC_CODE', 'CONFIRMED'),
+            },
+          ],
+        );
+        const found = result.found;
         if (!found) continue;
         const confidence: MapConfidence =
           out.status === 'STATICALLY_RESOLVED' && found.how === 'EXACT' ? 'CONFIRMED' : 'PROBABLE';
@@ -964,6 +1395,126 @@ export function buildGraph(input: GraphInput): GraphOutput {
                 [ev(src, out.loc, 'STATIC_CODE', weakest(confidence, 'PROBABLE'))],
               );
           }
+      }
+      // Les appels par un client généré (type importé, absent des sources) : la génération cliente du module
+      // qui produit ce package, son contrat d'entrée, l'opération de ce nom → l'appel HTTP qu'elle décrit.
+      for (const cc of facts.java.clients ?? []) {
+        const owner = contractIndex.moduleOf(src, cc.loc.file);
+        const pkg = packageOf(cc.qualified);
+        const generation = owner?.module.generations.find(
+          (g) => g.apiPackage === pkg && sideOf(g) === 'CLIENT',
+        );
+        const from = `METHOD:${cc.from}`;
+        const callStep: CorrelationStep = {
+          kind: 'OUTGOING',
+          label: `${cc.type}.${cc.operation}() (${cc.qualified})`,
+          node: from,
+          evidence: ev(src, cc.loc, 'STATIC_CODE', 'CONFIRMED'),
+        };
+        // Un type absent qu'aucune génération cliente ne produit n'est pas forcément un client HTTP : rien n'est noté.
+        if (!owner || !generation) continue;
+        const resolved = contractIndex.resolveSpec(owner.sourceId, owner.module, generation);
+        const genEv = ev(
+          owner.sourceId,
+          { file: owner.module.file, line: generation.line },
+          'STATIC_CODE',
+          'CONFIRMED',
+        );
+        const steps: CorrelationStep[] = [
+          callStep,
+          {
+            kind: 'GENERATION',
+            label: `génération cliente ${generation.execution ?? ''} (${generation.generator ?? ''}${generation.library ? `/${generation.library}` : ''}, apiPackage ${pkg})`,
+            evidence: genEv,
+          },
+          ...resolved.steps.map((st): CorrelationStep => ({ kind: 'CONTRACT', label: st.label })),
+        ];
+        const contract = resolved.contract;
+        const ops = contract
+          ? operationsFor(contractIndex.operations(contract), generation, cc.type, cc.operation)
+          : [];
+        const op = ops.length === 1 ? ops[0] : undefined;
+        if (!contract || !op) {
+          correlations.push({
+            from,
+            method: '',
+            path: '',
+            status: contract ? 'UNDEMONSTRATED' : 'BLOCKED',
+            candidates: [],
+            causes: dedupeCauses([
+              ...resolved.causes,
+              {
+                code: 'BACKEND_CALL_UNRESOLVED',
+                message: contract
+                  ? `${ops.length > 1 ? `${String(ops.length)} opérations` : 'aucune opération'} du contrat ${contract.doc.file} ne correspond à ${cc.type}.${cc.operation}()`
+                  : `le contrat du client ${cc.type} n’est pas établi`,
+              },
+            ]),
+            steps,
+          });
+          continue;
+        }
+        const route = op.route ?? op.path;
+        steps.push({
+          kind: 'CONTRACT',
+          label: `${op.method} ${route} (operationId ${op.operationId ?? ''}, ${contract.doc.title ?? contract.doc.file} ${contract.doc.version ?? ''})`,
+          node: opNodeOf(contract.sourceId, op.id),
+        });
+        // L'adresse de base du client est réglée à l'exécution : la route est comparée seule, puis en suffixe.
+        const layers = downstream(layer).filter((l) => l !== 'API');
+        let result = correlateCall(
+          from,
+          { method: op.method, path: route, baseUnknown: false },
+          layers,
+          steps,
+          resolved.causes,
+          true,
+        );
+        if (!result.found) {
+          correlations.pop();
+          result = correlateCall(
+            from,
+            { method: op.method, path: `{base}${route}`, baseUnknown: true },
+            layers,
+            steps,
+            resolved.causes,
+            true,
+          );
+        }
+        const found = result.found;
+        if (!found) continue;
+        edge(
+          from,
+          found.target.endpoint.symbolId,
+          'CALLS',
+          'PROBABLE',
+          `appel par le client généré ${cc.type}.${cc.operation}() : ${op.method} ${route} (contrat ${contract.doc.file}${contract.doc.version ? ` ${contract.doc.version}` : ''}, génération ${generation.execution ?? generation.generator ?? ''})`,
+          [ev(src, cc.loc, 'STATIC_CODE', 'PROBABLE'), ev(contract.sourceId, op.loc, 'OPENAPI', 'CONFIRMED')],
+        );
+        // Versions : le contrat du client et celui que la cible déclare (même titre) sont-ils compatibles ?
+        const own = contractIndex.documents.find(
+          (d) =>
+            d.sourceId === found.target.sourceId &&
+            d.doc.title !== undefined &&
+            d.doc.title === contract.doc.title,
+        );
+        const latest = correlations[correlations.length - 1];
+        if (own && latest && own.doc.version !== contract.doc.version) {
+          const theirs = contractIndex
+            .operations(own)
+            .find((o) => o.method === op.method && normalizePath(o.route ?? o.path) === normalizePath(route));
+          latest.causes.push(
+            theirs
+              ? {
+                  code: 'CONTRACT_VERSION_UNKNOWN',
+                  message: `versions différentes (${contract.doc.version ?? '?'} côté client, ${own.doc.version ?? '?'} côté serveur) : l’opération ${op.method} ${route} existe dans les deux`,
+                }
+              : {
+                  code: 'CONTRACT_VERSION_UNKNOWN',
+                  message: `versions différentes (${contract.doc.version ?? '?'} côté client, ${own.doc.version ?? '?'} côté serveur) : l’opération ${op.method} ${route} est absente du contrat du serveur`,
+                },
+          );
+        }
       }
     }
   }
@@ -1379,14 +1930,27 @@ export function buildGraph(input: GraphInput): GraphOutput {
     }
   }
 
-  // Endpoint servi ↔ opération du contrat : même méthode, même chemin.
+  // Endpoint servi ↔ opération du contrat : même méthode, même chemin. Plusieurs contrats peuvent décrire
+  // la même route (le contrat du serveur et la copie qu'un client garde) : celui de la même source d'abord,
+  // puis un contrat lu par une génération serveur, puis les autres ; une copie seulement cliente en dernier.
+  const contractInfo = new Map(contractIndex.contracts().map((c) => [c.id, c]));
+  const docOfOp = new Map<string, string>();
+  for (const f of input.facts)
+    for (const op of f.openapi?.operations ?? [])
+      docOfOp.set(opNodeOf(f.sourceId, op.id), `${f.sourceId}:${op.document ?? op.loc.file}`);
   for (const entry of served) {
-    const contract = matchEndpoint(
-      { endpoints: contracts.map((c) => c.endpoint) },
-      entry.endpoint.method,
-      entry.endpoint.path,
-    );
-    const op = contracts.find((c) => c.endpoint === contract);
+    // Un endpoint déduit est déjà relié à l'opération d'où vient sa route.
+    if (entry.kind === 'INFERRED') continue;
+    const rank = (c: Served): number => {
+      if (c.sourceId === entry.sourceId) return 0;
+      const info = contractInfo.get(docOfOp.get(c.endpoint.symbolId) ?? '');
+      if (info?.consumers.some((k) => k.side === 'SERVER')) return 1;
+      if (info && info.consumers.length > 0 && info.consumers.every((k) => k.side === 'CLIENT')) return 3;
+      return 2;
+    };
+    const op = contracts
+      .filter((c) => matchEndpoint({ endpoints: [c.endpoint] }, entry.endpoint.method, entry.endpoint.path))
+      .sort((a, b) => rank(a) - rank(b))[0];
     if (!op) continue;
     edge(
       entry.endpoint.symbolId,
@@ -2071,5 +2635,45 @@ export function buildGraph(input: GraphInput): GraphOutput {
       });
   }
 
-  return { nodes: [...nodes.values()], edges: [...edges.values()], features, concepts, issues };
+  // L'opération du contrat qui décrit la cible de chaque corrélation (endpoint servi ou déduit), et les
+  // références de cette opération que le contrat ne permet pas de suivre.
+  const refCause = (c: MapCorrelation): void => {
+    const refs = c.contract ? nodes.get(c.contract)?.detail.unresolvedRefs : undefined;
+    if (Array.isArray(refs) && refs.length)
+      c.causes.push({
+        code: 'REF_UNRESOLVED',
+        message: `${nodes.get(c.contract ?? '')?.name ?? ''} : références du contrat non suivies (${refs.join(', ')}) — paramètres ou schémas incomplets`,
+      });
+  };
+  for (const c of correlations) {
+    if (!c.target || c.contract) continue;
+    if (c.target.startsWith('API:') && nodes.get(c.target)?.layer === 'API') {
+      c.contract = c.target;
+      refCause(c);
+      continue;
+    }
+    const described = [...edges.values()].find(
+      (e) => e.from === c.target && e.kind === 'DEPENDS_ON' && nodes.get(e.to)?.layer === 'API',
+    );
+    if (described) {
+      c.contract = described.to;
+      c.steps.push({
+        kind: 'CONTRACT',
+        label: `décrit par ${nodes.get(described.to)?.name ?? described.to} : ${described.reason}`,
+        node: described.to,
+      });
+      refCause(c);
+    }
+  }
+  return {
+    nodes: [...nodes.values()],
+    edges: [...edges.values()],
+    features,
+    concepts,
+    issues,
+    correlations,
+    contracts: contractIndex.contracts(),
+    contractDiffs: contractIndex.diffs(),
+    modules: contractIndex.moduleList(),
+  };
 }

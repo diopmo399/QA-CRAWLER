@@ -1,0 +1,32 @@
+{
+  "openapi": "3.0.1",
+  "info": { "title": "Backend API", "version": "1.4.0" },
+  "paths": {
+    "/decisions": {
+      "post": {
+        "tags": ["Decisions"],
+        "operationId": "enregistrerDecision",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DecisionDto" } } }
+        },
+        "responses": { "201": { "description": "créée" } }
+      }
+    },
+    "/decisions/{id}": {
+      "get": {
+        "tags": ["Decisions"],
+        "operationId": "lireDecision",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "la décision" } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DecisionDto": {
+        "type": "object",
+        "properties": { "motif": { "type": "string" }, "accepte": { "type": "boolean" } }
+      }
+    }
+  }
+}

@@ -9,6 +9,7 @@ import type {
 } from '../sdk/core/cartography.js';
 import { analyzeAngular } from './analyze-angular.js';
 import { analyzeJava } from './analyze-java.js';
+import { analyzeMaven } from './analyze-maven.js';
 import { analyzeOpenApi } from './analyze-openapi.js';
 import { RXJS_ANALYZER } from './analyze-rxjs.js';
 import { detectTechnologies, technologyStatuses } from './detect.js';
@@ -37,7 +38,8 @@ import { buildGraph } from './graph.js';
  */
 // 3 : onglets (groupes, libellés, chargement différé, routes) et composants affichés dans d'autres.
 // 4 : éléments interactifs (liens, input, sorties de composants, ngSubmit) reliés à leur cible et contexte.
-export const ANALYZERS = `cartography-4;${RXJS_ANALYZER}`;
+// 5 : contrats ($ref, servers, paramètres), modules Maven et générations, routes héritées, bases d'URL.
+export const ANALYZERS = `cartography-5;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;
@@ -177,6 +179,12 @@ export async function runScan(
       if (found.has('OPENAPI')) {
         sourceFacts.openapi = analyzeOpenApi(read.files);
         scan.errors.push(...sourceFacts.openapi.warnings.slice(0, 20));
+      }
+      // Les modules Maven : identité, dépendances et générations de code depuis un contrat (un module de
+      // contrats sans Java en est un aussi).
+      if (read.files.some((file) => file.path.split('/').pop() === 'pom.xml')) {
+        sourceFacts.maven = analyzeMaven(read.files);
+        scan.errors.push(...sourceFacts.maven.warnings.slice(0, 20));
       }
       if (read.limits.length > 0) scan.state = 'PARTIAL';
       if (found.size === 0) scan.errors.push('aucune technologie reconnue dans cette source');

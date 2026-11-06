@@ -32,6 +32,7 @@
     "tests/fixtures/cartography-rxjs/**",
     "tests/fixtures/cartography-tabs/**",
     "tests/fixtures/cartography-flow/**",
-    "tests/fixtures/cartography-entry/**"
+    "tests/fixtures/cartography-entry/**",
+    "tests/fixtures/cartography-contract/**"
   ]
 }
