@@ -306,7 +306,7 @@ export function rightFor(segments: readonly string[], method: string): Right {
       // renommer, fusionner, associer : décider ; calculer un impact ne change rien.
       return item === 'config'
         ? 'MANAGE_PROJECTS'
-        : item === 'scans'
+        : item === 'scans' || item === 'investigations'
           ? 'RUN'
           : item === 'impact'
             ? 'VIEW'
@@ -446,6 +446,9 @@ const KEYWORDS = new Set([
   'discover',
   'repositories',
   'spec',
+  'investigations',
+  'expand',
+  'rerun',
 ]);
 
 /** L'action d'une requête, d'après les mots de sa route (les identifiants sont omis). */

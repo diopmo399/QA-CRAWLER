@@ -38,12 +38,16 @@ import {
   type CoverageContext,
   type MapIndex,
 } from '../../cartography/explorer.js';
+import { expandInvestigation, investigate, InvestigationStaleError } from '../../cartography/investigate.js';
 import { runScan } from '../../cartography/scan.js';
 import { actionRows, conditionRows, elementSheet, structureOf } from '../../cartography/structure.js';
 import {
   appendDecision,
   CartographyStoreError,
+  listInvestigations,
   listScans,
+  readInvestigation,
+  writeInvestigation,
   readConfig,
   readDecisions,
   readScan,
@@ -54,6 +58,7 @@ import {
 import {
   DECISION_KINDS,
   GIT_PROVIDERS,
+  INVESTIGATION_GOALS,
   MAP_EDGE_KINDS,
   MAP_LAYERS,
   TRACE_DIRECTIONS,
@@ -65,6 +70,10 @@ import {
   type ElementSheet,
   type MapEdgeKind,
   type MapLayer,
+  type Investigation,
+  type InvestigationBudget,
+  type InvestigationRequest,
+  type InvestigationSummary,
   type MapTrace,
   type TraceDirection,
   type MapStructure,
@@ -1108,6 +1117,137 @@ export async function mapTrace(
   const trace = traceOf(state.index, id, options);
   if (!trace) throw new CartographyInputError(404, 'NOT_FOUND', 'unknown element');
   return trace;
+}
+
+// ── Investigations ──────────────────────────────────────────────────────────────────────────────
+
+const BUDGET_KEYS = ['nodes', 'perBranch', 'perNature', 'depth', 'fanOut', 'timeMs'] as const;
+
+/** Le budget demandé : des nombres connus seulement (le moteur les borne). */
+function budgetOf(raw: unknown): Partial<InvestigationBudget> | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    throw new CartographyInputError(400, 'INVALID_BUDGET', 'budget must be an object');
+  const out: Partial<InvestigationBudget> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (
+      !(BUDGET_KEYS as readonly string[]).includes(key) ||
+      typeof value !== 'number' ||
+      !Number.isFinite(value)
+    )
+      throw new CartographyInputError(400, 'INVALID_BUDGET', `unknown or invalid budget entry ${key}`);
+    out[key as keyof InvestigationBudget] = value;
+  }
+  return out;
+}
+
+/** La demande d'investigation, vérifiée : élément, objectif, sens, mode et budget connus, sinon refusée. */
+export function investigationRequest(raw: unknown): InvestigationRequest {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    throw new CartographyInputError(400, 'INVALID_REQUEST', 'body must be an object');
+  const body = raw as Record<string, unknown>;
+  if (typeof body.start !== 'string' || !body.start || body.start.length > 2_000)
+    throw new CartographyInputError(400, 'INVALID_START', 'start must be an element id');
+  if (body.goal !== undefined && !(INVESTIGATION_GOALS as readonly unknown[]).includes(body.goal))
+    throw new CartographyInputError(400, 'INVALID_GOAL', 'unknown goal');
+  if (body.direction !== undefined && !(TRACE_DIRECTIONS as readonly unknown[]).includes(body.direction))
+    throw new CartographyInputError(400, 'INVALID_DIRECTION', 'direction must be UP, DOWN or BOTH');
+  if (body.mode !== undefined && body.mode !== 'FOCUSED' && body.mode !== 'EXHAUSTIVE')
+    throw new CartographyInputError(400, 'INVALID_MODE', 'mode must be FOCUSED or EXHAUSTIVE');
+  const budget = budgetOf(body.budget);
+  return {
+    start: body.start,
+    ...(body.goal ? { goal: body.goal as InvestigationRequest['goal'] } : {}),
+    ...(body.direction ? { direction: body.direction as TraceDirection } : {}),
+    ...(body.mode ? { mode: body.mode } : {}),
+    ...(budget ? { budget } : {}),
+  };
+}
+
+const newInvestigationId = (): string => `inv-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
+
+/** Une investigation lue : périmée (STALE) si le dernier scan n'est plus celui sur lequel elle a été menée. */
+async function withFreshness(project: CartographyProject, inv: Investigation): Promise<Investigation> {
+  const latest = (await listScans(project.dir))[0]?.id;
+  return latest && latest !== inv.scanId ? { ...inv, state: 'STALE' } : inv;
+}
+
+export async function startInvestigation(project: CartographyProject, raw: unknown): Promise<Investigation> {
+  const request = investigationRequest(raw);
+  const state = await required(project);
+  const inv = investigate(state.index, request, { id: newInvestigationId() });
+  if (!inv) throw new CartographyInputError(404, 'NOT_FOUND', 'unknown element');
+  await writeInvestigation(project.dir, inv);
+  return inv;
+}
+
+export async function mapInvestigations(project: CartographyProject): Promise<InvestigationSummary[]> {
+  const latest = (await listScans(project.dir))[0]?.id;
+  const state = await progressive(project);
+  return (await listInvestigations(project.dir)).map((inv) => ({
+    id: inv.id,
+    scanId: inv.scanId,
+    createdAt: inv.createdAt,
+    updatedAt: inv.updatedAt,
+    state: latest && latest !== inv.scanId ? 'STALE' : inv.state,
+    start: inv.request.start,
+    startName:
+      state?.index.nodes.get(inv.request.start)?.name ??
+      inv.nodes.find((n) => n.id === inv.request.start)?.name ??
+      inv.request.start,
+    goal: inv.request.goal,
+    direction: inv.request.direction,
+    paths: inv.paths.length,
+    breaks: inv.breaks.length,
+  }));
+}
+
+async function storedInvestigation(project: CartographyProject, id: string): Promise<Investigation> {
+  const inv = await readInvestigation(project.dir, id);
+  if (!inv) throw new CartographyInputError(404, 'NOT_FOUND', 'unknown investigation');
+  return inv;
+}
+
+export async function mapInvestigation(project: CartographyProject, id: string): Promise<Investigation> {
+  return withFreshness(project, await storedInvestigation(project, id));
+}
+
+/** « Explorer cette branche » : reprise ciblée depuis un nœud de la frontière, sur le même scan seulement. */
+export async function expandInvestigationOf(
+  project: CartographyProject,
+  id: string,
+  raw: unknown,
+): Promise<Investigation> {
+  const previous = await storedInvestigation(project, id);
+  const body = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  if (typeof body.node !== 'string' || !body.node)
+    throw new CartographyInputError(400, 'INVALID_NODE', 'node must be a frontier element id');
+  const state = await required(project);
+  try {
+    const next = expandInvestigation(state.index, previous, body.node, budgetOf(body.budget));
+    if (!next) throw new CartographyInputError(404, 'NOT_IN_FRONTIER', 'this element is not on the frontier');
+    await writeInvestigation(project.dir, next);
+    return next;
+  } catch (error) {
+    if (error instanceof InvestigationStaleError)
+      throw new CartographyInputError(
+        409,
+        'STALE',
+        'the scan changed since this investigation: run it again',
+      );
+    throw error;
+  }
+}
+
+/** Relancer sur le dernier scan : une nouvelle investigation, reliée à la précédente. */
+export async function rerunInvestigation(project: CartographyProject, id: string): Promise<Investigation> {
+  const previous = await storedInvestigation(project, id);
+  const state = await required(project);
+  const inv = investigate(state.index, previous.request, { id: newInvestigationId(), previous: previous.id });
+  if (!inv)
+    throw new CartographyInputError(404, 'NOT_FOUND', 'the starting element is no longer in the scan');
+  await writeInvestigation(project.dir, inv);
+  return inv;
 }
 
 export async function mapConditions(

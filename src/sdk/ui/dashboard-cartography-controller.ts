@@ -7,7 +7,15 @@ import type {
   MapListQuery,
   MapSource,
 } from '../core/cartography.js';
-import { GIT_PROVIDERS, MAP_EDGE_KINDS, MAP_LAYERS, TRACE_DIRECTIONS } from '../core/cartography.js';
+import {
+  GIT_PROVIDERS,
+  INVESTIGATION_GOALS,
+  MAP_EDGE_KINDS,
+  MAP_LAYERS,
+  TRACE_DIRECTIONS,
+  type InvestigationGoal,
+} from '../core/cartography.js';
+import { defaultGoal, INV_TABS, type InvTab } from './dashboard-cartography-investigation.js';
 import type { QaCrawlerClient } from '../core/client.js';
 import { API_TABS, type ApiTab } from './dashboard-cartography-apis.js';
 import { readIds } from './dashboard-cartography-graph.js';
@@ -357,6 +365,36 @@ export class CartographyController {
       api.cartography.trace(projectId, id, { direction, layers, kinds }, { signal }),
     );
     if (trace && (ui.traceFrom ?? ui.element) === id && ui.traceDir === direction) ui.trace = trace;
+  }
+
+  /** Les investigations enregistrées du projet (pour les reprendre). */
+  private async loadInvestigations(): Promise<void> {
+    const list = await this.fetch('investigation', (api, projectId, signal) =>
+      api.cartography.investigations(projectId, { signal }),
+    );
+    if (list) this.ui.invList = list;
+  }
+
+  /** Une étape d'investigation (lancer, reprendre une branche, relancer, relire) : son résultat remplace le précédent. */
+  private investigationStep(
+    run: (
+      api: NonNullable<ReturnType<CartographyHost['api']>>,
+      projectId: string,
+      signal: AbortSignal,
+    ) => Promise<NonNullable<CartographyUi['inv']>>,
+  ): void {
+    const ui = this.ui;
+    void this.run(async () => {
+      const inv = await this.fetch('investigation', run);
+      if (inv) {
+        ui.inv = inv;
+        ui.invPath = undefined;
+        ui.invTab = inv.breaks.length ? 'breaks' : inv.frontier.length ? 'frontier' : 'hypotheses';
+        await this.loadInvestigations();
+      }
+    }).then(() => {
+      this.host.root.querySelector<HTMLElement>('[data-inv-modal]')?.focus();
+    });
   }
 
   /** Recharger le parcours puis ajuster le graphe à la zone (sens, critères ou point de départ changés). */
@@ -847,6 +885,104 @@ export class CartographyController {
         this.reloadTrace();
         return true;
       }
+      case 'map-inv-open': {
+        // L'investigation part de l'élément choisi (ou du point recentré), avec l'objectif que sa sorte suggère.
+        const start = ui.traceFrom ?? ui.element;
+        if (!start) return true;
+        const node =
+          ui.trace?.nodes.find((n) => n.id === start) ??
+          (ui.elementSheet?.element.id === start ? ui.elementSheet.element : undefined);
+        if (ui.invStart !== start) {
+          const d = defaultGoal(node?.kind);
+          ui.invGoal = d.goal;
+          ui.invDir = ui.traceDir === 'UP' || ui.traceDir === 'BOTH' ? ui.traceDir : d.direction;
+          ui.inv = undefined;
+          ui.invPath = undefined;
+        }
+        ui.invStart = start;
+        ui.invStartName = node?.label ?? node?.name ?? start;
+        ui.invOpen = true;
+        this.host.paint();
+        this.host.root.querySelector<HTMLElement>('[data-inv-modal]')?.focus();
+        void this.run(() => this.loadInvestigations());
+        return true;
+      }
+      case 'map-inv-close':
+        ui.invOpen = false;
+        this.host.paint();
+        this.host.root.querySelector<HTMLElement>('[data-action="map-inv-open"]')?.focus();
+        return true;
+      case 'map-inv-full':
+        ui.invFull = !ui.invFull;
+        this.host.paint();
+        return true;
+      case 'map-inv-dir': {
+        const dir = target.dataset.dir ?? '';
+        if ((TRACE_DIRECTIONS as readonly string[]).includes(dir)) ui.invDir = dir as typeof ui.invDir;
+        this.host.paint();
+        return true;
+      }
+      case 'map-inv-run': {
+        const start = ui.invStart;
+        if (!start) return true;
+        const request = { start, goal: ui.invGoal, direction: ui.invDir, mode: ui.invMode };
+        this.investigationStep((api, projectId, signal) =>
+          api.cartography.investigate(projectId, request, { signal }),
+        );
+        return true;
+      }
+      case 'map-inv-expand': {
+        const id = ui.inv?.id;
+        const node = target.dataset.id ?? '';
+        if (!id || !node) return true;
+        this.investigationStep((api, projectId, signal) =>
+          api.cartography.expandInvestigation(projectId, id, node, undefined, { signal }),
+        );
+        return true;
+      }
+      case 'map-inv-rerun': {
+        const id = ui.inv?.id;
+        if (!id) return true;
+        this.investigationStep((api, projectId, signal) =>
+          api.cartography.rerunInvestigation(projectId, id, { signal }),
+        );
+        return true;
+      }
+      case 'map-inv-path':
+        ui.invPath = target.dataset.id ?? undefined;
+        this.host.paint();
+        return true;
+      case 'map-inv-home':
+        // Retour au départ : le premier chemin, au zoom normal.
+        ui.invPath = undefined;
+        ui.invZoom = 1;
+        this.host.paint();
+        return true;
+      case 'map-inv-zoom': {
+        const dir = Number(target.dataset.dir ?? '0');
+        ui.invZoom = Math.min(2, Math.max(0.4, Math.round((ui.invZoom + dir * 0.2) * 10) / 10));
+        this.host.paint();
+        return true;
+      }
+      case 'map-inv-tab': {
+        const tab = target.dataset.tab as InvTab;
+        if (INV_TABS.includes(tab)) ui.invTab = tab;
+        this.host.paint();
+        return true;
+      }
+      case 'map-inv-conf':
+        ui.invConf = target.dataset.conf === 'CONFIRMED' ? 'CONFIRMED' : 'ALL';
+        this.host.paint();
+        return true;
+      case 'map-inv-layer': {
+        const layer = target.dataset.layer as MapLayer;
+        if (!MAP_LAYERS.includes(layer)) return true;
+        ui.invLayers = ui.invLayers.includes(layer)
+          ? ui.invLayers.filter((l) => l !== layer)
+          : [...ui.invLayers, layer];
+        this.host.paint();
+        return true;
+      }
       case 'map-st-detail':
         // Le zoom et la position du graphe restent tels quels : la fenêtre se superpose.
         ui.detailNode = target.dataset.id ?? undefined;
@@ -1279,6 +1415,12 @@ export class CartographyController {
   keydown(event: KeyboardEvent): boolean {
     const target = event.target as HTMLElement | null;
     const ui = this.ui;
+    if (event.key === 'Escape' && ui.invOpen) {
+      ui.invOpen = false;
+      this.host.paint();
+      this.host.root.querySelector<HTMLElement>('[data-action="map-inv-open"]')?.focus();
+      return true;
+    }
     if (event.key === 'Escape' && ui.detailNode) {
       ui.detailNode = undefined;
       this.host.paint();
@@ -1436,6 +1578,26 @@ export class CartographyController {
         ui.structure = undefined;
         void this.run(() => this.loadStructure());
         return true;
+      case 'inv-goal':
+        if ((INVESTIGATION_GOALS as readonly string[]).includes(value))
+          ui.invGoal = value as InvestigationGoal;
+        return true;
+      case 'inv-mode':
+        ui.invMode = value === 'EXHAUSTIVE' ? 'EXHAUSTIVE' : 'FOCUSED';
+        return true;
+      case 'inv-q':
+        if (ui.invQ === value) return true;
+        ui.invQ = value;
+        if (committed) this.host.paint();
+        else this.searchLater(() => Promise.resolve());
+        return true;
+      case 'inv-load': {
+        if (!value) return true;
+        this.investigationStep((api, projectId, signal) =>
+          api.cartography.investigation(projectId, value, { signal }),
+        );
+        return true;
+      }
       case 'struct-q':
         // La recherche dans l'arbre est locale (l'arbre chargé) : seul l'affichage change.
         if (ui.structQ === value) return true;

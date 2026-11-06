@@ -119,6 +119,10 @@ import type {
   MapPage,
   MapSubgraph,
   MapTrace,
+  Investigation,
+  InvestigationBudget,
+  InvestigationRequest,
+  InvestigationSummary,
   MapEdgeKind,
   MapLayer,
   TraceDirection,
@@ -600,6 +604,25 @@ export interface QaCrawlerClient {
       },
       options?: MapRequestOptions,
     ): Promise<MapTrace>;
+    /** Lancer une investigation depuis un élément (objectif, sens, mode, budget). */
+    investigate(
+      projectId: string,
+      request: InvestigationRequest,
+      options?: MapRequestOptions,
+    ): Promise<Investigation>;
+    /** Les investigations enregistrées (STALE : le scan a changé depuis). */
+    investigations(projectId: string, options?: MapRequestOptions): Promise<InvestigationSummary[]>;
+    investigation(projectId: string, id: string, options?: MapRequestOptions): Promise<Investigation>;
+    /** « Explorer cette branche » : reprise ciblée depuis un nœud de la frontière. */
+    expandInvestigation(
+      projectId: string,
+      id: string,
+      node: string,
+      budget?: Partial<InvestigationBudget>,
+      options?: MapRequestOptions,
+    ): Promise<Investigation>;
+    /** Relancer sur le dernier scan (nouvelle investigation reliée à la précédente). */
+    rerunInvestigation(projectId: string, id: string, options?: MapRequestOptions): Promise<Investigation>;
     /** Les conditions d'affichage et d'activation du projet, avec leur décision (ou la cause). */
     conditions(
       projectId: string,
@@ -1450,6 +1473,31 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           'GET',
           `${project(projectId)}/cartography/element${queryString({ id })}`,
           undefined,
+          mapOptions.signal,
+        ),
+      investigate: (projectId, body, mapOptions = {}) =>
+        request('POST', `${project(projectId)}/cartography/investigations`, body, mapOptions.signal),
+      investigations: (projectId, mapOptions = {}) =>
+        request('GET', `${project(projectId)}/cartography/investigations`, undefined, mapOptions.signal),
+      investigation: (projectId, id, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/investigations/${encodeURIComponent(id)}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      expandInvestigation: (projectId, id, node, budget, mapOptions = {}) =>
+        request(
+          'POST',
+          `${project(projectId)}/cartography/investigations/${encodeURIComponent(id)}/expand`,
+          { node, ...(budget ? { budget } : {}) },
+          mapOptions.signal,
+        ),
+      rerunInvestigation: (projectId, id, mapOptions = {}) =>
+        request(
+          'POST',
+          `${project(projectId)}/cartography/investigations/${encodeURIComponent(id)}/rerun`,
+          {},
           mapOptions.signal,
         ),
       trace: (projectId, id, query = {}, mapOptions = {}) =>

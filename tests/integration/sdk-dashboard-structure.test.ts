@@ -136,6 +136,59 @@ describe('cartography structure routes', () => {
     const missing = await client.cartography.trace(project.id, 'BUTTON:front:nope').catch((e: unknown) => e);
     expect((missing as QaCrawlerError).status).toBe(404);
   });
+
+  it('investigations: run, list, read, resume a branch, refuse bad input, go stale after a new scan, run again', async () => {
+    const conditions = await client.cartography.conditions(project.id, { q: 'canValidate' });
+    const button = conditions.items[0]?.element.id ?? '';
+    const inv = await client.cartography.investigate(project.id, {
+      start: button,
+      direction: 'DOWN',
+      budget: { nodes: 3 },
+    });
+    expect(inv.request).toMatchObject({ start: button, goal: 'JOURNEY', direction: 'DOWN', mode: 'FOCUSED' });
+    expect(inv.state).toBe('PARTIAL');
+    expect(inv.metrics.visited).toBe(4);
+    const list = await client.cartography.investigations(project.id);
+    expect(list.map((x) => x.id)).toContain(inv.id);
+    expect((await client.cartography.investigation(project.id, inv.id)).paths).toEqual(inv.paths);
+    const cut = inv.frontier.find((f) => f.reason === 'BUDGET');
+    const resumed = await client.cartography.expandInvestigation(project.id, inv.id, cut?.node ?? '', {
+      nodes: 200,
+    });
+    expect(resumed.id).toBe(inv.id);
+    expect(resumed.metrics.visited).toBeGreaterThan(inv.metrics.visited);
+    expect(resumed.expansions).toEqual([cut?.node]);
+    const status = async (call: Promise<unknown>): Promise<number | undefined> =>
+      ((await call.catch((e: unknown) => e)) as QaCrawlerError).status;
+    expect(
+      await status(client.cartography.investigate(project.id, { start: button, goal: 'NOPE' as never })),
+    ).toBe(400);
+    expect(
+      await status(
+        client.cartography.investigate(project.id, { start: button, budget: { hops: 1 } as never }),
+      ),
+    ).toBe(400);
+    expect(await status(client.cartography.investigate(project.id, { start: 'BUTTON:front:nope' }))).toBe(
+      404,
+    );
+    expect(await status(client.cartography.investigation(project.id, 'inv-unknown'))).toBe(404);
+    expect(
+      await status(client.cartography.expandInvestigation(project.id, inv.id, 'BUTTON:front:nope')),
+    ).toBe(404);
+    // Un nouveau scan : l'investigation est périmée, sa reprise refusée ; la relance repart du dernier scan.
+    await client.cartography.scan(project.id);
+    for (let attempt = 0; attempt < 600; attempt += 1) {
+      if ((await client.cartography.currentScan(project.id)).state !== 'RUNNING') break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect((await client.cartography.investigation(project.id, inv.id)).state).toBe('STALE');
+    const other = resumed.frontier[0]?.node;
+    if (other)
+      expect(await status(client.cartography.expandInvestigation(project.id, inv.id, other))).toBe(409);
+    const again = await client.cartography.rerunInvestigation(project.id, inv.id);
+    expect(again.previous).toBe(inv.id);
+    expect(again.scanId).not.toBe(inv.scanId);
+  });
 });
 
 describe('Dashboard — Structure & Conditions, in Chromium', () => {
@@ -271,6 +324,46 @@ describe('Dashboard — Structure & Conditions, in Chromium', () => {
     await dashboard().locator('[data-action="map-st-dir"][data-dir="SHEET"]').click();
     await expect.poll(() => stats.count()).toBe(0);
     expect(calls.some((c) => c.startsWith('GET /cartography/graph'))).toBe(false);
+  });
+
+  it('the investigation window: run from the element, read a path and its breaks, close with Escape', async () => {
+    await dashboard().locator('[data-action="map-st-tab"][data-tab="graph"]').click();
+    await dashboard().locator('.st-row', { hasText: 'Validate' }).click();
+    await sheet().locator('h2', { hasText: 'Bouton : Validate' }).waitFor();
+    const open = dashboard().locator('[data-action="map-inv-open"]');
+    await open.click();
+    const modal = dashboard().locator('[data-inv-modal]');
+    await modal.waitFor();
+    await modal.locator('[data-action="map-inv-run"]').click();
+    await modal.locator('[data-inv-metrics]').waitFor();
+    expect(calls.some((c) => c === 'POST /cartography/investigations')).toBe(true);
+    // Les chemins sont regroupés par issue ; le premier est montré, étape par étape, avec ses preuves.
+    expect(await modal.locator('[data-action="map-inv-path"]').count()).toBeGreaterThan(0);
+    const steps = modal.locator('[data-inv-steps] li');
+    expect(await steps.count()).toBeGreaterThan(2);
+    expect(await steps.first().textContent()).toContain('Validate');
+    const second = modal.locator('[data-action="map-inv-path"]').nth(1);
+    if ((await second.count()) > 0) {
+      await second.click();
+      await expect.poll(() => second.getAttribute('aria-pressed')).toBe('true');
+    }
+    // Les onglets du bas : limites dites.
+    await modal.locator('[data-action="map-inv-tab"][data-tab="limits"]').click();
+    expect(await modal.locator('.inv-bottom').textContent()).toContain('analyse statique');
+    // La recherche ne garde que les chemins qui passent par l'élément cherché.
+    const search = modal.locator('input[data-map="inv-q"]');
+    await search.fill('validateRequest');
+    await search.press('Enter');
+    await expect.poll(async () => modal.locator('[data-action="map-inv-path"]').count()).toBeGreaterThan(0);
+    await search.fill('zzz-absent');
+    await search.press('Enter');
+    await expect.poll(async () => modal.locator('[data-action="map-inv-path"]').count()).toBe(0);
+    expect(await modal.textContent()).toContain('Aucun chemin ne correspond');
+    await page.keyboard.press('Escape');
+    await expect.poll(() => modal.count()).toBe(0);
+    await expect
+      .poll(() => open.evaluate((el) => el === (el.getRootNode() as Document | ShadowRoot).activeElement))
+      .toBe(true);
   });
 
   it('a network error on an element sheet is shown, and a new selection recovers', async () => {

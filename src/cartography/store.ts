@@ -3,6 +3,7 @@ import path from 'node:path';
 import type {
   CartographyConfig,
   CartographyModel,
+  Investigation,
   MapDecision,
   ScanRecord,
 } from '../sdk/core/cartography.js';
@@ -124,4 +125,44 @@ export async function listScans(projectDir: string): Promise<ScanRecord[]> {
     if (stored) records.push(stored.model.scan);
   }
   return records.sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id));
+}
+
+// ── Investigations : leur frontière est gardée, une reprise repart d'elle ───────────────────────────
+
+export const KEEP_INVESTIGATIONS = 50;
+const investigationsDir = (projectDir: string): string => path.join(dir(projectDir), 'investigations');
+const INVESTIGATION_ID = /^inv-[a-z0-9-]{1,60}$/;
+
+export async function writeInvestigation(projectDir: string, investigation: Investigation): Promise<void> {
+  if (!INVESTIGATION_ID.test(investigation.id)) throw new CartographyStoreError('invalid investigation id');
+  await writeJson(path.join(investigationsDir(projectDir), `${investigation.id}.json`), {
+    schema: SCHEMA,
+    investigation,
+  });
+  const all = await listInvestigations(projectDir);
+  for (const old of all.slice(KEEP_INVESTIGATIONS))
+    await rm(path.join(investigationsDir(projectDir), `${old.id}.json`), { force: true });
+}
+
+export async function readInvestigation(projectDir: string, id: string): Promise<Investigation | undefined> {
+  if (!INVESTIGATION_ID.test(id)) return undefined;
+  const raw = (await readJson(path.join(investigationsDir(projectDir), `${id}.json`))) as
+    { schema?: number; investigation?: Investigation } | undefined;
+  return migrate(raw, `the investigation ${id}`)?.investigation;
+}
+
+/** Les investigations enregistrées, les plus récemment mises à jour d'abord. */
+export async function listInvestigations(projectDir: string): Promise<Investigation[]> {
+  let names: string[];
+  try {
+    names = await readdir(investigationsDir(projectDir));
+  } catch {
+    return [];
+  }
+  const out: Investigation[] = [];
+  for (const name of names.filter((entry) => /^inv-[a-z0-9-]+\.json$/.test(entry))) {
+    const inv = await readInvestigation(projectDir, name.replace(/\.json$/, '')).catch(() => undefined);
+    if (inv) out.push(inv);
+  }
+  return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
 }

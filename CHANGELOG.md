@@ -4,6 +4,22 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : moteur d'investigation
+
+- Moteur d'investigation déterministe au-dessus du graphe (`src/cartography/investigate.ts`) : objectif,
+  sens, mode ciblé ou exhaustif, budget (nœuds, branche, nature, profondeur, voisins non causaux, temps),
+  exploration meilleur d'abord, natures de relation (cause, donnée, condition, contrat, composition) et sens
+  du flux, règles causales (composition, appartenance, lien non démontré), stratégies aux ruptures avec
+  tentatives mémorisées, hypothèses (candidates, étayées, contradictoires), cycles par composantes fortement
+  connexes avec leurs sorties, chemins démontrables par branche, mesures et limites.
+- Reprise ciblée d'une branche (« Explorer cette branche ») sans refaire ce qui est validé ; investigation
+  périmée après un nouveau scan, relance reliée à la précédente.
+- Routes `…/cartography/investigations` (lancer, lister, lire, reprendre, relancer) et client ; persistance
+  des 50 dernières investigations par projet.
+- Ruptures typées de l'analyseur du frontal conservées sur les méthodes (`detail.breaks`).
+- Fenêtre « Investigation » dans Structure & Conditions.
+- Extension facultative de pistes (`applyAdvice`) : désactivée, vérifiée par le graphe, jamais une preuve.
+
 ### Cartographie : traçabilité de bout en bout
 
 - Version d'analyseur `cartography-8`.

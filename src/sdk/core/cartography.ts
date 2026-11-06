@@ -1044,6 +1044,171 @@ export interface MapTrace extends MapSubgraph {
   scanId: string;
 }
 
+// ── Moteur d'investigation ──────────────────────────────────────────────────────────────────────
+
+/**
+ * La nature d'une relation pour une investigation : déclenchement ou appel (CAUSAL), donnée lue, écrite ou
+ * transmise (DATA), condition (CONTROL), correspondance de contrat (CONTRACT), composition ou appartenance
+ * (STRUCTURE), couverture par les scénarios (COVERAGE, jamais suivie). Une relation structurelle n'est
+ * jamais présentée comme une cause.
+ */
+export const RELATION_NATURES = ['CAUSAL', 'DATA', 'CONTROL', 'CONTRACT', 'STRUCTURE', 'COVERAGE'] as const;
+export type RelationNature = (typeof RELATION_NATURES)[number];
+
+/** Ce que l'investigation cherche : le parcours, la persistance, les endpoints, les points d'entrée, les conditions, les données. */
+export const INVESTIGATION_GOALS = [
+  'JOURNEY',
+  'PERSISTENCE',
+  'ENDPOINTS',
+  'ENTRY_POINTS',
+  'CONDITIONS',
+  'DATA',
+] as const;
+export type InvestigationGoal = (typeof INVESTIGATION_GOALS)[number];
+
+/** FOCUSED : priorisée, liens démontrés seulement ; EXHAUSTIVE : toutes les natures, liens non démontrés compris (marqués). */
+export type InvestigationMode = 'FOCUSED' | 'EXHAUSTIVE';
+
+export interface InvestigationBudget {
+  /** Nœuds visités au plus (toutes branches). */
+  nodes: number;
+  /** Nœuds au plus par branche (une branche part d'un voisin du point de départ). */
+  perBranch: number;
+  /** Relations suivies au plus par nature. */
+  perNature: number;
+  depth: number;
+  /** Voisins d'un même nœud suivis au plus pour les natures non causales (un store à cent propriétés n'est pas déplié). */
+  fanOut: number;
+  timeMs: number;
+}
+
+export interface InvestigationRequest {
+  start: string;
+  goal?: InvestigationGoal;
+  direction?: TraceDirection;
+  mode?: InvestigationMode;
+  budget?: Partial<InvestigationBudget>;
+}
+
+/** Une recherche faite à une rupture : sa stratégie, son issue, sa justification ; jamais refaite. */
+export interface InvestigationAttempt {
+  at: string;
+  strategy:
+    | 'CORRELATION'
+    | 'ANALYZER_DIAGNOSTIC'
+    | 'UNDEMONSTRATED_LINK'
+    | 'IMPLEMENTATIONS'
+    | 'CONSUMERS'
+    | 'CALLERS'
+    | 'SOURCE_STATE'
+    | 'ADVISOR';
+  outcome: 'RESOLVED' | 'CANDIDATES' | 'NOTHING';
+  detail: string;
+  found?: string[];
+}
+
+/** Une hypothèse : jamais un fait. Seule une relation démontrée du graphe peut la rendre SUPPORTED. */
+export interface InvestigationHypothesis {
+  id: string;
+  at: string;
+  claim: string;
+  status: 'CANDIDATE' | 'SUPPORTED' | 'REJECTED' | 'CONTRADICTORY';
+  candidates: string[];
+  evidence: string[];
+  /** ANALYZER : proposée par les analyseurs ; ADVISOR : par une extension (désactivée par défaut), puis vérifiée. */
+  source: 'ANALYZER' | 'ADVISOR';
+}
+
+/** Où et pourquoi une branche s'arrête sans aboutir, avec ce qui a été cherché et ce qui pourrait la résoudre. */
+export interface InvestigationBreak {
+  at: string;
+  code: string;
+  message: string;
+  hints: string[];
+  resolutions: string[];
+}
+
+export interface InvestigationFrontierItem {
+  node: string;
+  reason: 'BUDGET' | 'BRANCH_BUDGET' | 'NATURE_BUDGET' | 'DEPTH' | 'TIME' | 'FAN_OUT' | 'UNDEMONSTRATED';
+  /** Voisins non suivis depuis ce nœud. */
+  pending: number;
+  direction: 'UP' | 'DOWN';
+}
+
+/** Un chemin démontrable (jamais observé : l'analyse statique ne prouve pas une exécution). */
+export interface InvestigationPath {
+  id: string;
+  direction: 'UP' | 'DOWN';
+  nodes: string[];
+  edges: string[];
+  /** COMPLETE : il aboutit (persistance, API externe, fin locale, point d'entrée) ; PARTIAL : frontière ; BROKEN : rupture. */
+  status: 'COMPLETE' | 'PARTIAL' | 'BROKEN';
+  end: 'PERSISTENCE' | 'EXTERNAL' | 'ENDPOINT' | 'LOCAL' | 'ENTRY' | 'BREAK' | 'FRONTIER' | 'CYCLE';
+  confidence: MapConfidence;
+  conditions: string[];
+}
+
+export interface InvestigationCycle {
+  nodes: string[];
+  nature: 'CALL' | 'DATA' | 'STATE' | 'STRUCTURE';
+  /** Les sorties du cycle (nœuds hors cycle atteints depuis lui) : elles restent explorées. */
+  exits: string[];
+}
+
+export interface Investigation {
+  id: string;
+  scanId: string;
+  /** Les révisions des sources au moment de l'investigation. */
+  revisions: Record<string, string>;
+  createdAt: string;
+  updatedAt: string;
+  request: Required<Pick<InvestigationRequest, 'start' | 'goal' | 'direction' | 'mode'>> & {
+    budget: InvestigationBudget;
+  };
+  /** COMPLETE : aucune frontière ni rupture ; PARTIAL : budget, rupture ou source partielle ; STALE : le scan a changé. */
+  state: 'COMPLETE' | 'PARTIAL' | 'STALE';
+  nodes: MapNode[];
+  edges: MapEdge[];
+  natures: Record<string, RelationNature>;
+  levels: Record<string, number>;
+  paths: InvestigationPath[];
+  pathsTruncated: boolean;
+  breaks: InvestigationBreak[];
+  hypotheses: InvestigationHypothesis[];
+  attempts: InvestigationAttempt[];
+  frontier: InvestigationFrontierItem[];
+  cycles: InvestigationCycle[];
+  /** Les branches reprises depuis la frontière (« Explorer cette branche »). */
+  expansions: string[];
+  /** L'état de l'exploration (coût, branche) de chaque nœud visité : une reprise repart de lui sans tout refaire. */
+  trail: Record<string, { cost: number; branch: string; causal?: boolean }>;
+  /** L'investigation dont celle-ci est la reprise sur un nouveau scan. */
+  previous?: string;
+  metrics: {
+    visited: number;
+    useful: number;
+    searches: number;
+    resolved: number;
+    remaining: number;
+    ms: number;
+    heapKb?: number;
+  };
+  limitations: string[];
+}
+
+export type InvestigationSummary = Pick<
+  Investigation,
+  'id' | 'scanId' | 'createdAt' | 'updatedAt' | 'state'
+> & {
+  start: string;
+  startName: string;
+  goal: InvestigationGoal;
+  direction: TraceDirection;
+  paths: number;
+  breaks: number;
+};
+
 export interface FieldScenario {
   scenario: string;
   feature?: string;

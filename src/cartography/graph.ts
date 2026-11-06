@@ -402,6 +402,7 @@ export function buildGraph(input: GraphInput): GraphOutput {
         );
       // Les stores et flux RxJS : méthodes traversées (composant, store, service) et flux.
       const diagnosticsOf = new Map<string, string[]>();
+      const breaksOf = new Map<string, string[]>();
       for (const d of ui.diagnostics ?? []) {
         const owner = d.from.split('#')[0] ?? '';
         // Pour l'écran, chaque rupture dit de quelle action elle part ; pour la méthode, la rupture seule.
@@ -410,6 +411,11 @@ export function buildGraph(input: GraphInput): GraphOutput {
           [d.from, d.message],
         ] as const)
           diagnosticsOf.set(key, [...new Set([...(diagnosticsOf.get(key) ?? []), text])].slice(0, 6));
+        // La rupture typée (code, symbole où elle s'arrête), lue par le moteur d'investigation.
+        breaksOf.set(
+          d.from,
+          [...new Set([...(breaksOf.get(d.from) ?? []), `${d.code}|${d.at}|${d.message}`])].slice(0, 6),
+        );
       }
       for (const sym of ui.symbols ?? []) {
         const stream = sym.stream;
@@ -464,6 +470,7 @@ export function buildGraph(input: GraphInput): GraphOutput {
         const created = nodes.get(id)?.detail;
         if (created && stream?.consumers) created.consumers = stream.consumers;
         if (created && diagnosticsOf.get(sym.id)) created.diagnostics = diagnosticsOf.get(sym.id) ?? [];
+        if (created && breaksOf.get(sym.id)) created.breaks = breaksOf.get(sym.id) ?? [];
       }
       for (const [owner, messages] of diagnosticsOf) {
         const detail = nodes.get(`COMPONENT:${src}:${owner}`)?.detail;

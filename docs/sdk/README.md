@@ -1347,6 +1347,63 @@ inconnue.
 Un bouton qui déclenche un appel dont l'`Observable` n'est jamais souscrit ne le démontre pas : le
 raccourci bouton → méthode appelée prend la confiance de l'appel lui-même.
 
+#### Moteur d'investigation
+
+Au-dessus du graphe du scan (sans relire les sources ni rien exécuter), une investigation part d'un élément
+(bouton, conteneur, méthode, flux, endpoint, entité…) avec un **objectif** (`JOURNEY`, `PERSISTENCE`,
+`ENDPOINTS`, `ENTRY_POINTS`, `CONDITIONS`, `DATA`), un **sens** (`DOWN`, `UP`, `BOTH`), un **mode** (`FOCUSED` :
+liens démontrés seulement ; `EXHAUSTIVE` : tout, marqué) et un **budget** (nœuds, par branche, par nature de
+relation, profondeur, voisins non causaux d'un même nœud, temps). Elle suit une boucle déterministe :
+planifier (pondérer les relations selon l'objectif), rechercher (meilleur d'abord), résoudre les ruptures
+par des stratégies, vérifier, évaluer, puis s'arrêter en disant pourquoi.
+
+- **Nature des relations** : `CAUSAL` (déclenche, appelle, sert), `DATA`, `CONTROL`, `CONTRACT`, `STRUCTURE`
+  (composition, appartenance : jamais une cause), `COVERAGE` (jamais suivie). « A dépend de B » (donnée
+  calculée, condition qui lit, conteneur affiché si) fait circuler B vers A : l'aval suit ce flux.
+- **Règles causales** : vers l'aval, la composition n'est suivie qu'avant toute cause (un conteneur révélé
+  par une action ne déclenche pas ses boutons : il faut un autre événement) ; vers l'amont, une méthode n'est
+  pas « appelée » par sa classe ; un lien non démontré n'est pas suivi en mode ciblé (il devient une
+  hypothèse, sur la frontière) ; les voisins non causaux d'un même nœud sont plafonnés (`fanOut`), le reste
+  reste reprenable.
+- **Stratégies aux ruptures** (chacune tentée une fois, avec son issue) : corrélation inter-couches
+  (liaison non confirmée → rupture et candidats ; issue qui change selon le profil → hypothèse
+  `CONTRADICTORY`), diagnostic typé de l'analyseur (`OBSERVABLE_NOT_SUBSCRIBED`, `CYCLE`, `LIMIT`,
+  `URL_DYNAMIC`…), lien non démontré, implémentations de même nom (candidates, jamais confirmées),
+  consommateurs d'un flux (`SUBJECT_NO_CONSUMER`), appelants (`NO_CALLER` ; une méthode générique appelée par
+  ses versions contextualisées n'est pas une rupture), état de la source (`SOURCE_PARTIAL`).
+- **Résultat** (`Investigation`) : sous-graphe, nature de chaque relation, chemins démontrables par branche
+  (aboutis : données, API externe, fin locale, point d'entrée ; partiels : frontière, cycle ; rompus), avec
+  leur confiance la plus faible et leurs conditions ; ruptures (code, indices, pistes) ; hypothèses
+  (`CANDIDATE`, `SUPPORTED`, `CONTRADICTORY`) ; recherches faites ; frontière (`BUDGET`, `BRANCH_BUDGET`,
+  `NATURE_BUDGET`, `DEPTH`, `TIME`, `FAN_OUT`, `UNDEMONSTRATED`) ; cycles (composantes fortement connexes, avec
+  leurs sorties, qui restent explorées) ; mesures (visités, relations utiles, recherches, ruptures levées,
+  branches restantes, durée, mémoire) ; limites. Un chemin est démontrable, jamais « observé ».
+- **Reprise** : « Explorer cette branche » repart d'un nœud de la frontière avec un budget neuf, sans refaire
+  ce qui est validé ; un lien non démontré ainsi ouvert est suivi et reste marqué inconnu. Une reprise sur
+  un autre scan est refusée (409) : l'investigation est **périmée** (`STALE`) ; « Relancer » en crée une
+  nouvelle sur le dernier scan, reliée à la précédente (`previous`).
+- **Extension facultative** (`applyAdvice`) : une extension externe peut proposer des pistes à partir des
+  seuls identifiants ; aucune n'est intégrée par défaut ; une piste n'est `SUPPORTED` que si une relation
+  démontrée du graphe la confirme déjà, et ne crée jamais de relation.
+
+| Route (`…/cartography/investigations`)   | Client                                                 | Droit |
+| ---------------------------------------- | ------------------------------------------------------ | ----- |
+| `POST` (corps : `InvestigationRequest`)  | `investigate(projectId, request)`                      | RUN   |
+| `GET`                                    | `investigations(projectId)` (résumés, `STALE` signalé) | VIEW  |
+| `GET /:id`                               | `investigation(projectId, id)`                         | VIEW  |
+| `POST /:id/expand` (`{ node, budget? }`) | `expandInvestigation(projectId, id, node, budget?)`    | RUN   |
+| `POST /:id/rerun`                        | `rerunInvestigation(projectId, id)`                    | RUN   |
+
+Les investigations sont gardées dans `cartography/investigations/` du projet (les 50 plus récentes). Dans
+**Structure & Conditions**, « Investiguer » ouvre une grande fenêtre (plein écran possible) : objectif, sens,
+mode, historique ; chemins groupés par issue, recherche, confiance, couches ; pour le chemin choisi, son
+graphe (zoom, retour au départ) et ses étapes (nature, relation, confiance, condition, preuve, « Voir le
+code ») ; en bas, ruptures, hypothèses, branches restantes (« Explorer cette branche »), recherches, cycles,
+limites. Échap la ferme et rend le focus au bouton.
+
+Les ruptures typées de l'analyseur du frontal sont lues sur les méthodes : un scan fait avant cette version
+ne les porte pas, relancez-le.
+
 #### Stores et flux RxJS du frontal
 
 Un écran Angular dont l'état vit dans des stores maison (ni NgRx, ni convention de nommage) est suivi

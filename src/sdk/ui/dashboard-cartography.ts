@@ -25,7 +25,12 @@ import type {
   MapTrace,
   SourceScan,
   TraceDirection,
+  Investigation,
+  InvestigationGoal,
+  InvestigationMode,
+  InvestigationSummary,
 } from '../core/cartography.js';
+import { INVESTIGATION_CSS, type InvTab } from './dashboard-cartography-investigation.js';
 import type { ScenarioView } from '../core/contracts.js';
 import { can } from './dashboard-access.js';
 import { mapStrings, type MapStrings } from './dashboard-cartography-i18n.js';
@@ -107,6 +112,7 @@ export type MapPane =
   | 'structure'
   | 'element'
   | 'trace'
+  | 'investigation'
   | 'conditions'
   | 'actions';
 
@@ -223,6 +229,22 @@ export interface CartographyUi {
   traceKinds: MapEdgeKind[];
   /** L'élément dont la fenêtre de détail est ouverte : le zoom et la position du graphe ne changent pas. */
   detailNode?: string;
+  /** La fenêtre d'investigation : demande (départ, objectif, sens, mode), résultat, chemin choisi, critères. */
+  invOpen: boolean;
+  invFull: boolean;
+  invStart?: string;
+  invStartName?: string;
+  invGoal: InvestigationGoal;
+  invDir: TraceDirection;
+  invMode: InvestigationMode;
+  inv?: Investigation;
+  invList?: InvestigationSummary[];
+  invPath?: string;
+  invTab: InvTab;
+  invQ: string;
+  invConf: 'ALL' | 'CONFIRMED';
+  invLayers: MapLayer[];
+  invZoom: number;
   /** Les listes du projet : conditions, actions. */
   conditionsPage?: MapPage<ConditionRow>;
   condCriteria: ListCriteria;
@@ -284,6 +306,16 @@ export const emptyCartographyUi = (): CartographyUi => ({
   traceDir: 'SHEET',
   traceLayers: [],
   traceKinds: [],
+  invOpen: false,
+  invFull: false,
+  invGoal: 'JOURNEY',
+  invDir: 'DOWN',
+  invMode: 'FOCUSED',
+  invTab: 'breaks',
+  invQ: '',
+  invConf: 'ALL',
+  invLayers: [],
+  invZoom: 1,
   condCriteria: emptyCriteria(10),
   actCriteria: emptyCriteria(10),
   srcClosed: [],
@@ -1374,7 +1406,7 @@ function evidencePanel(m: MapStrings, ui: CartographyUi): string {
   return `<aside class="map-ev" role="dialog" aria-label="${esc(e ? m.evidenceTitle(e.file, e.line) : m.evidence)}"><div class="card-h"><h2 class="mono">${esc(e ? `${e.source} · ${m.evidenceTitle(e.file, e.line)}` : m.evidence)}</h2><button class="btn small ghost icon-only" data-action="map-evidence-close" aria-label="${esc(m.closeEvidence)}">${icon('close')}</button></div>${code}</aside>`;
 }
 
-export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}${SCAN_CSS}
+export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}${SCAN_CSS}${INVESTIGATION_CSS}
 .sd-note{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sd-note span{flex:1 1 auto}
 .map{display:flex;flex-direction:column;gap:14px}
 .map-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}

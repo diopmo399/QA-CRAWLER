@@ -15,6 +15,7 @@ import type {
   TabSheet,
 } from '../core/cartography.js';
 import { MAP_EDGE_KINDS, MAP_LAYERS, TRACE_DIRECTIONS } from '../core/cartography.js';
+import { investigationModal } from './dashboard-cartography-investigation.js';
 import type { ApiViewHelpers } from './dashboard-cartography-apis.js';
 import { breakable, shortPath } from './dashboard-cartography-graph.js';
 import type { MapStrings } from './dashboard-cartography-i18n.js';
@@ -249,7 +250,9 @@ function traceBar(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, trace: Ma
         `<button class="chip small" data-action="map-st-dir" data-dir="${d}" aria-pressed="${String(ui.traceDir === d)}">${esc(m.st.dirs[d] ?? d)}</button>`,
     )
     .join('')}</div>`;
-  if (ui.traceDir === 'SHEET') return `<div class="st-tbar">${dirs}</div>`;
+  const investigate = `<button class="btn small" data-action="map-inv-open" ${h.canRun ? '' : 'disabled'}>${icon('search')}<span>${esc(m.inv.open)}</span></button>`;
+  if (ui.traceDir === 'SHEET')
+    return `<div class="st-tbar"><div class="st-dirs">${dirs}${investigate}</div></div>`;
   if (!trace)
     return `<div class="st-tbar">${dirs}${ui.errors.trace ? h.paneError(ui.errors.trace) : h.spinner()}</div>`;
   const name = (id: string): string => {
@@ -290,7 +293,7 @@ function traceBar(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, trace: Ma
           .join('')}</ul>`
       : `<p class="mu small">${esc(m.st.noBreaks)}</p>`
   }</div>`;
-  return `<div class="st-tbar">${dirs}${criteria}${stats}${truncated}${frontier}${breaks}</div>`;
+  return `<div class="st-tbar"><div class="st-dirs">${dirs}${investigate}</div>${criteria}${stats}${truncated}${frontier}${breaks}</div>`;
 }
 
 /** Le chemin du point de départ à un nœud, par les liens du parcours (le plus court). */
@@ -659,7 +662,7 @@ function rightSheet(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers): string
 
 /** L'onglet entier : arbre, centre (graphe, conditions, actions), fiche de l'élément. */
 export function structureTab(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers): string {
-  return `<div class="st-grid">${treeCard(m, ui, h)}${centerCard(m, ui, h)}${rightSheet(m, ui, h)}</div>`;
+  return `<div class="st-grid">${treeCard(m, ui, h)}${centerCard(m, ui, h)}${rightSheet(m, ui, h)}</div>${investigationModal(m, ui, h)}`;
 }
 
 export const STRUCTURE_CSS = `

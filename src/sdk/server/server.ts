@@ -241,6 +241,11 @@ import {
   mapConditions,
   mapElement,
   mapTrace,
+  startInvestigation,
+  mapInvestigations,
+  mapInvestigation,
+  expandInvestigationOf,
+  rerunInvestigation,
   traceOptions,
   mapStructure,
   mapNeighbours,
@@ -4397,6 +4402,29 @@ async function handleCartography(
       refuseArchived(project);
       json(await addDecision(project, await readJson(request), authorOf(request)), 201);
       return;
+    }
+    // Les investigations : lancer, lister, lire, reprendre une branche, relancer sur le dernier scan.
+    if (part === 'investigations') {
+      if (item === undefined && method === 'POST') {
+        json(await startInvestigation(project, await readJson(request)), 201);
+        return;
+      }
+      if (item === undefined && method === 'GET') {
+        json(await mapInvestigations(project));
+        return;
+      }
+      if (item !== undefined && action === undefined && method === 'GET') {
+        json(await mapInvestigation(project, item));
+        return;
+      }
+      if (item !== undefined && action === 'expand' && method === 'POST') {
+        json(await expandInvestigationOf(project, item, await readJson(request)));
+        return;
+      }
+      if (item !== undefined && action === 'rerun' && method === 'POST') {
+        json(await rerunInvestigation(project, item), 201);
+        return;
+      }
     }
     if (part === 'impact' && item === undefined && method === 'POST') {
       json(await impactOf(project, await readOptionalJson(request)));
