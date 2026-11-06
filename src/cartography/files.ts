@@ -77,9 +77,12 @@ const IGNORED_FILE =
 const LOCK_FILE = /^(package-lock|npm-shrinkwrap)\.json$|^pnpm-lock\.ya?ml$/;
 /** Combien de fichiers trop gros sont nommés dans la note du scan. */
 const NAMED_LARGE = 5;
-/** Les manifestes et la configuration (modules, dépendances, préfixes, proxys) : lus avant tout. */
+/**
+ * Les manifestes et la configuration (modules, dépendances, préfixes, proxys) : lus avant tout. Testé sur un
+ * chemin du système : séparateur `/` ou `\` (Windows).
+ */
 const MANIFEST =
-  /(^|\/)(pom\.xml|package\.json|angular\.json|tsconfig[\w.-]*\.json|[\w-]*\.gradle(\.kts)?|application[\w-]*\.(ya?ml|properties)|bootstrap[\w-]*\.(ya?ml|properties)|proxy[\w.-]*\.(json|js|conf))$/i;
+  /(^|[\\/])(pom\.xml|package\.json|angular\.json|tsconfig[\w.-]*\.json|[\w-]*\.gradle(\.kts)?|application[\w-]*\.(ya?ml|properties)|bootstrap[\w-]*\.(ya?ml|properties)|proxy[\w.-]*\.(json|js|conf))$/i;
 /** Le code et les gabarits : lus avant les autres fichiers de données (traductions, exemples…). */
 const CODE = /\.(ts|tsx|js|jsx|vue|html|java|kt|cs|graphql|gql|sql)$/i;
 /** L'ordre de lecture sous une limite : manifestes, puis code, puis données ; puis le chemin (déterministe). */
