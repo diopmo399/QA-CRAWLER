@@ -560,22 +560,64 @@ function chainCard(m: MapStrings, detail: FeatureDetail | undefined): string {
  * répétée ; les étapes sœurs identiques sont regroupées ; la profondeur est bornée et le dit.
  */
 const JOURNEY_KINDS = new Set(['DISPLAYS', 'CALLS', 'TRIGGERS', 'READS', 'WRITES', 'CONTAINS']);
+/** L'ordre des enfants : la structure de l'écran (onglets, éléments) avant les appels. */
+const JOURNEY_ORDER: Record<string, number> = {
+  CONTAINS: 0,
+  DISPLAYS: 1,
+  TRIGGERS: 2,
+  CALLS: 3,
+  READS: 4,
+  WRITES: 5,
+};
 const JOURNEY_DEPTH = 12;
 function journeyCard(m: MapStrings, state: MapState, detail: FeatureDetail): string {
   const j = m.journey;
   const nodes = new Map(detail.nodes.map((n) => [n.id, n]));
+  const triggered = detail.edges
+    .filter((e) => e.kind === 'TRIGGERS' && nodes.get(e.from)?.kind === 'BUTTON')
+    .map((e) => e.to);
+  // Les conditions d'un élément (visible si, activé si) sont portées par sa ligne, pas développées.
+  const conditionsOf = new Map<string, string[]>();
+  for (const e of detail.edges)
+    if (e.kind === 'VISIBLE_WHEN' || e.kind === 'ENABLED_WHEN') {
+      const c = nodes.get(e.to);
+      // L'expression est montrée telle qu'écrite : [disabled], [hidden] et else disent quand l'élément est bloqué.
+      const negated = c?.negated === true;
+      const prefix =
+        e.kind === 'ENABLED_WHEN'
+          ? negated
+            ? j.disabledIf
+            : j.enabledIf
+          : negated
+            ? j.hiddenIf
+            : j.visibleIf;
+      const text = `${prefix} ${c?.label ?? c?.name ?? ''}`;
+      conditionsOf.set(e.from, [...(conditionsOf.get(e.from) ?? []), text]);
+    }
   const out = new Map<string, MapEdge[]>();
   const into = new Set<string>();
   for (const e of detail.edges) {
     if (!JOURNEY_KINDS.has(e.kind) || !nodes.has(e.from) || !nodes.has(e.to)) continue;
-    // L'appartenance (CONTAINS) ne compte que pour descendre d'un écran à ses composants, jamais vers un champ.
-    if (e.kind === 'CONTAINS' && nodes.get(e.to)?.kind !== 'COMPONENT') continue;
+    // L'appartenance (CONTAINS) descend vers les onglets, conteneurs, éléments interactifs et composants
+    // affichés, jamais vers un champ.
+    if (e.kind === 'CONTAINS' && !['COMPONENT', 'CONTAINER', 'BUTTON'].includes(nodes.get(e.to)?.kind ?? ''))
+      continue;
+    // Une méthode déclenchée par un élément de l'interface est montrée sous cet élément, pas sous le composant.
+    if (
+      e.kind === 'CALLS' &&
+      nodes.get(e.from)?.kind === 'COMPONENT' &&
+      triggered.some((t) => t === e.to || t.startsWith(`${e.to}⟨`))
+    )
+      continue;
     out.set(e.from, [...(out.get(e.from) ?? []), e]);
     into.add(e.to);
   }
   if (out.size === 0) return '';
+  // Une méthode générique dont seules les versions contextuelles sont déclenchées n'est pas une entrée :
+  // ses branches sont déjà montrées sous chaque élément, avec la valeur transmise.
   const roots = detail.nodes
     .filter((n) => out.has(n.id) && !into.has(n.id))
+    .filter((n) => !triggered.some((t) => t.startsWith(`${n.id}⟨`)))
     .sort((a, b) => (a.kind === 'ROUTE' ? -1 : b.kind === 'ROUTE' ? 1 : 0));
   const expanded = new Set<string>();
   const badges = (e: MapEdge): string => {
@@ -593,7 +635,25 @@ function journeyCard(m: MapStrings, state: MapState, detail: FeatureDetail): str
   };
   const line = (id: string, e: MapEdge | undefined, times: number): string => {
     const n = nodes.get(id);
-    const kind = j.kinds[n?.kind ?? ''] ?? n?.kind ?? '';
+    const technical = n?.kind === 'METHOD' && e?.kind === 'CALLS' && nodes.get(e.from)?.kind === 'COMPONENT';
+    const kind = technical
+      ? j.technical
+      : n?.tab === 'TAB'
+        ? j.kinds.TAB
+        : n?.tab === 'GROUP'
+          ? j.kinds.TAB_GROUP
+          : (j.kinds[n?.kind ?? ''] ?? n?.kind ?? '');
+    const conds =
+      (conditionsOf.get(id) ?? [])
+        .map((c) => `<span class="jr-b cond" title="${esc(j.legend.cond)}">${esc(c)}</span>`)
+        .join('') +
+      (n?.unresolved
+        ? `<span class="jr-b warn" title="${esc(n.unresolved)}">${esc(j.unresolved)}</span>`
+        : '');
+    const event =
+      e?.kind === 'TRIGGERS'
+        ? `<span class="jr-b ev" title="${esc(j.legend.ev)}">${esc(e.reason)}</span>`
+        : '';
     const ev = e?.evidence[0];
     const code = ev?.file
       ? evidenceLink(m, ev, state, `${ev.file.split('/').pop() ?? ev.file}:${String(ev.line ?? 1)}`)
@@ -601,7 +661,7 @@ function journeyCard(m: MapStrings, state: MapState, detail: FeatureDetail): str
     const ctx = e?.detail?.context
       ? `<span class="jr-b ctx" title="${esc(j.legend.ctx)}">${esc(e.detail.context)}</span>`
       : '';
-    return `<span class="jr-l"><span class="jr-k">${esc(kind)}</span> <b>${esc(n?.label ?? n?.name ?? id)}</b>${times > 1 ? ` <span class="mu">${esc(j.times(times))}</span>` : ''} ${e ? conf(m, e.confidence) : ''}${ctx}${e ? badges(e) : ''} ${code}</span>`;
+    return `<span class="jr-l"><span class="jr-k">${esc(kind)}</span> <b>${esc(n?.label ?? n?.name ?? id)}</b>${times > 1 ? ` <span class="mu">${esc(j.times(times))}</span>` : ''} ${e ? conf(m, e.confidence) : ''}${conds}${event}${ctx}${e ? badges(e) : ''} ${code}</span>`;
   };
   const branch = (id: string, e: MapEdge | undefined, depth: number, times: number): string => {
     const children = out.get(id) ?? [];
@@ -620,7 +680,9 @@ function journeyCard(m: MapStrings, state: MapState, detail: FeatureDetail): str
       if (g) g.count += 1;
       else groups.set(key, { edge: c, count: 1 });
     }
-    const list = [...groups.values()];
+    const list = [...groups.values()].sort(
+      (a, b) => (JOURNEY_ORDER[a.edge.kind] ?? 9) - (JOURNEY_ORDER[b.edge.kind] ?? 9),
+    );
     const shown = list.slice(0, 30);
     const rest = list.length - shown.length;
     const inner = shown.map((g) => branch(g.edge.to, g.edge, depth + 1, g.count)).join('');
@@ -1343,6 +1405,8 @@ export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_C
 .jr-b.async{background:#eef0fd;color:#3b3fa0;border-color:#cfd2f6}
 .jr-b.data{background:#e6f4f7;color:#0b5d6e;border-color:#bfe3ea}
 .jr-b.ctx{background:#eef8f0;color:#1d6b33;border-color:#c5e6cf}
+.jr-b.ev{background:#f3edfd;color:#5b2ca0;border-color:#dccbf6;font-family:var(--mono,ui-monospace,monospace)}
+.jr-b.warn{background:#fdecec;color:#9b1c1c;border-color:#f5c6c6}
 .jr-legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .map-link{padding:8px;border:1px solid var(--qa-color-border);border-radius:8px}
 .map-filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}

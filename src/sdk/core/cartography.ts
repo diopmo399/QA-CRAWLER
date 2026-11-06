@@ -165,7 +165,16 @@ export interface MapEdge {
    * contexte d'appel retenu pour une méthode générique. Une relation conditionnelle ou asynchrone n'est
    * jamais présentée comme exécutée à coup sûr.
    */
-  detail?: { condition?: string; async?: string; data?: string; context?: string };
+  detail?: {
+    condition?: string;
+    async?: string;
+    data?: string;
+    context?: string;
+    /** DIRECT, AFTER_RESULT, ON_ERROR, ON_COMPLETE, ON_EVENT, DEFERRED, UNDEMONSTRATED. */
+    timing?: string;
+    concurrent?: boolean;
+    cancellable?: boolean;
+  };
 }
 
 /** Ce qu'une technologie a donné pour une source. */
@@ -695,7 +704,16 @@ export interface FeatureDetail {
   related: { id: string; name: string; via: string[] }[];
   /** Les liens entre les nœuds de la fonctionnalité (bornés). */
   edges: MapEdge[];
-  nodes: Pick<MapNode, 'id' | 'kind' | 'layer' | 'name' | 'label'>[];
+  /**
+   * `tab` : un conteneur qui est un groupe d'onglets (GROUP) ou un onglet (TAB). `negated` : une condition écrite
+   * pour bloquer l'élément ([disabled], [hidden], else), vraie quand l'élément est désactivé ou masqué.
+   * `unresolved` : un élément interactif dont l'action n'a pas pu être reliée à une méthode (raison).
+   */
+  nodes: (Pick<MapNode, 'id' | 'kind' | 'layer' | 'name' | 'label'> & {
+    tab?: string;
+    negated?: true;
+    unresolved?: string;
+  })[];
   truncated: boolean;
 }
 

@@ -36,7 +36,8 @@ import { buildGraph } from './graph.js';
  * version (ou d'avant, sans version) ne sont jamais repris par un scan incrémental.
  */
 // 3 : onglets (groupes, libellés, chargement différé, routes) et composants affichés dans d'autres.
-export const ANALYZERS = `cartography-3;${RXJS_ANALYZER}`;
+// 4 : éléments interactifs (liens, input, sorties de composants, ngSubmit) reliés à leur cible et contexte.
+export const ANALYZERS = `cartography-4;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;

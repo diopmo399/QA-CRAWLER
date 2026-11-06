@@ -13,7 +13,7 @@ import type { Loc, UiCall, UiDiagnostic, UiLink, UiSymbol } from './facts.js';
  * réponses qui alimentent un flux. Un Observable est paresseux : un appel dont le résultat n'est jamais
  * souscrit n'est pas présenté comme exécuté. Rien n'est exécuté ; une URL non résolue garde son expression.
  */
-export const RXJS_ANALYZER = 'rxjs-2';
+export const RXJS_ANALYZER = 'rxjs-3';
 
 const SUBJECTS = new Set(['Subject', 'BehaviorSubject', 'ReplaySubject', 'AsyncSubject']);
 const CREATION = new Set([
@@ -126,6 +126,11 @@ interface Continuation {
   after: string;
   /** Les noms qui reçoivent le résultat (paramètres du rappel, variable de l'await). */
   binds: string[];
+  /** La chaîne qui porte le rappel est souscrite, rendue à l'appelant, ou jamais souscrite. */
+  run?: 'SUBSCRIBED' | 'RETURNED' | 'NONE';
+  /** Les filter() et opérateurs d'arrêt placés avant, dans la même chaîne. */
+  filters?: string[];
+  stops?: string[];
 }
 interface CallSite {
   target: string;
@@ -137,6 +142,13 @@ interface CallSite {
   cont?: Continuation[];
   /** Les identifiants lus par les arguments (pour la provenance des données). */
   uses?: string[];
+  /** Le récepteur est un alias local (`const s = this.store`) : son nom, et le nombre de cibles possibles. */
+  alias?: string;
+  alternatives?: number;
+  /** Une affectation de l'alias n'a pas pu être résolue : la liste des cibles peut être incomplète. */
+  partial?: boolean;
+  /** Une méthode détachée de son objet (`const { dispatch } = this.store`) : `this` n'est pas garanti. */
+  unbound?: boolean;
   loc: Loc;
 }
 interface HttpSite {
@@ -144,6 +156,8 @@ interface HttpSite {
   verbParam?: number;
   url?: TS.Expression;
   use: Use;
+  guards?: Guard[];
+  cont?: Continuation[];
   loc: Loc;
 }
 interface Emit {
@@ -171,6 +185,16 @@ interface Method {
   locals: Map<string, TS.Expression>;
   /** `const { type } = action` : type → action.type. */
   aliases: Map<string, string>;
+  /** Toutes les valeurs affectées à une variable locale (const, let, var, réaffectations). */
+  assigns?: Map<string, TS.Expression[]>;
+  /** Le type écrit des paramètres (`store: OrderStore`). */
+  paramTypes?: Map<string, string>;
+  /** Les expressions rendues au premier niveau du corps (return, ou corps d'une fonction fléchée). */
+  returns?: TS.Expression[];
+  /** La dépendance rendue telle quelle (`getStore() { return this.store; }`). */
+  returnRef?: string;
+  /** Une propriété fléchée (`run = () => …`) garde son `this` même détachée. */
+  arrow?: boolean;
   calls: CallSite[];
   emits: Emit[];
   http: HttpSite[];
@@ -222,8 +246,19 @@ export interface RxjsFacts {
   calls: UiCall[];
   /** Les méthodes d'enveloppe HTTP (URL reçue en paramètre) : l'appel réel est celui de leur appelant. */
   wrappers: string[];
+  /** Les méthodes génériques dont les appels HTTP sont distingués par branche (`Classe#méthode@L12`). */
+  branched: string[];
   /** Le flux lu par un membre d'un composant (`canActivate$`, ou `store` + `status$`). */
   streamOf: (component: string, member: string, path: readonly string[]) => string | undefined;
+  /**
+   * Ce que déclenche une expression d'événement du gabarit (`(click)="run(OrderAction.Submit)"`,
+   * `store.dispatch('X')`) : la méthode appelée, vue dans son contexte quand ses arguments sont démontrables
+   * (littéraux, constantes ; jamais l'état modifiable du composant ni $event).
+   */
+  entryOf: (
+    component: string,
+    expression: string,
+  ) => { to: string; method: string; context?: string; unresolved?: string }[];
   /** Les méthodes de composant appelées par le gabarit ou le cycle de vie. */
   warnings: string[];
 }
@@ -244,6 +279,7 @@ export function analyzeRxjs(
   const byPath = new Map(files.map((f) => [f.path, f]));
   const classes = new Map<string, ClassInfo>();
   const constants = new Map<string, string | null>();
+  const functions = new Map<string, ModuleFn | null>();
   for (const file of files) {
     if (!/\.ts$/.test(file.path) || /\.(spec|test|d)\.ts$/.test(file.path)) continue;
     if (file.text.length > MAX_FILE_BYTES) {
@@ -251,7 +287,7 @@ export function analyzeRxjs(
       continue;
     }
     try {
-      for (const info of classesOf(ts, file, byPath, constants))
+      for (const info of classesOf(ts, file, byPath, constants, functions))
         if (classes.has(info.name)) warnings.push(`class ${info.name} declared twice: the first one is kept`);
         else classes.set(info.name, info);
     } catch (error) {
@@ -259,7 +295,15 @@ export function analyzeRxjs(
       warnings.push(`${file.path}: RxJS analysis failed (${(error as Error).message})`);
     }
   }
-  return resolve(ts, classes, knownCalls, warnings, constants);
+  return resolve(ts, classes, knownCalls, warnings, constants, functions);
+}
+
+/** Une fonction de module (déclarée ou fléchée) : ses paramètres, ses retours, ses constantes locales. */
+interface ModuleFn {
+  params: string[];
+  returns: TS.Expression[];
+  locals: Map<string, TS.Expression>;
+  module: Map<string, TS.Expression>;
 }
 
 /** La forme comparable d'une valeur littérale : chaîne JSON, nombre, booléen ou null. */
@@ -278,7 +322,49 @@ function literalOf(ts: TypeScriptModule, e: TS.Expression | undefined): string |
  * lecture seule (`Cls.P`) dont la valeur est un littéral. Un même nom défini deux fois avec des valeurs
  * différentes devient ambigu (null) : il n'est jamais choisi.
  */
-function collectConstants(ts: TypeScriptModule, sf: TS.SourceFile, out: Map<string, string | null>): void {
+function collectConstants(
+  ts: TypeScriptModule,
+  sf: TS.SourceFile,
+  out: Map<string, string | null>,
+  fns?: Map<string, ModuleFn | null>,
+): void {
+  if (fns) {
+    const module = new Map<string, TS.Expression>();
+    for (const st of sf.statements)
+      if (ts.isVariableStatement(st) && st.declarationList.flags & ts.NodeFlags.Const)
+        for (const d of st.declarationList.declarations)
+          if (ts.isIdentifier(d.name) && d.initializer) module.set(d.name.text, d.initializer);
+    const record = (name: string, fn: TS.SignatureDeclarationBase & { body?: TS.Node }): void => {
+      if (!fn.body) return;
+      const locals = new Map<string, TS.Expression>();
+      const visit = (n: TS.Node): void => {
+        if (ts.isFunctionLike(n)) return;
+        if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer)
+          locals.set(n.name.text, n.initializer);
+        ts.forEachChild(n, visit);
+      };
+      if (ts.isBlock(fn.body)) ts.forEachChild(fn.body, visit);
+      const entry: ModuleFn = {
+        params: fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : '')),
+        returns: returnsOf(ts, fn.body),
+        locals,
+        module,
+      };
+      // Un même nom défini deux fois n'est jamais choisi.
+      fns.set(name, fns.has(name) ? null : entry);
+    };
+    for (const st of sf.statements) {
+      if (ts.isFunctionDeclaration(st) && st.name) record(st.name.text, st);
+      if (ts.isVariableStatement(st) && st.declarationList.flags & ts.NodeFlags.Const)
+        for (const d of st.declarationList.declarations)
+          if (
+            ts.isIdentifier(d.name) &&
+            d.initializer &&
+            (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))
+          )
+            record(d.name.text, d.initializer);
+    }
+  }
   const put = (name: string, value: string | undefined): void => {
     if (value === undefined) return;
     const known = out.get(name);
@@ -317,9 +403,10 @@ function classesOf(
   file: ReadFile,
   byPath: ReadonlyMap<string, ReadFile>,
   constants: Map<string, string | null>,
+  functions: Map<string, ModuleFn | null>,
 ): ClassInfo[] {
   const sf = ts.createSourceFile(file.path, file.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  collectConstants(ts, sf, constants);
+  collectConstants(ts, sf, constants, functions);
   const loc = (node: TS.Node): Loc => ({
     file: file.path,
     line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
@@ -529,7 +616,11 @@ function classOf(
       ts.isGetAccessorDeclaration(member)
         ? member.parameters
         : ((member as TS.PropertyDeclaration).initializer as TS.ArrowFunction).parameters;
-    info.methods.set(name, readMethod(ctx, name, parameters, body, loc(member)));
+    const arrow =
+      ts.isPropertyDeclaration(member) &&
+      member.initializer !== undefined &&
+      ts.isArrowFunction(member.initializer);
+    info.methods.set(name, readMethod(ctx, name, parameters, body, loc(member), arrow));
   }
   info.role = info.component
     ? 'COMPONENT'
@@ -885,6 +976,65 @@ const CONT_OF: Record<string, Continuation['how']> = {
 };
 const ARRAY_CALLBACKS = new Set(['forEach', 'map', 'filter', 'some', 'every', 'find', 'reduce', 'flatMap']);
 
+/**
+ * Pour un rappel passé à un opérateur (`pipe(filter(…), switchMap(cb))`) ou à subscribe : les filter() et
+ * opérateurs d'arrêt placés avant lui dans la chaîne, et si la chaîne est souscrite (le rappel ne s'exécute
+ * que si elle l'est), rendue à l'appelant (souscription à sa charge) ou perdue.
+ */
+function pipeNotesOf(ctx: Ctx, holder: TS.CallExpression): Pick<Continuation, 'run' | 'filters' | 'stops'> {
+  const { ts } = ctx;
+  const filters: string[] = [];
+  const stops: string[] = [];
+  const scan = (pipe: TS.CallExpression, until?: TS.Node): void => {
+    for (const arg of pipe.arguments) {
+      if (arg === until) break;
+      if (!ts.isCallExpression(arg) || !ts.isIdentifier(arg.expression)) continue;
+      const op = arg.expression.text;
+      if (op === 'filter' && arg.arguments[0])
+        filters.push(`filter(${short(arg.arguments[0].getText(), 60)})`);
+      if (['takeUntil', 'takeWhile', 'take', 'first'].includes(op)) stops.push(op);
+    }
+  };
+  const isPipe = (n: TS.Node | undefined): n is TS.CallExpression =>
+    n !== undefined &&
+    ts.isCallExpression(n) &&
+    ts.isPropertyAccessExpression(n.expression) &&
+    n.expression.name.text === 'pipe';
+  let top: TS.Node = holder;
+  if (isPipe(holder.parent)) {
+    // L'opérateur est un argument de pipe(…) : les opérateurs qui le précèdent, puis la souscription de pipe.
+    scan(holder.parent, holder);
+    top = holder.parent;
+  } else if (ts.isPropertyAccessExpression(holder.expression)) {
+    // subscribe(cb) / then(cb) : les filter() de la chaîne qui le porte.
+    let cur: TS.Expression = holder.expression.expression;
+    while (ts.isCallExpression(cur) && ts.isPropertyAccessExpression(cur.expression)) {
+      if (isPipe(cur)) scan(cur);
+      cur = cur.expression.expression;
+    }
+  }
+  const name = holder.expression.getText().split('.').pop() ?? '';
+  const run: Continuation['run'] = ['subscribe', 'then', 'catch', 'finally'].includes(name)
+    ? 'SUBSCRIBED'
+    : (() => {
+        const use = useOf(ctx, top);
+        return use === 'SUBSCRIBED' ? 'SUBSCRIBED' : use === 'RETURNED' ? 'RETURNED' : 'NONE';
+      })();
+  return { run, ...(filters.length ? { filters } : {}), ...(stops.length ? { stops } : {}) };
+}
+
+/** Les identifiants lus par des expressions (hors noms de propriétés). */
+function identifiersIn(ts: TypeScriptModule, nodes: readonly TS.Node[]): string[] {
+  const out = new Set<string>();
+  const visit = (n: TS.Node): void => {
+    if (ts.isIdentifier(n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n))
+      out.add(n.text);
+    ts.forEachChild(n, visit);
+  };
+  nodes.forEach(visit);
+  return [...out];
+}
+
 /** Les noms qu'introduit un rappel (paramètres, déstructurations). */
 function boundNames(ts: TypeScriptModule, fn: TS.SignatureDeclarationBase): string[] {
   const names: string[] = [];
@@ -1052,10 +1202,13 @@ function controlOf(
           CONT_OF[name] ?? (INNER.has(name) || OPERATORS.has(name) ? 'OPERATOR' : undefined);
         if (receiver && ARRAY_CALLBACKS.has(name) && !INNER.has(name))
           guards.push({ kind: 'LOOP', text: `${short(receiver.getText(), 40)}.${name}(…)`, negated: false });
-        else if (how)
+        else if (how) {
+          // La chaîne qui porte ce rappel : ses filter() en amont, ses opérateurs d'arrêt, sa souscription.
+          const chainNotes = pipeNotesOf(ctx, holder);
           cont.push({
             how,
             via: name,
+            ...chainNotes,
             after: short(
               how === 'OPERATOR' &&
                 ts.isCallExpression(holder.parent) &&
@@ -1065,7 +1218,7 @@ function controlOf(
             ),
             binds: boundNames(ts, p),
           });
-        else
+        } else
           cont.push({ how: 'CALLBACK', via: name, after: short(callee.getText()), binds: boundNames(ts, p) });
       }
     }
@@ -1098,19 +1251,71 @@ function chainBase(ts: TypeScriptModule, expr: TS.Expression): TS.Expression {
   return cur;
 }
 
+/** Les retours de premier niveau d'un corps (hors fonctions imbriquées). */
+function returnsOf(ts: TypeScriptModule, body: TS.Node): TS.Expression[] {
+  if (!ts.isBlock(body)) return [body as TS.Expression];
+  const out: TS.Expression[] = [];
+  const visit = (n: TS.Node): void => {
+    if (ts.isFunctionLike(n)) return;
+    if (ts.isReturnStatement(n) && n.expression) out.push(n.expression);
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(body, visit);
+  return out;
+}
+
+/** Toutes les valeurs affectées aux variables locales d'un corps (déclarations et réaffectations). */
+function assignsOf(ts: TypeScriptModule, body: TS.Node): Map<string, TS.Expression[]> {
+  const out = new Map<string, TS.Expression[]>();
+  const add = (name: string, e: TS.Expression): void => {
+    out.set(name, [...(out.get(name) ?? []), e]);
+  };
+  const visit = (n: TS.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer)
+      add(n.name.text, n.initializer);
+    if (
+      ts.isBinaryExpression(n) &&
+      n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(n.left)
+    )
+      add(n.left.text, n.right);
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(body, visit);
+  return out;
+}
+
 function readMethod(
   ctx: Ctx,
   name: string,
   parameters: TS.NodeArray<TS.ParameterDeclaration>,
   body: TS.Node,
   at: Loc,
+  arrow = false,
 ): Method {
   const { ts, info } = ctx;
+  const paramTypes = new Map<string, string>();
+  for (const p of parameters) {
+    const type = typeNameOf(ts, p.type);
+    if (ts.isIdentifier(p.name) && type) paramTypes.set(p.name.text, type);
+  }
+  const returned = returnsOf(ts, body);
+  const refs = returned.map((r) => {
+    const x = strip(ts, r);
+    return ts.isPropertyAccessExpression(x) && x.expression.kind === ts.SyntaxKind.ThisKeyword
+      ? x.name.text
+      : undefined;
+  });
   const method: Method = {
     name,
     params: parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : '')),
     locals: new Map(),
     aliases: new Map(),
+    assigns: assignsOf(ts, body),
+    paramTypes,
+    returns: returned,
+    ...(refs.length > 0 && refs.every((r) => r && r === refs[0]) ? { returnRef: refs[0] } : {}),
+    ...(arrow ? { arrow: true } : {}),
     calls: [],
     emits: [],
     http: [],
@@ -1120,6 +1325,58 @@ function readMethod(
     loc: at,
   };
   const handled = new Set<TS.Node>();
+  /**
+   * Ce que désigne un récepteur d'appel : this, une dépendance injectée, un chemin de dépendances
+   * (`this.facade.store`), un paramètre typé, le retour d'une méthode (`this.getStore()`), ou un alias local
+   * dont toutes les affectations sont suivies (plusieurs cibles possibles sont toutes gardées).
+   */
+  const receiverOf = (
+    e: TS.Expression,
+    depth = 0,
+    seen = new Set<string>(),
+  ): { targets: string[]; partial: boolean } | undefined => {
+    if (depth > 8) return undefined;
+    const x = strip(ts, e);
+    if (x.kind === ts.SyntaxKind.ThisKeyword) return { targets: ['this'], partial: false };
+    if (ts.isPropertyAccessExpression(x)) {
+      if (x.expression.kind === ts.SyntaxKind.ThisKeyword)
+        return info.deps.has(x.name.text) && !info.http.has(x.name.text)
+          ? { targets: [x.name.text], partial: false }
+          : undefined;
+      const head = receiverOf(x.expression, depth + 1, seen);
+      if (!head || head.targets.length !== 1 || head.targets[0] === 'this') return undefined;
+      const base = head.targets[0] ?? '';
+      const path = base.startsWith('@path:') ? base.slice(6) : base.startsWith('@') ? undefined : base;
+      return path ? { targets: [`@path:${path}.${x.name.text}`], partial: head.partial } : undefined;
+    }
+    if (ts.isCallExpression(x) && x.arguments.length === 0) {
+      const callee = x.expression;
+      if (ts.isPropertyAccessExpression(callee) && callee.expression.kind === ts.SyntaxKind.ThisKeyword)
+        return { targets: [`@ret:${callee.name.text}`], partial: false };
+      return undefined;
+    }
+    if (ts.isIdentifier(x)) {
+      if (seen.has(x.text)) return undefined;
+      seen.add(x.text);
+      const type = method.paramTypes?.get(x.text);
+      if (method.params.includes(x.text))
+        return type && !LIBRARY.test(type) ? { targets: [`@type:${type}`], partial: false } : undefined;
+      const values = method.assigns?.get(x.text) ?? [];
+      if (values.length === 0) return undefined;
+      const targets = new Set<string>();
+      let partial = false;
+      for (const v of values) {
+        const r = receiverOf(v, depth + 1, seen);
+        if (!r) partial = true;
+        else {
+          r.targets.forEach((t) => targets.add(t));
+          partial ||= r.partial;
+        }
+      }
+      return targets.size ? { targets: [...targets], partial } : undefined;
+    }
+    return undefined;
+  };
   const visit = (node: TS.Node, pipeline?: Pipeline): void => {
     if (handled.has(node)) return;
     if (ts.isVariableDeclarationList(node) && node.flags & ts.NodeFlags.Const)
@@ -1201,6 +1458,7 @@ function readMethod(
         ) {
           const h: HttpSite = {
             use: pipeline ? (pipeline.subscribed ? 'SUBSCRIBED' : 'LOCAL') : useOf(ctx, node),
+            ...controlOf(ctx, node, body, method),
             loc: ctx.loc(node),
           };
           if (fname === 'request') {
@@ -1240,8 +1498,66 @@ function readMethod(
           );
           Object.assign(s, controlOf(ctx, node, body, method));
           (pipeline ? pipeline.calls : method.calls).push(s);
+        } else if (
+          recv.kind !== ts.SyntaxKind.ThisKeyword &&
+          !['pipe', 'subscribe', 'next', 'emit', 'bind', 'call', 'apply'].includes(fname)
+        ) {
+          // Un alias local, un chemin de dépendances, un paramètre typé ou le retour d'une méthode.
+          const r = receiverOf(recv);
+          const direct =
+            ts.isPropertyAccessExpression(recv) && recv.expression.kind === ts.SyntaxKind.ThisKeyword;
+          if (r && !direct)
+            for (const target of r.targets) {
+              const s = site(
+                ctx,
+                node,
+                target,
+                fname,
+                pipeline ? (pipeline.subscribed ? 'SUBSCRIBED' : 'LOCAL') : useOf(ctx, node),
+              );
+              Object.assign(s, controlOf(ctx, node, body, method), {
+                ...(ts.isIdentifier(strip(ts, recv)) ? { alias: recv.getText() } : {}),
+                ...(r.targets.length > 1 ? { alternatives: r.targets.length } : {}),
+                ...(r.partial ? { partial: true } : {}),
+              });
+              (pipeline ? pipeline.calls : method.calls).push(s);
+            }
         }
       } else if (ts.isIdentifier(callee)) {
+        // Une méthode détachée de son objet : `const { dispatch } = this.store` ou `const d = this.store.dispatch`.
+        const detached =
+          method.aliases.get(callee.text) ??
+          (() => {
+            const values = method.assigns?.get(callee.text) ?? [];
+            const only = values.length === 1 ? strip(ts, values[0] as TS.Expression) : undefined;
+            if (!only) return undefined;
+            // `.bind(this.store)` rattache l'objet : l'appel est équivalent.
+            if (
+              ts.isCallExpression(only) &&
+              ts.isPropertyAccessExpression(only.expression) &&
+              only.expression.name.text === 'bind' &&
+              ts.isPropertyAccessExpression(only.expression.expression)
+            )
+              return `bound:${only.expression.expression.getText()}`;
+            return ts.isPropertyAccessExpression(only) ? only.getText() : undefined;
+          })();
+        const bound = detached?.startsWith('bound:') ?? false;
+        const path = detached?.replace(/^bound:/, '');
+        const m = path ? /^this\.([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/.exec(path) : null;
+        if (m?.[1] && m[2] && info.deps.has(m[1]) && !info.http.has(m[1])) {
+          const s = site(
+            ctx,
+            node,
+            m[1],
+            m[2],
+            pipeline ? (pipeline.subscribed ? 'SUBSCRIBED' : 'LOCAL') : useOf(ctx, node),
+          );
+          Object.assign(s, controlOf(ctx, node, body, method), {
+            alias: callee.text,
+            ...(bound ? {} : { unbound: true }),
+          });
+          (pipeline ? pipeline.calls : method.calls).push(s);
+        }
         if (pipeline && OPERATORS.has(callee.text)) pipeline.operators.push(callee.text);
         if (pipeline && callee.text === 'filter' && node.arguments[0])
           (pipeline.filters ??= []).push(short(node.arguments[0].getText()));
@@ -1367,6 +1683,7 @@ function resolve(
   knownCalls: ReadonlyMap<string, UiCall>,
   warnings: string[],
   constants: ReadonlyMap<string, string | null>,
+  functions: ReadonlyMap<string, ModuleFn | null> = new Map(),
 ): RxjsFacts {
   const symbols = new Map<string, UiSymbol>();
   const links = new Map<string, UiLink>();
@@ -1398,6 +1715,26 @@ function resolve(
       cur = cur.base ? classes.get(cur.base) : undefined;
     }
     return undefined;
+  };
+  /**
+   * La classe désignée par la cible d'un appel : `this`, une dépendance, un chemin de dépendances
+   * (`@path:facade.store`), un paramètre typé (`@type:OrderStore`) ou le retour d'une méthode (`@ret:getStore`).
+   */
+  const targetClassOf = (c: ClassInfo, target: string, depth = 0): ClassInfo | undefined => {
+    if (depth > 6) return undefined;
+    if (target.startsWith('@type:')) return classes.get(target.slice(6));
+    if (target.startsWith('@path:')) {
+      const [first = '', ...rest] = target.slice(6).split('.');
+      let cur = classOfDep(c, first);
+      for (const part of rest) cur = cur ? classes.get(cur.deps.get(part) ?? '') : undefined;
+      return cur;
+    }
+    if (target.startsWith('@ret:')) {
+      const found = lookup(c, target.slice(5));
+      const ref = found?.method.returnRef;
+      return found && ref ? targetClassOf(found.cls, ref, depth + 1) : undefined;
+    }
+    return classOfDep(c, target);
   };
   const resolveRef = (c: ClassInfo, ref: Ref): { cls: ClassInfo; stream: Stream } | undefined => {
     const target = classOfDep(c, ref.via);
@@ -1515,9 +1852,43 @@ function resolve(
     param: number;
   }
   const wrappers = new Map<string, Wrapper>();
+  /**
+   * Une méthode générique qui fait plusieurs appels HTTP selon un paramètre (`if (action.type === …)
+   * return this.http.post(…)`) : un appel par branche (`Classe#méthode@L12`), chacun avec sa condition, pour
+   * que chaque contexte d'appel n'atteigne que le sien.
+   */
+  const branched = new Map<string, { id: string; site: HttpSite }[]>();
+  const paramGuarded = (m: Method, gs: Guard[] | undefined): boolean =>
+    (gs ?? []).some(
+      (g) => g.on && m.params.includes(g.on.split('.')[0] ?? '') && (g.values?.length || g.instance),
+    );
+  for (const c of classes.values())
+    for (const m of c.methods.values()) {
+      if (m.http.length < 2 || !m.http.some((h) => paramGuarded(m, h.guards))) continue;
+      const id = methodId(c, m.name);
+      const list = m.http.map((site) => ({ id: `${id}@L${String(site.loc.line)}`, site }));
+      branched.set(id, list);
+      for (const { id: branchId, site } of list) {
+        if (!site.verb) continue;
+        const url = urlOf(ts, site.url, c, m);
+        calls.set(branchId, {
+          id: branchId,
+          owner: c.name,
+          method: site.verb,
+          ...(url.route !== undefined
+            ? { path: url.route.replace(/\?.*$/, '') }
+            : {
+                expression: url.expression,
+                unresolved: 'URL construite dynamiquement : son expression ne se résout pas statiquement',
+              }),
+          loc: site.loc,
+        });
+      }
+    }
   for (const c of classes.values())
     for (const m of c.methods.values())
       for (const h of m.http) {
+        if (branched.has(methodId(c, m.name))) continue;
         const url = urlOf(ts, h.url, c, m);
         const id = methodId(c, m.name);
         // Une enveloppe reçoit l'URL entière (éventuellement après une adresse de base) ; un paramètre qui
@@ -1546,7 +1917,7 @@ function resolve(
           loc: h.loc,
         });
       }
-  const isLeaf = (id: string): boolean => knownCalls.has(id) || calls.has(id);
+  const isLeaf = (id: string): boolean => (knownCalls.has(id) && !branched.has(id)) || calls.has(id);
 
   // 3. Les liens de déclenchement et de données.
   const problems = new Map<string, UiDiagnostic[]>();
@@ -1568,8 +1939,10 @@ function resolve(
     cs: CallSite,
   ): { id: string; cls: ClassInfo; method: Method } | undefined => {
     const from = methodId(c, m.name);
-    const target = classOfDep(c, cs.target);
+    const target = targetClassOf(c, cs.target);
     if (!target) {
+      // Un alias ou un chemin qui ne mène à aucune classe analysée (tableau, objet de bibliothèque) : rien à dire.
+      if (cs.target.startsWith('@')) return undefined;
       const type = c.deps.get(cs.target) ?? cs.target;
       if (!LIBRARY.test(type))
         problem(
@@ -1652,7 +2025,12 @@ function resolve(
     if (ts.isObjectLiteralExpression(x)) {
       const obj = new Map<string, Val>();
       for (const prop of x.properties) {
-        const name = prop.name?.getText();
+        if (ts.isSpreadAssignment(prop)) {
+          const spread = valOf(prop.expression, c, m, ctx, depth + 1);
+          for (const [k, v] of spread?.obj ?? []) obj.set(k, v);
+          continue;
+        }
+        const name = prop.name.getText();
         if (!name) continue;
         const v = ts.isPropertyAssignment(prop)
           ? valOf(prop.initializer, c, m, ctx, depth + 1)
@@ -1664,6 +2042,87 @@ function resolve(
       return { text, obj };
     }
     if (ts.isNewExpression(x)) return { text, inst: x.expression.getText().split('.').pop() ?? '' };
+    // Une fonction qui fabrique la valeur (créateur d'action, méthode, fonction imbriquée) : son unique
+    // retour est évalué avec les arguments transmis. Plusieurs retours, ou un corps introuvable : inconnu.
+    if (ts.isCallExpression(x)) {
+      const fn = factoryOf(x, c, m);
+      if (!fn || fn.returns.length !== 1 || !fn.returns[0]) return undefined;
+      const frame: Method = {
+        name: fn.name,
+        params: fn.params,
+        locals: fn.locals,
+        aliases: new Map(),
+        calls: [],
+        emits: [],
+        http: [],
+        pipelines: [],
+        outputs: [],
+        returnsObservable: false,
+        loc: m.loc,
+      };
+      const args = new Map<string, Val | undefined>(
+        fn.params.map((p, i) => [
+          p,
+          x.arguments[i] ? valOf(x.arguments[i], c, m, ctx, depth + 1) : undefined,
+        ]),
+      );
+      const out = valOf(
+        fn.returns[0],
+        fn.cls ?? { ...c, module: fn.module ?? c.module, values: new Map() },
+        frame,
+        args,
+        depth + 1,
+      );
+      return out ? { ...out, text: out.obj ? text : out.text } : undefined;
+    }
+    return undefined;
+  };
+  /** La fonction appelée pour produire une valeur : fonction de module, méthode de la classe, méthode statique. */
+  const factoryOf = (
+    call: TS.CallExpression,
+    c: ClassInfo,
+    m: Method,
+  ):
+    | {
+        name: string;
+        params: string[];
+        returns: TS.Expression[];
+        locals: Map<string, TS.Expression>;
+        module?: Map<string, TS.Expression>;
+        cls?: ClassInfo;
+      }
+    | undefined => {
+    const callee = strip(ts, call.expression);
+    if (ts.isIdentifier(callee)) {
+      // Une fonction fléchée locale (`const make = (d) => ({ … })`) ou une fonction de module.
+      const local = m.locals.get(callee.text);
+      if (local && (ts.isArrowFunction(local) || ts.isFunctionExpression(local)))
+        return {
+          name: callee.text,
+          params: local.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : '')),
+          returns: returnsOf(ts, local.body),
+          locals: m.locals,
+        };
+      const fn = functions.get(callee.text);
+      return fn ? { name: callee.text, ...fn } : undefined;
+    }
+    if (ts.isPropertyAccessExpression(callee)) {
+      const owner = callee.expression;
+      const found =
+        owner.kind === ts.SyntaxKind.ThisKeyword
+          ? lookup(c, callee.name.text)
+          : ts.isIdentifier(owner) && classes.has(owner.text)
+            ? lookup(classes.get(owner.text) as ClassInfo, callee.name.text)
+            : undefined;
+      if (found)
+        return {
+          name: callee.name.text,
+          params: found.method.params,
+          returns: found.method.returns ?? [],
+          locals: found.method.locals,
+          cls: found.cls,
+        };
+    }
     return undefined;
   };
   /** La valeur d'un chemin (`event.type`) dans un contexte. */
@@ -1716,23 +2175,50 @@ function resolve(
     if (seen.has(id)) return [];
     seen.add(id);
     const paths = new Set<string>();
-    const sites = [...m.calls, ...m.emits.map((e) => ({ guards: e.guards }))];
+    const sites = [
+      ...m.calls,
+      ...m.emits.map((e) => ({ guards: e.guards })),
+      ...m.http.map((h) => ({ guards: h.guards })),
+    ];
     for (const site of sites)
       for (const g of site.guards ?? [])
         if (g.on && m.params.includes(g.on.split('.')[0] ?? '') && (g.values?.length || g.instance))
           paths.add(g.on);
     for (const cs of m.calls) {
-      const target = classOfDep(c, cs.target);
+      const target = targetClassOf(c, cs.target);
       const found = target ? lookup(target, cs.method) : undefined;
       if (!found) continue;
       const inner = decisivePaths(found.cls, found.method, seen);
       if (!inner.length) continue;
-      // Le paramètre transmis tel quel (ou un de ses champs) devient décisif ici aussi.
+      // Le paramètre transmis tel quel (ou un de ses champs) devient décisif ici aussi : `execute(action)` qui
+      // teste `action.type` rend `action.type` décisif chez l'appelant qui transmet son propre paramètre.
       cs.args.forEach((arg, i) => {
         const param = found.method.params[i];
-        if (!param || !inner.some((p) => p === param || p.startsWith(`${param}.`))) return;
+        if (!param) return;
+        if (!inner.some((p) => p === param || p.startsWith(`${param}.`))) return;
         const path = pathOf(ts, arg, m);
-        if (m.params.includes(path.split('.')[0] ?? '')) paths.add(path);
+        if (m.params.includes(path.split('.')[0] ?? '')) {
+          for (const p of inner)
+            if (p === param || p.startsWith(`${param}.`)) paths.add(`${path}${p.slice(param.length)}`);
+          return;
+        }
+        // La valeur est fabriquée par une fonction à partir des paramètres (`createAction(type, data)`) :
+        // ces paramètres décident aussi, puisque la fabrique est évaluée avec eux.
+        // Seul le paramètre qui alimente le champ testé décide (pas celui qui ne remplit que le payload) :
+        // la fabrique est évaluée avec des marqueurs à la place des paramètres.
+        const x = strip(ts, arg);
+        if (ts.isCallExpression(x)) {
+          const markers = new Map<string, Val | undefined>(
+            m.params.map((p) => [p, { text: p, sym: `@param:${p}` }]),
+          );
+          const made = valOf(x, c, m, markers);
+          for (const p of inner) {
+            if (p !== param && !p.startsWith(`${param}.`)) continue;
+            let v: Val | undefined = made;
+            for (const seg of p.slice(param.length).split('.').filter(Boolean)) v = v?.obj?.get(seg);
+            if (v?.sym?.startsWith('@param:')) paths.add(v.sym.slice('@param:'.length));
+          }
+        }
       });
     }
     const list = [...paths];
@@ -1771,9 +2257,9 @@ function resolve(
         case 'ERROR':
           return `si ${k.after} échoue (${k.via})`;
         case 'FINALLY':
-          return `à la fin de ${k.after} (${k.via})`;
+          return `à la fin de ${k.after} (${k.via} : complétion ou erreur, sans valeur reçue)`;
         case 'OPERATOR':
-          return `dans ${k.via} sur ${k.after}${NOTE[k.via] ?? ''}`;
+          return `dans ${k.via} sur ${k.after}${NOTE[k.via] ?? ''}${k.stops?.length ? ` ; arrêt possible par ${k.stops.join(', ')}` : ''}`;
         case 'TIMER':
           return `différé (${k.via})`;
         case 'EVENT':
@@ -1824,7 +2310,10 @@ function resolve(
     depth: number,
   ): string | undefined => {
     const id = methodId(c, m.name);
-    const key = `${id}|${[...ctx].map(([k, v]) => `${k}=${JSON.stringify(v ? [keyOf(v), [...(v.obj ?? new Map<string, Val>())].map(([a, b]) => [a, keyOf(b)])] : null)}`).join(',')}`;
+    // Deux appels qui transmettent les mêmes valeurs décisives partagent le même contexte.
+    const key = `${id}|${decisivePaths(c, m)
+      .map((p) => `${p}=${keyOf(valAt(p, ctx)) ?? '?'}`)
+      .join(',')}`;
     const known = specialized.get(key);
     if (known) return known;
     if (depth > MAX_CONTEXT_DEPTH || clones >= MAX_CLONES) {
@@ -1860,6 +2349,27 @@ function resolve(
       if (v === 'UNKNOWN') branches.unknown += 1;
       else branches.kept += 1;
       callLink(c, m, cloneId, cs, 'CALL', undefined, { ctx, verdict: v, depth });
+    }
+    for (const b of branched.get(id) ?? []) {
+      const v = verdictAll(b.site.guards, c, m, ctx);
+      if (v === 'NO') {
+        branches.pruned += 1;
+        continue;
+      }
+      if (v === 'UNKNOWN') branches.unknown += 1;
+      else branches.kept += 1;
+      const condition = conditionText(b.site.guards?.filter((g) => verdictOf(g, c, m, ctx) !== 'MATCH'));
+      link({
+        from: cloneId,
+        to: b.id,
+        kind: 'CALL',
+        confidence: v === 'UNKNOWN' ? 'PROBABLE' : b.site.use === 'DROPPED' ? 'UNKNOWN' : 'CONFIRMED',
+        reason: `${m.name}(${label}) fait l’appel HTTP ${b.site.verb ?? ''} de sa branche${condition ? ` — si ${condition}` : ''}`,
+        ...(condition ? { condition } : {}),
+        context: label,
+        timing: 'DIRECT',
+        loc: b.site.loc,
+      });
     }
     for (const e of m.emits) {
       const v = verdictAll(e.guards, c, m, ctx);
@@ -1974,13 +2484,39 @@ function resolve(
           const b = symbols.get(clone)?.branches;
           why += ` avec ${label} : seules les branches compatibles sont suivies${b ? ` (${String(b.kept)} retenue(s), ${String(b.pruned)} écartée(s)${b.unknown ? `, ${String(b.unknown)} indéterminée(s)` : ''})` : ''}`;
         }
-      } else if (!scope && kind === 'CALL')
-        problem(
-          caller,
-          'CONTEXT_UNRESOLVED',
-          `${t.id.replace('#', '.')}() choisit son traitement selon ${paths.join(', ')} ; la valeur transmise par ${caller.replace('#', '.')}() (${cs.args.map((a) => short(a.getText(), 30)).join(', ')}) n’est pas déterminable statiquement : toutes ses branches restent possibles`,
-          cs.loc,
-        );
+      } else if (
+        !scope &&
+        kind === 'CALL' &&
+        // Une valeur qui ne vient que des paramètres de cette méthode est décidée par ses appelants : chacun
+        // est suivi dans son propre contexte, le diagnostic revient à celui qui ne la démontre pas.
+        !(() => {
+          const roots = new Set(decisivePaths(c, m).map((p) => p.split('.')[0] ?? ''));
+          const ids = identifiersIn(ts, cs.args).filter((id) => !/^[A-Z]/.test(id) && !functions.has(id));
+          return roots.size > 0 && ids.some((id) => roots.has(id)) && ids.every((id) => !m.locals.has(id));
+        })()
+      ) {
+        // L'action vient d'une fonction qui la fabrique : dire laquelle et pourquoi elle n'est pas résolue.
+        const factory = cs.args
+          .map((a) => strip(ts, a))
+          .map((a) => (ts.isIdentifier(a) ? (m.locals.get(a.text) ?? a) : a))
+          .find((a): a is TS.CallExpression => ts.isCallExpression(strip(ts, a)));
+        if (factory) {
+          const callee = short(strip(ts, factory).getText().split('(')[0] ?? '', 40);
+          const fn = factoryOf(strip(ts, factory) as TS.CallExpression, c, m);
+          problem(
+            caller,
+            'ACTION_FACTORY_UNRESOLVED',
+            `${t.id.replace('#', '.')}() choisit son traitement selon ${paths.join(', ')} ; la valeur vient de ${callee}(), ${fn ? (fn.returns.length === 1 ? 'dont le résultat dépend d’une donnée dynamique' : `qui a ${String(fn.returns.length)} retours possibles`) : 'dont le corps n’est pas dans les sources analysées'} : toutes les branches restent possibles`,
+            cs.loc,
+          );
+        } else
+          problem(
+            caller,
+            'CONTEXT_UNRESOLVED',
+            `${t.id.replace('#', '.')}() choisit son traitement selon ${paths.join(', ')} ; la valeur transmise par ${caller.replace('#', '.')}() (${cs.args.map((a) => short(a.getText(), 30)).join(', ')}) n’est pas déterminable statiquement : toutes ses branches restent possibles`,
+            cs.loc,
+          );
+      }
     }
     // Dans un contexte, une condition déjà tranchée par la valeur transmise n'est pas répétée.
     const guards = scope ? cs.guards?.filter((g) => verdictOf(g, c, m, scope.ctx) !== 'MATCH') : cs.guards;
@@ -2003,24 +2539,108 @@ function resolve(
       why += ' — la valeur qui choisit cette branche n’est pas déterminable statiquement';
     }
     if (cs.cont?.some((k) => k.how === 'CALLBACK') && confidence === 'CONFIRMED') confidence = 'PROBABLE';
-    if (condition) why += ` — si ${condition}`;
+    // Un rappel d'une chaîne jamais souscrite n'est pas exécuté ; rendue à l'appelant, elle l'est s'il la souscrit.
+    const lost = cs.cont?.find((k) => k.run === 'NONE');
+    const returned = cs.cont?.find((k) => k.run === 'RETURNED');
+    if (lost) {
+      confidence = 'UNKNOWN';
+      why += ` — la chaîne de ${lost.after} n’est jamais souscrite : la continuation n’est pas exécutée`;
+      if (!scope)
+        problem(
+          caller,
+          'ASYNC_NOT_DEMONSTRATED',
+          `${t.id.replace('#', '.')}() est appelé dans ${lost.via} sur ${lost.after}, une chaîne jamais souscrite : cette continuation n’est pas démontrée`,
+          cs.loc,
+        );
+    } else if (returned && confidence === 'CONFIRMED') {
+      confidence = 'PROBABLE';
+      why += ' — la chaîne est rendue à l’appelant : exécutée seulement s’il la souscrit';
+    }
+    // Un alias : plusieurs cibles possibles, une affectation non résolue, ou une méthode détachée de son objet.
+    if (cs.alternatives && cs.alternatives > 1) {
+      if (confidence === 'CONFIRMED') confidence = 'PROBABLE';
+      why += ` — ${cs.alias ?? 'l’alias'} désigne une de ${String(cs.alternatives)} cibles possibles (réaffectation)`;
+      if (!scope)
+        problem(
+          caller,
+          'ALIAS_AMBIGUOUS',
+          `${cs.alias ?? 'alias'}.${cs.method}() : ${cs.alias ?? 'l’alias'} reçoit plusieurs objets ; toutes les cibles sont gardées comme possibles`,
+          cs.loc,
+        );
+    } else if (cs.partial) {
+      if (confidence === 'CONFIRMED') confidence = 'PROBABLE';
+      why += ` — une affectation de ${cs.alias ?? 'l’alias'} n’est pas résolue : d’autres cibles sont possibles`;
+    } else if (cs.alias && !cs.unbound) why += ` (par l’alias ${cs.alias})`;
+    if (cs.unbound) {
+      if (t.method.arrow)
+        why += ` (méthode fléchée détachée par ${cs.alias ?? 'un alias'} : son this est conservé)`;
+      else {
+        if (confidence === 'CONFIRMED') confidence = 'PROBABLE';
+        why += ` — ${cs.alias ?? 'la méthode'} est détachée de son objet : this n’est pas garanti à l’appel`;
+      }
+    }
+    const filters = [...new Set((cs.cont ?? []).flatMap((k) => k.filters ?? []))].filter(
+      (f) => !condition?.includes(f),
+    );
+    const fullCondition = [filters.join(' et '), condition].filter(Boolean).join(' et ') || undefined;
+    if (fullCondition) why += ` — si ${fullCondition}`;
     if (asyncNote) why += ` — ${asyncNote}`;
+    const conts = cs.cont ?? [];
+    const last = conts[conts.length - 1];
+    const timing: UiLink['timing'] = !last
+      ? base?.async
+        ? 'AFTER_RESULT'
+        : 'DIRECT'
+      : last.how === 'ERROR'
+        ? 'ON_ERROR'
+        : last.how === 'FINALLY'
+          ? 'ON_COMPLETE'
+          : last.how === 'TIMER'
+            ? 'DEFERRED'
+            : last.how === 'EVENT'
+              ? 'ON_EVENT'
+              : last.how === 'CALLBACK'
+                ? 'UNDEMONSTRATED'
+                : 'AFTER_RESULT';
+    const concurrent = conts.some(
+      (k) => k.via === 'mergeMap' || /\b(forkJoin|combineLatest|merge)\(/.test(k.after),
+    );
+    const cancellable =
+      conts.some((k) => ['switchMap', 'exhaustMap'].includes(k.via) || (k.stops?.length ?? 0) > 0) ||
+      /annul|arrête/.test(base?.async ?? '');
     link({
       from,
       to,
       kind,
       confidence,
       reason: why,
-      ...(condition ? { condition } : {}),
+      ...(fullCondition ? { condition: fullCondition } : {}),
       ...(asyncNote ? { async: asyncNote } : {}),
       ...(data ? { data } : {}),
       ...(context ? { context } : {}),
+      timing,
+      ...(concurrent ? { concurrent: true } : {}),
+      ...(cancellable ? { cancellable: true } : {}),
       loc: cs.loc,
     });
   };
   for (const c of classes.values()) {
     for (const m of c.methods.values()) {
       const from = symbolOf(c, m);
+      for (const b of branched.get(from) ?? []) {
+        const chosen = paramGuarded(m, b.site.guards);
+        const condition = conditionText(b.site.guards);
+        link({
+          from,
+          to: b.id,
+          kind: 'CALL',
+          confidence: b.site.use === 'DROPPED' ? 'UNKNOWN' : chosen ? 'PROBABLE' : 'CONFIRMED',
+          reason: `${m.name}() fait l’appel HTTP ${b.site.verb ?? ''} d’une de ses branches${chosen ? ' — branche choisie par la valeur transmise (contexte d’appel non déterminé ici)' : ''}${condition ? ` — si ${condition}` : ''}`,
+          ...(condition ? { condition } : {}),
+          timing: 'DIRECT',
+          loc: b.site.loc,
+        });
+      }
       for (const cs of m.calls) callLink(c, m, from, cs, 'CALL');
       for (const e of m.emits) {
         const r = resolveRef(c, e.ref);
@@ -2345,7 +2965,14 @@ function resolve(
       }
       // Une imprécision (branches non distinguées, limite contextuelle) est dite même quand un appel HTTP
       // est atteint : la chaîne existe, mais elle peut contenir des branches que l'action n'emprunte pas.
-      const kept = reached ? ends.filter((d) => d.code === 'CONTEXT_UNRESOLVED' || d.code === 'LIMIT') : ends;
+      const IMPRECISE = new Set([
+        'CONTEXT_UNRESOLVED',
+        'ACTION_FACTORY_UNRESOLVED',
+        'ALIAS_AMBIGUOUS',
+        'ASYNC_NOT_DEMONSTRATED',
+        'LIMIT',
+      ]);
+      const kept = reached ? ends.filter((d) => IMPRECISE.has(d.code)) : ends;
       if (kept.length > 0) {
         const unique = new Map(kept.map((d) => [`${d.code}|${d.message}`, d]));
         diagnostics.push(...[...unique.values()].slice(0, 6));
@@ -2387,15 +3014,95 @@ function resolve(
     }
     return undefined;
   };
-  // Les symboles sont lus après streamOf (qui peut en ajouter un pour un état de gabarit).
+  const entryOf = (
+    component: string,
+    expression: string,
+  ): { to: string; method: string; context?: string; unresolved?: string }[] => {
+    const c = classes.get(component);
+    if (!c || expression.length > 400) return [];
+    const sf = ts.createSourceFile('template.ts', expression, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    // Le gabarit n'a ni paramètres ni constantes locales : seules les valeurs écrites ou nommées comptent.
+    const frame: Method = {
+      name: 'template',
+      params: ['$event'],
+      locals: new Map(),
+      aliases: new Map(),
+      calls: [],
+      emits: [],
+      http: [],
+      pipelines: [],
+      outputs: [],
+      returnsObservable: false,
+      loc: c.loc,
+    };
+    const out: { to: string; method: string; context?: string; unresolved?: string }[] = [];
+    const visit = (n: TS.Node): void => {
+      if (ts.isCallExpression(n)) {
+        const callee = strip(ts, n.expression);
+        const target = ts.isIdentifier(callee)
+          ? { cls: c, name: callee.text }
+          : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)
+            ? { cls: targetClassOf(c, callee.expression.text), name: callee.name.text }
+            : undefined;
+        const found = target?.cls ? lookup(target.cls, target.name) : undefined;
+        if (found) {
+          let to = symbolOf(found.cls, found.method);
+          let context: string | undefined;
+          let unresolved: string | undefined;
+          const paths = decisivePaths(found.cls, found.method);
+          if (paths.length) {
+            const ctx = new Map<string, Val | undefined>();
+            found.method.params.forEach((param, i) => {
+              const arg = n.arguments[i];
+              if (arg) ctx.set(param, valOf(arg, { ...c, values: new Map() }, frame, undefined));
+            });
+            const label = paths
+              .map((path) => {
+                const v = valAt(path, ctx);
+                return v && keyOf(v)
+                  ? path.includes('.')
+                    ? `${path.split('.').slice(1).join('.')}=${v.text}`
+                    : v.text
+                  : undefined;
+              })
+              .filter((x): x is string => x !== undefined)
+              .join(', ');
+            if (label) {
+              const clone = specialize(found.cls, found.method, ctx, label, 1);
+              if (clone) {
+                to = clone;
+                context = label;
+              }
+            } else
+              unresolved = `${found.cls.name}.${found.method.name}() choisit son traitement selon ${paths.join(', ')} ; la valeur écrite dans le gabarit (${n.arguments.map((a) => short(a.getText(), 30)).join(', ')}) n’est pas déterminable statiquement (état modifiable du composant, $event) : toutes ses branches restent possibles`;
+          }
+          out.push({
+            to,
+            method: `${found.cls.name}.${found.method.name}`,
+            ...(context ? { context } : {}),
+            ...(unresolved ? { unresolved } : {}),
+          });
+          return;
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    return out;
+  };
+  // Les symboles et les liens sont lus après streamOf et entryOf (qui peuvent en ajouter).
   return {
     get symbols() {
       return [...symbols.values()];
     },
-    links: [...links.values()],
+    get links() {
+      return [...links.values()];
+    },
+    entryOf,
     diagnostics,
     calls: [...calls.values()],
     wrappers: [...wrappers.keys()],
+    branched: [...branched.keys()],
     streamOf,
     warnings,
   };

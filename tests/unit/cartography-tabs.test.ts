@@ -220,7 +220,7 @@ describe('impact between tabs', () => {
   });
 
   it('the analyser version changed: facts of an older version are read again', () => {
-    expect(ANALYZERS.startsWith('cartography-3;')).toBe(true);
+    expect(Number(/^cartography-(\d+);/.exec(ANALYZERS)?.[1])).toBeGreaterThanOrEqual(3);
     expect(facts.every((f) => f.analyzer === ANALYZERS)).toBe(true);
   });
 

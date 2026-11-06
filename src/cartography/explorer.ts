@@ -236,6 +236,86 @@ export function queryFeatures(
   return paged(rows, query);
 }
 
+const UI_FLOW = new Set(['TRIGGERS', 'CALLS', 'READS', 'WRITES']);
+
+/** Les éléments d'interface d'une fonctionnalité et les chemins qu'ils déclenchent (bornés). */
+function uiEntries(
+  index: MapIndex,
+  reached: ReadonlySet<string>,
+  budget: number,
+): { edges: MapEdge[]; truncated: boolean } {
+  const edges: MapEdge[] = [];
+  let truncated = false;
+  const push = (e: MapEdge): boolean => {
+    if (edges.length >= Math.max(0, budget)) {
+      truncated = true;
+      return false;
+    }
+    edges.push(e);
+    return true;
+  };
+  // Descendre des composants vers leurs conteneurs et éléments interactifs ; ne garder un conteneur que s'il
+  // mène à un élément interactif ou à un composant affiché.
+  const keep = new Map<string, boolean>();
+  const leads = (id: string, depth: number): boolean => {
+    const known = keep.get(id);
+    if (known !== undefined) return known;
+    keep.set(id, false);
+    if (depth > 14) return false;
+    let ok = false;
+    for (const e of index.out.get(id) ?? []) {
+      if (e.kind !== 'CONTAINS') continue;
+      const kind = index.nodes.get(e.to)?.kind;
+      if (kind === 'BUTTON' || kind === 'COMPONENT' || (kind === 'CONTAINER' && leads(e.to, depth + 1)))
+        ok = true;
+    }
+    keep.set(id, ok);
+    return ok;
+  };
+  const buttons: string[] = [];
+  const walk = (id: string, depth: number): void => {
+    for (const e of index.out.get(id) ?? []) {
+      if (e.kind !== 'CONTAINS') continue;
+      const kind = index.nodes.get(e.to)?.kind;
+      if (kind === 'BUTTON') {
+        if (!push(e)) return;
+        buttons.push(e.to);
+      } else if (kind === 'CONTAINER' && leads(e.to, depth + 1)) {
+        if (!push(e)) return;
+        walk(e.to, depth + 1);
+      } else if (kind === 'COMPONENT' && reached.has(e.to)) {
+        if (!push(e)) return;
+      }
+    }
+  };
+  for (const id of reached) if (index.nodes.get(id)?.kind === 'COMPONENT') walk(id, 0);
+  // Les conditions des boutons, puis ce qu'ils déclenchent, jusqu'aux nœuds déjà dans la fonctionnalité.
+  const seen = new Set<string>(reached);
+  const queue: string[] = [];
+  for (const b of buttons)
+    for (const e of index.out.get(b) ?? []) {
+      if (e.kind === 'VISIBLE_WHEN' || e.kind === 'ENABLED_WHEN' || e.kind === 'TRIGGERS') {
+        if (!push(e)) break;
+        if (e.kind === 'TRIGGERS' && !seen.has(e.to)) {
+          seen.add(e.to);
+          queue.push(e.to);
+        }
+      }
+    }
+  for (let visits = 0; queue.length > 0 && visits < 400; visits += 1) {
+    const cur = queue.shift() ?? '';
+    for (const e of index.out.get(cur) ?? []) {
+      if (!UI_FLOW.has(e.kind)) continue;
+      if (!push(e)) return { edges, truncated };
+      if (!seen.has(e.to)) {
+        seen.add(e.to);
+        queue.push(e.to);
+      }
+    }
+  }
+  return { edges, truncated };
+}
+
 export function featureDetail(
   index: MapIndex,
   cov: CoverageContext,
@@ -257,6 +337,12 @@ export function featureDetail(
         }
         edges.push(edge);
       }
+  // Les points d'entrée de l'interface : onglets, conteneurs et éléments interactifs des composants de la
+  // fonctionnalité (seulement sur le chemin d'un élément interactif ou d'un composant affiché), leurs
+  // conditions, et ce qu'ils déclenchent (y compris une méthode vue dans le contexte des valeurs du gabarit).
+  const ui = uiEntries(index, set, edgeLimit - edges.length);
+  for (const e of ui.edges) if (!edges.some((x) => x.id === e.id)) edges.push(e);
+  if (ui.truncated) truncated = true;
   const used = new Set(edges.flatMap((e) => [e.from, e.to]));
   const related = new Map<string, { id: string; name: string; via: string[] }>();
   for (const concept of index.featureConcepts.get(feature.id) ?? [])
@@ -284,6 +370,11 @@ export function featureDetail(
         layer: n.layer,
         name: n.name,
         ...(n.label ? { label: n.label } : {}),
+        ...(typeof n.detail.tab === 'string' ? { tab: n.detail.tab } : {}),
+        ...(n.kind === 'CONDITION' && n.detail.whenTrue === false ? { negated: true as const } : {}),
+        ...(n.kind === 'BUTTON' && typeof n.detail.unresolved === 'string'
+          ? { unresolved: n.detail.unresolved }
+          : {}),
       })),
     truncated,
   };

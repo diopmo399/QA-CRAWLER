@@ -32,6 +32,16 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ### Ajouté
 
+- **Cartographie : alias, fabriques d'actions, branches HTTP et points d'entrée.** Le contexte d'appel suit
+  les alias locaux (chaînes, réaffectations, déstructuration, retours de méthode, paramètres typés), évalue
+  les fabriques d'actions quel que soit leur nom (imbriquées, génériques, fléchées) et sépare les appels
+  HTTP d'une méthode générique par branche : deux boutons sur la même méthode atteignent chacun leur
+  endpoint. Chaque lien dit sa dépendance temporelle (après résultat, sur erreur, à la complétion,
+  annulable, concurrente, non démontrée) et `filter(…)` devient une condition. Les boutons, liens, `input
+submit`, `(ngSubmit)` et sorties de composants enfants sont des points d'entrée reliés à la version
+  contextuelle de leur méthode ; l'arbre de parcours les range sous leur onglet avec leurs conditions
+  d'activation. Nouveaux diagnostics : `ALIAS_AMBIGUOUS`, `ACTION_FACTORY_UNRESOLVED`,
+  `ASYNC_NOT_DEMONSTRATED`, `UI_DYNAMIC`. Versions : `rxjs-3`, `cartography-4` (faits relus au scan suivant).
 - **Cartographie : parcours reconstruits par contexte d'appel.** Une méthode générique (`dispatch(action)`)
   n'est suivie que dans les branches choisies par la valeur transmise (littéral, enum, constante, objet,
   instance) ; une valeur indéterminée garde les branches comme possibles et le dit. Chaque lien porte ses

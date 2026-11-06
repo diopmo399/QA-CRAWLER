@@ -111,6 +111,16 @@ export interface UiLink {
   data?: string;
   /** Le contexte d'appel retenu pour une méthode générique (valeur de l'action transmise). */
   context?: string;
+  /**
+   * La nature temporelle du lien : DIRECT (appel synchrone), AFTER_RESULT (après une réponse, une émission
+   * ou un await), ON_ERROR, ON_COMPLETE (fin du flux, sans valeur), ON_EVENT, DEFERRED (minuterie),
+   * UNDEMONSTRATED (rappel dont l'appel n'est pas démontré). `concurrent` : peut se chevaucher avec d'autres
+   * traitements ; `cancellable` : une nouvelle émission ou un opérateur peut l'interrompre.
+   */
+  timing?:
+    'DIRECT' | 'AFTER_RESULT' | 'ON_ERROR' | 'ON_COMPLETE' | 'ON_EVENT' | 'DEFERRED' | 'UNDEMONSTRATED';
+  concurrent?: boolean;
+  cancellable?: boolean;
   loc: Loc;
 }
 
@@ -130,7 +140,11 @@ export interface UiDiagnostic {
     | 'URL_DYNAMIC'
     | 'CYCLE'
     | 'LIMIT'
-    | 'CONTEXT_UNRESOLVED';
+    | 'CONTEXT_UNRESOLVED'
+    | 'ACTION_FACTORY_UNRESOLVED'
+    | 'ALIAS_AMBIGUOUS'
+    | 'ASYNC_NOT_DEMONSTRATED'
+    | 'UI_DYNAMIC';
   message: string;
   loc: Loc;
 }
@@ -184,6 +198,14 @@ export interface UiElement {
   /** La méthode du composant appelée par le bouton (`(click)`, ou `(ngSubmit)` du formulaire). */
   handler?: string;
   submit?: boolean;
+  /** L'événement qui déclenche l'élément (click, ngSubmit, une sortie d'un composant…), et son expression. */
+  event?: string;
+  expression?: string;
+  /** Ce que l'expression déclenche, résolu dans le TypeScript (méthode, ou méthode vue dans un contexte). */
+  target?: string;
+  targetContext?: string;
+  /** L'expression ne désigne aucune méthode résolue (gestionnaire dynamique, objet inconnu). */
+  unresolved?: string;
   /** Un groupe d'onglets ou un onglet (Angular Material, ng-bootstrap, PrimeNG, composant maison). */
   tab?: UiTab;
   loc: Loc;

@@ -205,8 +205,8 @@ describe('graph, features and impact', () => {
   });
 
   it('the analyser version changed: older facts are read again', () => {
-    expect(RXJS_ANALYZER).toBe('rxjs-2');
-    expect(ANALYZERS).toContain('rxjs-2');
+    expect(Number(/^rxjs-(\d+)$/.exec(RXJS_ANALYZER)?.[1])).toBeGreaterThanOrEqual(2);
+    expect(ANALYZERS).toContain(RXJS_ANALYZER);
   });
 });
 

@@ -4,7 +4,7 @@ import { loadTypeScript } from '../static-analysis/typescript-loader.js';
 import { analyzeRxjs } from './analyze-rxjs.js';
 import { analyzeTemplates, membersOf } from './analyze-template.js';
 import type { ReadFile } from './files.js';
-import type { UiCall, UiFacts, UiField, UiState } from './facts.js';
+import type { UiCall, UiDiagnostic, UiFacts, UiField, UiState } from './facts.js';
 
 /**
  * LE FRONTAL ANGULAR : l'analyse statique existante (AST TypeScript, gabarits) donne les routes, les
@@ -128,10 +128,40 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
   // Les stores et flux RxJS : appels indirects (store → service → client HTTP), émissions, souscriptions.
   const rx = analyzeRxjs(ts, relevant, new Map(direct.map((call) => [call.id, call])));
   // Une enveloppe (`ApiClient.post(url, body)`) n'est pas un appel : chacun de ses appelants en est un.
-  const wrappers = new Set(rx.wrappers);
+  // Une méthode générique aux appels HTTP distingués par branche : ses appels sont ceux de ses branches.
+  const wrappers = new Set([...rx.wrappers, ...rx.branched]);
   const calls = [...direct.filter((call) => !wrappers.has(call.id)), ...rx.calls];
   // La structure des gabarits (conteneurs, boutons, conditions) et l'origine des états lus.
   const structure = analyzeTemplates(relevant, new Set(calls.map((call) => call.id)));
+  // Chaque élément interactif est relié à ce que son expression déclenche (méthode, ou méthode vue dans le
+  // contexte des valeurs écrites dans le gabarit) ; une expression qui ne mène à rien de résolu est dite.
+  const uiDiagnostics: UiDiagnostic[] = [];
+  for (const el of structure.elements) {
+    if (el.kind !== 'BUTTON' || !el.expression) continue;
+    const hits = rx.entryOf(el.component, el.expression);
+    const first = hits[0];
+    if (first) {
+      el.target = first.to;
+      if (first.context) el.targetContext = first.context;
+      if (first.unresolved)
+        uiDiagnostics.push({
+          from: first.method.replace('.', '#'),
+          at: first.method.replace('.', '#'),
+          code: 'CONTEXT_UNRESOLVED',
+          message: `élément « ${el.name} » : ${first.unresolved}`,
+          loc: el.loc,
+        });
+    } else if (!el.handler) {
+      el.unresolved = `(${el.event ?? 'click'})="${el.expression}" ne désigne aucune méthode résolue du composant ni de ses services`;
+      uiDiagnostics.push({
+        from: el.component,
+        at: el.id,
+        code: 'UI_DYNAMIC',
+        message: `élément « ${el.name} » : ${el.unresolved}`,
+        loc: el.loc,
+      });
+    }
+  }
   // Un membre lu par une condition qui est un flux (`canActivate$ | async`, `store.status$ | async`).
   const states: UiState[] = [...structure.states];
   for (const el of structure.elements)
@@ -189,7 +219,7 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
     handlers: structure.handlers,
     symbols: rx.symbols,
     links: rx.links,
-    diagnostics: rx.diagnostics,
+    diagnostics: [...rx.diagnostics, ...uiDiagnostics],
     warnings: [...graph.warnings, ...structure.warnings, ...rx.warnings],
   };
 }

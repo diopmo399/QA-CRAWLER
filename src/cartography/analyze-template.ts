@@ -59,6 +59,10 @@ interface Frame {
   container?: UiElement;
   name?: string;
   submitHandler?: string;
+  submitExpression?: string;
+  hasSubmitButton?: boolean;
+  /** Un élément interactif autre qu'un bouton : lien, input, composant ou directive avec un événement. */
+  interactive?: { event: string; expression: string };
   ifExpression?: string;
   /** Bloc @for : l'expression parcourue. */
   forExpr?: string;
@@ -66,6 +70,29 @@ interface Frame {
   lazy?: 'TEMPLATE' | 'DEFER';
   /** Élément qui porte le libellé de l'onglet englobant (gabarit de libellé, lien ngbNavLink). */
   tabLabel?: boolean;
+}
+
+/** Les événements d'interaction d'un élément quelconque (lien, div, directive). */
+const INTERACTIONS = ['click', 'dblclick', 'keydown.enter', 'keyup.enter', 'tap', 'press'];
+/** Les sorties d'un composant qui ne sont pas des actions de la personne (état, focus, saisie). */
+const NOT_ENTRY =
+  /^(ngModelChange|valueChange|selectedTabChange|selectedIndexChange|activeIdChange|navChange|onChange|focus|blur|mouseenter|mouseleave|mouseover|mouseout|input|keyup|keydown|change|scroll|resize)$/;
+
+/**
+ * Ce qui fait d'un élément (autre qu'un bouton) un point d'entrée : un événement d'interaction (`(click)` sur
+ * un lien, un input type=button, une directive), un input type=submit dans un formulaire, ou une sortie
+ * d'un composant de l'application (`<app-confirm (confirmed)="…">`).
+ */
+function interactionOf(tag: string, attrs: string): { event: string; expression: string } | undefined {
+  const events = [...attrs.matchAll(/\(([\w.-]+)\)\s*=\s*"([^"]*)"/g)].map((m) => ({
+    event: m[1] ?? '',
+    expression: (m[2] ?? '').trim(),
+  }));
+  const direct = events.find((e) => INTERACTIONS.includes(e.event));
+  if (direct) return direct;
+  if (tag === 'input' && /\btype\s*=\s*"submit"/.test(attrs)) return { event: 'submit', expression: '' };
+  if (tag.includes('-') && !LIBRARY_TAG.test(tag)) return events.find((e) => !NOT_ENTRY.test(e.event));
+  return undefined;
 }
 
 /** Les balises de bibliothèques : ce ne sont pas des composants de l'application. */
@@ -175,6 +202,61 @@ export function parseTemplate(
     for (let i = stack.length - 1; i >= 0; i -= 1) if (stack[i]?.tag === 'form') return stack[i];
     return undefined;
   };
+  /** Un bouton ou un élément interactif, complet à sa fermeture (son texte donne son nom). */
+  const closeInteractive = (frame: Frame, inner = ''): void => {
+    const custom =
+      frame.interactive && frame.tag.includes('-') ? `${frame.tag} (${frame.interactive.event})` : undefined;
+    const name =
+      strip(inner) ||
+      attr(frame.attrs, 'aria-label') ||
+      attr(frame.attrs, 'title') ||
+      (frame.interactive
+        ? (literalAttr(frame.attrs, 'value') ?? literalAttr(frame.attrs, 'label') ?? custom)
+        : undefined) ||
+      (frame.tag === 'button' ? 'button' : frame.tag);
+    const parent = nearestContainer();
+    const disabled = attr(frame.attrs, '[disabled]') ?? attr(frame.attrs, '[attr.disabled]');
+    const typeAttr = attr(frame.attrs, 'type');
+    const expression = frame.interactive?.expression || attr(frame.attrs, '(click)')?.trim() || undefined;
+    const click = methodOf(expression);
+    const form = nearestForm();
+    const submit =
+      !expression &&
+      (frame.tag === 'input'
+        ? typeAttr === 'submit'
+        : frame.tag === 'button' &&
+          (typeAttr === 'submit' || (typeAttr === undefined && form !== undefined)));
+    if (submit && form) form.hasSubmitButton = true;
+    const handler = click ?? (submit ? form?.submitHandler : undefined);
+    const event = submit ? 'ngSubmit' : (frame.interactive?.event ?? 'click');
+    const full = expression ?? (submit ? form?.submitExpression : undefined);
+    elements.push({
+      ...(full ? { expression: full } : {}),
+      event,
+      id: makeId('BUTTON', name),
+      component,
+      kind: 'BUTTON',
+      name,
+      tag: frame.tag,
+      ...(parent ? { parent: parent.id || `pending:${String(stackStartOf(stack, parent))}` } : {}),
+      fields: [],
+      ...(frame.condition
+        ? {
+            visibleWhen: {
+              expression: frame.condition.expression,
+              how: frame.condition.how,
+              loc: loc(frame.condition.at),
+            },
+          }
+        : {}),
+      ...(disabled
+        ? { disabledWhen: { expression: disabled.trim(), how: 'disabled', loc: loc(frame.start) } }
+        : {}),
+      ...(handler ? { handler } : {}),
+      ...(submit ? { submit: true } : {}),
+      loc: loc(frame.start),
+    });
+  };
   const makeId = (kind: UiElement['kind'], name: string): string => {
     const base = `${component}#${kind.toLowerCase()}:${slug(name)}`;
     const n = (used.get(base) ?? 0) + 1;
@@ -261,41 +343,28 @@ export function parseTemplate(
             if (owner) owner.name = text;
           }
         }
-        if (frame.tag === 'button') {
-          const name =
-            strip(inner) || attr(frame.attrs, 'aria-label') || attr(frame.attrs, 'title') || 'button';
+        if (frame.tag === 'form' && frame.submitExpression && !frame.hasSubmitButton) {
+          // Un formulaire envoyé sans bouton submit lu (touche Entrée, bouton d'un composant) : son envoi est
+          // le point d'entrée.
           const parent = nearestContainer();
-          const disabled = attr(frame.attrs, '[disabled]') ?? attr(frame.attrs, '[attr.disabled]');
-          const typeAttr = attr(frame.attrs, 'type');
-          const click = methodOf(attr(frame.attrs, '(click)'));
-          const form = nearestForm();
-          const submit = !click && (typeAttr === 'submit' || (typeAttr === undefined && form !== undefined));
-          const handler = click ?? (submit ? form?.submitHandler : undefined);
+          const name = `Envoi du formulaire${attr(frame.attrs, '[formGroup]') ? ` ${String(attr(frame.attrs, '[formGroup]')).trim()}` : ''}`;
+          const handler = frame.submitHandler;
           elements.push({
             id: makeId('BUTTON', name),
             component,
             kind: 'BUTTON',
             name,
-            tag: 'button',
+            tag: 'form',
             ...(parent ? { parent: parent.id || `pending:${String(stackStartOf(stack, parent))}` } : {}),
             fields: [],
-            ...(frame.condition
-              ? {
-                  visibleWhen: {
-                    expression: frame.condition.expression,
-                    how: frame.condition.how,
-                    loc: loc(frame.condition.at),
-                  },
-                }
-              : {}),
-            ...(disabled
-              ? { disabledWhen: { expression: disabled.trim(), how: 'disabled', loc: loc(frame.start) } }
-              : {}),
             ...(handler ? { handler } : {}),
-            ...(submit ? { submit: true } : {}),
+            submit: true,
+            event: 'ngSubmit',
+            expression: frame.submitExpression,
             loc: loc(frame.start),
           });
         }
+        if (frame.tag === 'button' || frame.interactive) closeInteractive(frame, inner);
         if (frame.container) finishContainer(frame);
       }
       continue;
@@ -364,11 +433,29 @@ export function parseTemplate(
       if (!condition && ngIf)
         condition = { expression: (ngIf.split(';')[0] ?? ngIf).trim(), how: 'ngIf', at };
       else if (!condition && hidden) condition = { expression: hidden.trim(), how: 'hidden', at };
-      if (tag === 'form') frame.submitHandler = methodOf(attr(attrs, '(ngSubmit)'));
+      if (tag === 'form') {
+        frame.submitHandler = methodOf(attr(attrs, '(ngSubmit)'));
+        const expression = attr(attrs, '(ngSubmit)')?.trim();
+        if (expression) frame.submitExpression = expression;
+      }
       const control = attr(attrs, 'formControlName');
       if (control) nearestContainer()?.fields.push(control);
       if (tag === 'button') {
         if (condition) frame.condition = condition;
+        stack.push(frame);
+        continue;
+      }
+      const interaction = tabRole ? undefined : interactionOf(tag, attrs);
+      if (interaction) {
+        if (condition) frame.condition = condition;
+        frame.interactive = interaction;
+        if (selfClose || VOID.has(tag)) {
+          // input, ou balise auto-fermante : l'élément est complet dès son ouverture.
+          stack.push(frame);
+          closeInteractive(frame);
+          stack.pop();
+          continue;
+        }
         stack.push(frame);
         continue;
       }

@@ -1361,9 +1361,45 @@ L'analyse d'impact liste les **actions touchées** (bouton ou méthode du gabari
 propagation et les conditions rencontrées : sûre par un chemin confirmé, probable quand une branche n'est
 pas déterminée (une dépendance partagée n'est pas un impact certain). Version de l'analyseur : `rxjs-2`.
 
-Limites : les appels passant par une variable locale (`const s = this.store; s.x()`), les fabriques
-d'actions (`createAction(…)` rendu par une fonction) et les appels HTTP faits directement dans une branche
-d'une méthode générique ne sont pas distingués par contexte.
+#### Alias, fabriques d'actions, branches HTTP et points d'entrée
+
+Depuis `rxjs-3` (analyseurs `cartography-4`), le contexte d'appel suit aussi :
+
+- **Alias locaux** : `const s = this.api`, une chaîne d'alias (`const a = this.api; const b = a`), une
+  méthode qui rend une dépendance (`this.getApi().x()`), un paramètre typé par une classe analysée
+  (`api: ReqApi`). Une variable réaffectée (`let s = this.a; if (…) s = this.b`) garde toutes ses cibles,
+  comme probables, avec `ALIAS_AMBIGUOUS`. Une méthode détachée (`const { run } = this.api`) est probable
+  (`this` n'est pas garanti) sauf si c'est une propriété fléchée ou un `.bind(this.api)`.
+- **Fabriques d'actions** : une fonction de module, fléchée, une méthode ou une fabrique qui en appelle une
+  autre (`makeSaveAction<T>()` → `createAction(ENREGISTRER, …)`) est évaluée avec ses arguments ; le nom
+  `createAction` n'est pas requis. Une fabrique à plusieurs retours, une valeur dynamique ou un corps
+  absent gardent toutes les branches et donnent `ACTION_FACTORY_UNRESOLVED` (avec la raison). Un paramètre
+  qui ne fait que remplir une donnée ne décide d'aucune branche et ne crée pas de contexte.
+- **Branches HTTP d'une méthode générique** : quand une méthode fait plusieurs appels HTTP choisis par un
+  paramètre, chaque appel est un nœud (`ReqApi#execute@L13`) ; la méthode générique les relie comme
+  possibles avec leur condition, et chaque contexte n'atteint que le sien. Deux boutons qui appellent la
+  même méthode avec des valeurs différentes atteignent chacun leur seul endpoint.
+- **Dépendances temporelles** (`detail.timing`) : `DIRECT`, `AFTER_RESULT` (après une valeur reçue),
+  `ON_ERROR`, `ON_COMPLETE` (complétion ou erreur, sans valeur), `ON_EVENT` (événement du gabarit),
+  `DEFERRED` (minuterie), `UNDEMONSTRATED`. `filter(…)` avant la continuation devient une condition ;
+  `cancellable` dit qu'une nouvelle émission annule le traitement (switchMap), `concurrent` que plusieurs
+  traitements peuvent courir (mergeMap). Une chaîne jamais souscrite ni rendue donne un lien inconnu et
+  `ASYNC_NOT_DEMONSTRATED`. L'ordre des lignes n'est jamais pris pour un ordre d'exécution.
+- **Points d'entrée du gabarit** : boutons, `input type="submit"`/`button`, liens avec un événement,
+  `(ngSubmit)` (un formulaire sans bouton d'envoi a sa propre entrée), sorties des composants enfants
+  (`(saved)="onSaved()"`) et `(click)`, `(dblclick)`, `(keyup.enter)`… L'expression est évaluée :
+  `run('VALIDER')` déclenche la version contextuelle `ReqComponent#run⟨'VALIDER'⟩` (lien `TRIGGERS`, timing
+  `ON_EVENT`). Un gestionnaire non résolu (`handlers[0]()`) n'est relié à rien et donne `UI_DYNAMIC`.
+
+L'arbre de parcours montre écran → groupe d'onglets → onglet → conteneur → composant → élément
+interactif → méthode → store → appel → endpoint, avec « activé si » / « désactivé si » / « masqué si »
+lus dans le gabarit et l'événement déclencheur. Un composant partagé n'apparaît que sous les onglets qui
+l'instancient. Une méthode sans déclencheur dans le gabarit est une **entrée technique** ; une méthode
+générique dont seules les versions contextuelles sont déclenchées n'est pas montrée seule.
+
+Limites : un alias passé par un objet ou un tableau (`this.handlers[0]`), une fabrique importée d'un paquet
+non analysé, une action construite par concaténation ou lue dans la réponse d'un appel, et les éléments
+créés en TypeScript (sans gabarit) ne sont pas résolus ; ils sont dits, jamais devinés.
 
 #### Onglets Angular
 

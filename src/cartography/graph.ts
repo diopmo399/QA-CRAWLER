@@ -298,7 +298,7 @@ export function buildGraph(input: GraphInput): GraphOutput {
         const owner = d.from.split('#')[0] ?? '';
         // Pour l'écran, chaque rupture dit de quelle action elle part ; pour la méthode, la rupture seule.
         for (const [key, text] of [
-          [owner, `${d.from.replace('#', '.')}() — ${d.message}`],
+          [owner, d.code === 'UI_DYNAMIC' ? d.message : `${d.from.replace('#', '.')}() — ${d.message}`],
           [d.from, d.message],
         ] as const)
           diagnosticsOf.set(key, [...new Set([...(diagnosticsOf.get(key) ?? []), text])].slice(0, 6));
@@ -877,12 +877,15 @@ export function buildGraph(input: GraphInput): GraphOutput {
       for (const l of ui.links ?? []) {
         const evidence = [ev(src, l.loc, 'STATIC_CODE', l.confidence, l.kind)];
         const flow: MapEdge['detail'] =
-          l.condition || l.async || l.data || l.context
+          l.condition || l.async || l.data || l.context || (l.timing && l.timing !== 'DIRECT')
             ? {
                 ...(l.condition ? { condition: l.condition } : {}),
                 ...(l.async ? { async: l.async } : {}),
                 ...(l.data ? { data: l.data } : {}),
                 ...(l.context ? { context: l.context } : {}),
+                ...(l.timing ? { timing: l.timing } : {}),
+                ...(l.concurrent ? { concurrent: true } : {}),
+                ...(l.cancellable ? { cancellable: true } : {}),
               }
             : undefined;
         if (l.kind === 'DERIVES')
@@ -991,6 +994,10 @@ export function buildGraph(input: GraphInput): GraphOutput {
             tag: el.tag,
             ...(el.handler ? { handler: el.handler } : {}),
             ...(el.submit ? { submit: true } : {}),
+            // L'événement n'est noté que s'il n'est pas un simple click (pas de faux changement face à un scan d'avant).
+            ...(el.event && el.event !== 'click' && el.event !== 'ngSubmit' ? { event: el.event } : {}),
+            ...(el.targetContext ? { context: el.targetContext } : {}),
+            ...(el.unresolved ? { unresolved: el.unresolved } : {}),
             ...(el.tab
               ? {
                   tab: el.tab.role,
@@ -1152,14 +1159,22 @@ export function buildGraph(input: GraphInput): GraphOutput {
                 [ev(src, el.tab.selectedBy.loc, 'TEMPLATE', 'CONFIRMED')],
               );
           }
-        if (el.kind === 'BUTTON' && el.handler && nodes.has(`METHOD:${src}:${el.component}#${el.handler}`))
+        // Le déclencheur : la cible résolue de l'expression (méthode, ou méthode vue dans le contexte des
+        // valeurs écrites dans le gabarit), sinon le gestionnaire nommé.
+        const trigger = el.target
+          ? `METHOD:${src}:${el.target}`
+          : el.handler
+            ? `METHOD:${src}:${el.component}#${el.handler}`
+            : undefined;
+        if (el.kind === 'BUTTON' && trigger && nodes.has(trigger))
           edge(
             id,
-            `METHOD:${src}:${el.component}#${el.handler}`,
+            trigger,
             'TRIGGERS',
             'CONFIRMED',
-            `${el.submit ? '(ngSubmit)' : '(click)'}="${el.handler}()"`,
-            [ev(src, el.loc, 'STATIC_CODE', 'CONFIRMED')],
+            `(${el.event ?? (el.submit ? 'ngSubmit' : 'click')})="${el.expression ?? `${el.handler ?? ''}()`}"${el.targetContext ? ` : contexte ${el.targetContext}` : ''}`,
+            [ev(src, el.loc, 'TEMPLATE', 'CONFIRMED')],
+            el.targetContext ? { context: el.targetContext, timing: 'ON_EVENT' } : { timing: 'ON_EVENT' },
           );
         if (el.kind === 'BUTTON' && el.handler) {
           const handler = ui.handlers?.find((h) => h.component === el.component && h.method === el.handler);
