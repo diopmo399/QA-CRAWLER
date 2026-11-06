@@ -86,6 +86,8 @@ async function center(locator: Locator): Promise<{ x: number; y: number }> {
 }
 
 async function dragTo(from: Locator, to: { x: number; y: number }): Promise<void> {
+  // Une commande précédente se termine par un redessin complet : glisser pendant celui-ci perdrait le geste.
+  await page.locator('qa-crawler-flow-studio[aria-busy="false"]').waitFor();
   const start = await center(from);
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
