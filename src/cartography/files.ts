@@ -77,6 +77,13 @@ const IGNORED_FILE =
 const LOCK_FILE = /^(package-lock|npm-shrinkwrap)\.json$|^pnpm-lock\.ya?ml$/;
 /** Combien de fichiers trop gros sont nommés dans la note du scan. */
 const NAMED_LARGE = 5;
+/** Les manifestes et la configuration (modules, dépendances, préfixes, proxys) : lus avant tout. */
+const MANIFEST =
+  /(^|\/)(pom\.xml|package\.json|angular\.json|tsconfig[\w.-]*\.json|[\w-]*\.gradle(\.kts)?|application[\w-]*\.(ya?ml|properties)|bootstrap[\w-]*\.(ya?ml|properties)|proxy[\w.-]*\.(json|js|conf))$/i;
+/** Le code et les gabarits : lus avant les autres fichiers de données (traductions, exemples…). */
+const CODE = /\.(ts|tsx|js|jsx|vue|html|java|kt|cs|graphql|gql|sql)$/i;
+/** L'ordre de lecture sous une limite : manifestes, puis code, puis données ; puis le chemin (déterministe). */
+const tierOf = (file: string): number => (MANIFEST.test(file) ? 0 : CODE.test(file) ? 1 : 2);
 
 /** Un fichier qu'une lecture de la cartographie ne rend jamais (secret, ou sans intérêt pour elle). */
 export const isReadableFile = (name: string): boolean =>
@@ -150,15 +157,23 @@ export async function readSource(
   const files: ReadFile[] = [];
   let skipped = 0;
   const large: string[] = [];
-  for (const file of [...new Set(candidates)].sort()) {
+  /** Les fichiers écartés par une limite (nombre, durée) : nommés dans la note, jamais perdus en silence. */
+  const cut: string[] = [];
+  // Sous une limite, ce qui structure l'analyse (manifestes, code) passe avant les données.
+  const ordered = [...new Set(candidates)].sort(
+    (a, b) => tierOf(a) - tierOf(b) || (a < b ? -1 : a > b ? 1 : 0),
+  );
+  for (const file of ordered) {
     if (signal?.aborted) break;
     if (files.length >= limits.maxFiles) {
       skipped++;
+      cut.push(path.relative(root, file).split(path.sep).join('/'));
       limitNotes.add(`file limit reached (${String(limits.maxFiles)})`);
       continue;
     }
     if (now() - started > limits.maxDurationMs) {
       skipped++;
+      cut.push(path.relative(root, file).split(path.sep).join('/'));
       limitNotes.add(`duration limit reached (${String(limits.maxDurationMs)} ms)`);
       continue;
     }
@@ -180,6 +195,12 @@ export async function readSource(
       bytes: info.size,
     });
   }
+  if (cut.length > 0)
+    limitNotes.add(
+      `files not read because of a limit (${String(cut.length)}): ${cut.slice(0, NAMED_LARGE).join(', ')}${cut.length > NAMED_LARGE ? ', …' : ''}`,
+    );
+  // L'ordre rendu reste celui des chemins : l'empreinte d'un même ensemble ne dépend pas de la priorité.
+  files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   if (large.length > 0) {
     // La note nomme les premiers fichiers écartés, pour qu'on sache ce qui manque à l'analyse.
     const names = large.slice(0, NAMED_LARGE).join(', ') + (large.length > NAMED_LARGE ? ', …' : '');

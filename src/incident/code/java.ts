@@ -644,10 +644,16 @@ function analyzeType(ctx: FileContext, decl: JavaTypeDecl): void {
     declaration: decl.kind,
     qualifiedName: decl.qualifiedName,
     annotations,
-    fields: [...fields.entries()].map(([name, info]) => `${name}:${info.type.name}`),
+    // Le type tel qu'écrit quand il est qualifié (`com.a.Audit`) : le nom simple seul confondrait des homonymes.
+    fields: [...fields.entries()].map(
+      ([name, info]) =>
+        `${name}:${info.type.text.replace(/<.*$/, '').includes('.') ? info.type.text.replace(/<.*$/, '') : info.type.name}`,
+    ),
     imports: ctx.java.imports,
   };
   if (ctx.java.package) detail.package = ctx.java.package;
+  // Une classe abstraite n'est jamais l'objet injecté : seules ses sous-classes concrètes le sont.
+  if (decl.modifiers.includes('abstract')) detail.abstract = true;
   if (decl.extends.length > 0) detail.extends = decl.extends.map((e) => e.text);
   if (decl.implements.length > 0) detail.implements = decl.implements.map((e) => e.text);
   if (decl.components.length > 0) detail.components = decl.components.map((c) => c.name);
@@ -845,6 +851,8 @@ function analyzeMethod(ctx: FileContext, input: MethodInput): void {
     params: method.params.map((p) => `${p.type.text} ${p.name}`),
     endLine: method.endLine,
   };
+  // Sans corps : déclarée seulement (interface, méthode abstraite) ; l'exécution est dans une implémentation.
+  if (method.body === undefined) detail.bodyless = true;
   if (method.returnType) detail.returns = method.returnType.text;
   if (method.throws.length > 0) detail.declaredThrows = method.throws;
   if (method.annotations.some((a) => a.name === 'Test' || a.name === 'ParameterizedTest')) detail.test = true;

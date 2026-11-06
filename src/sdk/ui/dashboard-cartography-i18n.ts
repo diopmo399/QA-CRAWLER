@@ -684,6 +684,8 @@ const fr = {
           ? `${String(n)} fichier(s) de plus de ${String(kb)} Ko non lu(s) : ${names}`
           : `Fichiers de plus de ${String(kb)} Ko non lus`,
       fileLimit: (n: number) => `Limite de ${String(n)} fichiers atteinte : les suivants n’ont pas été lus`,
+      cut: (n: number, names: string) =>
+        `${String(n)} fichier(s) non lu(s) à cause d’une limite (code et configuration lus en premier) : ${names}`,
       duration: (s: number) => `Durée maximale de lecture atteinte (${String(s)} s) : lecture incomplète`,
       includeOutside: (p: string) => `Sous-dossier hors de la source ignoré : ${p}`,
     },
@@ -1899,6 +1901,8 @@ const en: MapStrings = {
           ? `${String(n)} file(s) over ${String(kb)} KB not read: ${names}`
           : `Files over ${String(kb)} KB not read`,
       fileLimit: (n) => `Limit of ${String(n)} files reached: the following ones were not read`,
+      cut: (n, names) =>
+        `${String(n)} file(s) not read because of a limit (code and configuration read first): ${names}`,
       duration: (s) => `Maximum read time reached (${String(s)} s): incomplete read`,
       includeOutside: (p) => `Sub-folder outside the source ignored: ${p}`,
     },

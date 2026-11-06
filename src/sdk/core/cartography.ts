@@ -242,6 +242,11 @@ export interface ScanRecord {
   incremental: boolean;
   sources: SourceScan[];
   counts: Partial<Record<MapNodeKind, number>>;
+  /**
+   * Les relations lues dans le code mais non raccordées au graphe, par type (absent : aucune) : leur
+   * extrémité n'y est pas représentée. Elles ne sont jamais perdues sans être comptées.
+   */
+  unattached?: Partial<Record<MapEdgeKind, number>>;
   edges: number;
   errors: string[];
   /** Les racines de métadonnées lues (locales, autorisées) : état, fichiers lus, éléments ignorés. */

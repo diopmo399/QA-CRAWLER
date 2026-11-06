@@ -1123,6 +1123,19 @@ sous-graphe 300 nœuds et une profondeur de 6 au plus, sans doublon ni cycle, et
 coupé (`truncated`). Chaque méthode accepte `{ signal }` : l'écran annule la requête devenue inutile
 (erreur `ABORTED`, jamais affichée).
 
+**Résolution des appels Java.** Un appel sur une interface ou une classe abstraite est relié à la méthode
+exécutée par chaque classe concrète de la source qui en est un sous-type (même par une classe abstraite
+intermédiaire), à nom et arité égaux (surcharges distinguées) ; une méthode héritée d'un type parent lu est
+trouvée dans la hiérarchie. Une seule candidate : `PROBABLE` ; plusieurs : `@Primary`, sinon le bean nommé
+comme le champ injecté (pour cet appelant seulement) ; sinon toutes, `UNKNOWN` et marquées comme candidates
+(jamais une choisie). Une classe abstraite n'est jamais l'implémentation exécutée. Le fragment écrit à la
+main d'un dépôt Spring Data est suivi jusqu'à son implémentation ; son accès aux données y est lu, jamais
+déduit de son nom. Les imports à la demande (`import a.b.*`) départagent les homonymes ; deux classes
+homonymes de paquets différents restent deux nœuds (nom qualifié). Une méthode absente des sources (héritée
+d'une bibliothèque) est reliée à sa classe ; une relation non raccordable est comptée
+(`scan.unattached`), jamais perdue en silence. Sous une limite de fichiers, manifestes et code sont lus
+avant les données, et les fichiers non lus sont nommés.
+
 **Index et cache.** Le serveur construit un **index** une fois par version (scan + décisions) :
 nœuds, adjacences entrante et sortante, concepts par fonctionnalité, texte de recherche par concept,
 nombre de champs. La clé est `scan|nombre de décisions|dernière décision` ; la couverture est

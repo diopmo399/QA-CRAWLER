@@ -188,6 +188,28 @@ describe('cartography source reading', () => {
     expect(scoped.limits.join(' ')).toContain('outside the source');
   });
 
+  it('under a file limit, manifests and code are read before data files; what is not read is named', async () => {
+    const app = path.join(dir, 'prio');
+    await mkdir(path.join(app, 'a-i18n'), { recursive: true });
+    await mkdir(path.join(app, 'src'), { recursive: true });
+    // Des données en tête de l'ordre alphabétique : elles ne passent plus avant le code.
+    for (const lang of ['de', 'en', 'es', 'fr'])
+      await writeFile(path.join(app, `a-i18n/${lang}.json`), '{}\n');
+    await writeFile(path.join(app, 'package.json'), '{"name":"app"}\n');
+    await writeFile(path.join(app, 'src/z-orders.service.ts'), 'export class OrdersService {}\n');
+    const read = await readSource(app, [], { maxFiles: 3, maxFileBytes: 1024, maxDurationMs: 60_000 });
+    expect(read.files.map((f) => f.path)).toEqual([
+      'a-i18n/de.json',
+      'package.json',
+      'src/z-orders.service.ts',
+    ]);
+    expect(read.skipped).toBe(3);
+    expect(read.limits).toContain('file limit reached (3)');
+    expect(read.limits).toContain(
+      'files not read because of a limit (3): a-i18n/en.json, a-i18n/es.json, a-i18n/fr.json',
+    );
+  });
+
   it('never reads dependency lock files; names the files too large to be read', async () => {
     const big = path.join(dir, 'big');
     await mkdir(path.join(big, 'src/assets'), { recursive: true });

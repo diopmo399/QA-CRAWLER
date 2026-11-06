@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type * as TS from 'typescript';
 import type { TypeScriptModule } from '../static-analysis/typescript-loader.js';
 import type { ReadFile } from './files.js';
@@ -417,6 +418,51 @@ function collectConstants(
 
 // ── Lecture d'une classe ─────────────────────────────────────────────────────────────────────────
 
+const IMPORT_EXTENSIONS = ['', '.ts', '/index.ts'];
+/** La provenance d'une constante importée (preuve citée quand elle forme une URL). */
+const importedFrom = new WeakMap<TS.Expression, string>();
+
+/** Les constantes exportées (texte littéral) des modules relatifs importés par un fichier, sous leur nom local. */
+function importedLiterals(
+  ts: TypeScriptModule,
+  sf: TS.SourceFile,
+  from: string,
+  byPath: ReadonlyMap<string, ReadFile>,
+): Map<string, TS.Expression> {
+  const out = new Map<string, TS.Expression>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const spec = st.moduleSpecifier.text;
+    const named = st.importClause?.namedBindings;
+    if (!spec.startsWith('.') || !named || !ts.isNamedImports(named)) continue;
+    const base = path.posix.normalize(path.posix.join(path.posix.dirname(from), spec)).replace(/\.js$/, '');
+    const target = IMPORT_EXTENSIONS.map((ext) => byPath.get(base + ext)).find((f) => f !== undefined);
+    if (!target) continue;
+    const exported = new Map<string, TS.Expression>();
+    const tsf = ts.createSourceFile(target.path, target.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    for (const node of tsf.statements)
+      if (
+        ts.isVariableStatement(node) &&
+        node.declarationList.flags & ts.NodeFlags.Const &&
+        node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+      )
+        for (const d of node.declarationList.declarations)
+          if (
+            ts.isIdentifier(d.name) &&
+            d.initializer &&
+            (ts.isStringLiteral(d.initializer) || ts.isNoSubstitutionTemplateLiteral(d.initializer))
+          ) {
+            exported.set(d.name.text, d.initializer);
+            importedFrom.set(d.initializer, `${d.name.text} = '${d.initializer.text}' (${target.path})`);
+          }
+    for (const element of named.elements) {
+      const value = exported.get((element.propertyName ?? element.name).text);
+      if (value) out.set(element.name.text, value);
+    }
+  }
+  return out;
+}
+
 function classesOf(
   ts: TypeScriptModule,
   file: ReadFile,
@@ -435,6 +481,10 @@ function classesOf(
     if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const)
       for (const d of statement.declarationList.declarations)
         if (ts.isIdentifier(d.name) && d.initializer) module.set(d.name.text, d.initializer);
+  // Les constantes texte importées d'un fichier du dépôt (`import { URL } from './urls'`) : lues dans le
+  // fichier désigné par l'import, jamais devinées par leur nom ; une définition locale l'emporte.
+  for (const [name, value] of importedLiterals(ts, sf, file.path, byPath))
+    if (!module.has(name)) module.set(name, value);
   const out: ClassInfo[] = [];
   for (const statement of sf.statements) {
     if (!ts.isClassDeclaration(statement) || !statement.name) continue;
@@ -1827,7 +1877,15 @@ function urlOf(
     const index = method.params.indexOf(expr.text);
     if (index >= 0) return { route: '{url}', param: index, expression: text };
     const value = method.locals.get(expr.text) ?? info.module.get(expr.text);
-    if (value && depth < 5) return { ...urlOf(ts, value, info, method, depth + 1), expression: text };
+    if (value && depth < 5) {
+      const origin = importedFrom.get(value);
+      const inner = urlOf(ts, value, info, method, depth + 1);
+      return {
+        ...inner,
+        expression: text,
+        ...(origin ? { evidence: [...(inner.evidence ?? []), `constante importée ${origin}`] } : {}),
+      };
+    }
     return { expression: text };
   }
   if (ts.isPropertyAccessExpression(expr) && expr.expression.kind === ts.SyntaxKind.ThisKeyword) {

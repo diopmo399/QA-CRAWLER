@@ -482,10 +482,25 @@ export function analyzeJava(
       .filter((cls) => cls.role === 'REPOSITORY' && cls.repositoryOf)
       .map((cls) => [cls.name, cls.repositoryOf ?? '']),
   );
+  // Les méthodes des fragments d'un dépôt (interfaces de la source qu'il étend, `OrderRepositoryCustom`) :
+  // écrites à la main, leur accès est lu dans leur implémentation, jamais déduit de leur nom.
+  const fragmentOps = new Map<string, Set<string>>();
+  const declOf = new Map(parsed.flatMap((p) => p.java.types.map((t) => [t.simpleName, t] as const)));
+  for (const repository of repositories.keys()) {
+    const decl = declOf.get(repository);
+    const ops = new Set<string>();
+    for (const parent of [...(decl?.extends ?? []), ...(decl?.implements ?? [])]) {
+      const fragment = declOf.get(parent.name);
+      if (fragment && fragment.kind === 'interface' && !repositories.has(fragment.simpleName))
+        for (const m of fragment.methods) ops.add(m.name);
+    }
+    if (ops.size > 0) fragmentOps.set(repository, ops);
+  }
   const repositoryAccess: JavaRepositoryAccess[] = [];
   for (const use of uses) {
     const entity = repositories.get(use.type);
     if (!entity) continue;
+    if (fragmentOps.get(use.type)?.has(use.operation)) continue;
     const [owner, name] = use.method.split('.');
     const from = methods.find((method) => method.owner === owner && method.name === name);
     if (!from) continue;
@@ -602,6 +617,8 @@ export function analyzeJava(
       from: call.from,
       ...(call.to ? { to: call.to } : {}),
       status: call.status === 'STATICALLY_RESOLVED' || call.status === 'INFERRED' ? call.status : 'UNKNOWN',
+      ...(call.via ? { via: call.via } : {}),
+      ...(call.candidates ? { candidates: call.candidates } : {}),
       loc: { file: call.file, line: call.line },
     })),
     mappings,

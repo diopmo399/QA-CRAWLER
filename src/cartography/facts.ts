@@ -462,6 +462,10 @@ export interface JavaCall {
   from: string;
   to?: string;
   status: 'STATICALLY_RESOLVED' | 'INFERRED' | 'UNKNOWN';
+  /** Comment la cible a été trouvée, quand ce n'est pas le type du receveur (implémentation, @Primary…). */
+  via?: string;
+  /** Appel ambigu : toutes les cibles possibles (implémentations sans désignation), dont celle-ci. */
+  candidates?: string[];
   loc: Loc;
 }
 

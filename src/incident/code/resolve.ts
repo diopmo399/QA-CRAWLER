@@ -16,21 +16,14 @@ export function resolveCalls(index: CodeIndex): CodeIndex {
   // Un appel déjà relié (avec sa cible) garde son statut : la résolution est idempotente.
   const calls = index.calls.map((call) => (call.to ? call : resolveOne(ctx, call)));
   const extra: CodeCall[] = [];
-  for (const call of calls) {
-    const implementation = call.to ? implementationOf(ctx, call.to) : undefined;
-    if (!implementation || !call.to) continue;
-    const exists = [...calls, ...extra].some((c) => c.from === call.to && c.to === implementation.id);
-    if (exists) continue;
-    const target = ctx.byId.get(call.to);
-    extra.push({
-      from: call.to,
-      to: implementation.id,
-      text: `${implementation.name} (implémentation unique de ${target?.name ?? call.to})`,
-      status: 'INFERRED',
-      file: implementation.file,
-      line: implementation.line,
-    });
-  }
+  const known = new Set(calls.map((c) => `${c.from}>${c.to ?? ''}`));
+  for (const call of calls)
+    for (const next of call.to ? dispatchOf(ctx, call) : []) {
+      const key = `${next.from}>${next.to ?? ''}`;
+      if (known.has(key)) continue;
+      known.add(key);
+      extra.push(next);
+    }
   return { ...index, calls: [...calls, ...extra] };
 }
 
@@ -41,6 +34,9 @@ interface ResolveContext {
   types: Map<string, Map<string, CodeSymbol[]>>;
   /** Symboles par application et fichier. */
   files: Map<string, Map<string, CodeSymbol[]>>;
+  /** Mémo : les types parents d'un type (classes puis interfaces, directs ou non), et ses sous-types concrets. */
+  ancestors: Map<string, CodeSymbol[]>;
+  concrete: Map<string, CodeSymbol[]>;
 }
 
 function buildContext(symbols: CodeSymbol[]): ResolveContext {
@@ -61,7 +57,7 @@ function buildContext(symbols: CodeSymbol[]): ResolveContext {
     byFile.set(symbol.file, [...(byFile.get(symbol.file) ?? []), symbol]);
     files.set(symbol.applicationId, byFile);
   }
-  return { byId, children, types, files };
+  return { byId, children, types, files, ancestors: new Map(), concrete: new Map() };
 }
 
 function list(symbol: CodeSymbol | undefined, key: string): string[] {
@@ -130,14 +126,22 @@ function pickJavaType(
   name: string,
   owner: CodeSymbol | undefined,
 ): CodeSymbol | undefined {
-  const candidates = ctx.types.get(app)?.get(name) ?? [];
+  const written = name.replace(/<.*$/, '').trim();
+  const simple = written.split('.').pop() ?? written;
+  const candidates = ctx.types.get(app)?.get(simple) ?? [];
+  // Un nom qualifié écrit dans le code désigne ce type et aucun autre.
+  if (written.includes('.')) return candidates.find((c) => c.detail?.qualifiedName === written);
   if (candidates.length <= 1) return candidates[0];
   const imports = list(owner, 'imports');
   const imported = candidates.filter((c) => imports.includes(String(c.detail?.qualifiedName)));
   if (imported.length === 1) return imported[0];
   const samePackage = candidates.filter((c) => c.detail?.package === owner?.detail?.package);
+  if (samePackage.length === 1) return samePackage[0];
+  // Puis un import à la demande (`import a.b.*;`), comme en Java : il ne tranche que s'il en désigne un seul.
+  const onDemand = new Set(imports.filter((i) => i.endsWith('.*')).map((i) => i.slice(0, -2)));
+  const wildcard = candidates.filter((c) => onDemand.has(String(c.detail?.package)));
   // Plusieurs types du même nom sans import qui tranche : pas de relation inventée.
-  return samePackage.length === 1 ? samePackage[0] : undefined;
+  return wildcard.length === 1 ? wildcard[0] : undefined;
 }
 
 function resolveJava(ctx: ResolveContext, call: CodeCall, from: CodeSymbol): CodeCall {
@@ -174,6 +178,19 @@ function resolveMember(
     const unique = usable.length === 1 || (methods.length === 1 && arity === undefined);
     return { ...call, to: target.id, status: unique ? 'STATICALLY_RESOLVED' : 'INFERRED' };
   }
+  // Méthode héritée d'un type parent présent dans la source (classe de base, interface parente) : la
+  // déclaration est trouvée dans la hiérarchie, comme le compilateur la trouve ; le plus proche l'emporte.
+  for (const parent of ancestorsOf(ctx, type)) {
+    const inherited = (ctx.children.get(parent.id) ?? []).filter(
+      (s) => s.kind !== 'VALIDATION' && s.kind !== 'ERROR_HANDLER' && memberName(s) === method,
+    );
+    if (inherited.length === 0) continue;
+    const exact =
+      arity === undefined ? inherited : inherited.filter((m) => list(m, 'params').length === arity);
+    const target = exact[0] ?? inherited[0];
+    if (!target) break;
+    return { ...call, to: target.id, status: exact.length === 1 ? 'STATICALLY_RESOLVED' : 'INFERRED' };
+  }
   // Accesseur implicite d'un record : déclaré par le langage.
   if (list(type, 'components').includes(method))
     return { ...call, to: type.id, status: 'STATICALLY_RESOLVED' };
@@ -190,23 +207,140 @@ function resolveMember(
   return call;
 }
 
-function implementationOf(ctx: ResolveContext, methodId: string): CodeSymbol | undefined {
-  const method = ctx.byId.get(methodId);
-  const type = method?.parent ? ctx.byId.get(method.parent) : undefined;
-  if (!method || !type || type.detail?.declaration !== 'interface' || type.layer === 'FRONTEND')
-    return undefined;
-  if (type.kind === 'REPOSITORY' || type.kind === 'HTTP_CLIENT') return undefined;
-  const simple = type.name.split('.').pop() ?? type.name;
-  const implementations = [...ctx.byId.values()].filter(
-    (s) =>
-      s.applicationId === type.applicationId &&
-      s.detail?.declaration === 'class' &&
-      list(s, 'implements').some((i) => i.replace(/<.*$/, '').split('.').pop() === simple),
-  );
-  if (implementations.length !== 1 || !implementations[0]) return undefined;
-  const name = memberName(method);
-  const candidates = (ctx.children.get(implementations[0].id) ?? []).filter((s) => memberName(s) === name);
-  return candidates.length === 1 ? candidates[0] : undefined;
+/** Les types parents d'un type lus dans la source : classes de base d’abord, puis interfaces, directs ou non. */
+function ancestorsOf(ctx: ResolveContext, type: CodeSymbol): CodeSymbol[] {
+  const cached = ctx.ancestors.get(type.id);
+  if (cached) return cached;
+  const out: CodeSymbol[] = [];
+  const seen = new Set<string>([type.id]);
+  const queue: CodeSymbol[] = [type];
+  for (let current = queue.shift(); current && out.length < 40; current = queue.shift()) {
+    for (const name of [...list(current, 'extends'), ...list(current, 'implements')]) {
+      const parent = pickJavaType(ctx, current.applicationId, name, current);
+      if (!parent || seen.has(parent.id)) continue;
+      seen.add(parent.id);
+      out.push(parent);
+      queue.push(parent);
+    }
+  }
+  ctx.ancestors.set(type.id, out);
+  return out;
+}
+
+/** Les classes concrètes (ni interface, ni abstraite) qui sont un sous-type du type, directement ou non. */
+function concreteSubtypes(ctx: ResolveContext, type: CodeSymbol): CodeSymbol[] {
+  const cached = ctx.concrete.get(type.id);
+  if (cached) return cached;
+  const out = [...(ctx.types.get(type.applicationId)?.values() ?? [])]
+    .flat()
+    .filter(
+      (s) =>
+        s.detail?.declaration === 'class' &&
+        s.detail.abstract !== true &&
+        ancestorsOf(ctx, s).some((a) => a.id === type.id),
+    );
+  ctx.concrete.set(type.id, out);
+  return out;
+}
+
+/** La méthode qu'une classe concrète exécute pour ce nom et cette arité : la plus dérivée qui a un corps. */
+function executedIn(
+  ctx: ResolveContext,
+  cls: CodeSymbol,
+  name: string,
+  arity: number,
+): CodeSymbol | undefined {
+  for (const owner of [cls, ...ancestorsOf(ctx, cls)]) {
+    const found = (ctx.children.get(owner.id) ?? []).find(
+      (s) => memberName(s) === name && list(s, 'params').length === arity && s.detail?.bodyless !== true,
+    );
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** Le type statique du receveur d'un appel Java (`champ.m()`, `Type.m()`), s'il est indexé. */
+function receiverOf(ctx: ResolveContext, call: CodeCall): { type: CodeSymbol; field?: string } | undefined {
+  const from = ctx.byId.get(call.from);
+  if (!from || from.layer === 'FRONTEND') return undefined;
+  const match = /^(?:this\s*\.\s*)?([A-Za-z_$][\w$]*)\s*(?:\.|::)/.exec(call.text);
+  if (!match) return undefined;
+  const receiver = match[1] ?? '';
+  const owner = ownerClass(ctx, from);
+  const declared = fieldType(owner, receiver);
+  const typeName = declared ?? (/^[A-Z]/.test(receiver) ? receiver : undefined);
+  const type = typeName ? pickJavaType(ctx, from.applicationId, typeName, owner) : undefined;
+  return type ? { type, ...(declared ? { field: receiver } : {}) } : undefined;
+}
+
+/** Le nom de bean Spring par défaut d'une classe (`MailNotifier` → `mailNotifier`, `URLReader` inchangé). */
+function beanName(cls: CodeSymbol): string {
+  const simple = cls.name.split('.').pop() ?? cls.name;
+  return /^[A-Z]{2}/.test(simple) ? simple : simple.charAt(0).toLowerCase() + simple.slice(1);
+}
+
+/**
+ * L'EXÉCUTION D'UN APPEL SUR UNE INTERFACE OU UNE CLASSE ABSTRAITE : les classes concrètes de la source qui
+ * en sont un sous-type (même par une classe abstraite intermédiaire), et la méthode que chacune exécute
+ * (même nom, même arité, la plus dérivée qui a un corps, méthode `default` comprise). INFERRED toujours : un
+ * bean d'une bibliothèque pourrait aussi exister. Une seule candidate : elle ; plusieurs : `@Primary`, sinon
+ * le bean nommé comme le champ injecté (règle de Spring) ; sinon toutes, marquées ambiguës (`candidates`),
+ * jamais une choisie au hasard. La relation part de la déclaration quand le choix vaut pour tous les
+ * appelants ; de l'appelant quand il dépend de lui (nom du champ, méthode héritée d'un type parent).
+ */
+function dispatchOf(ctx: ResolveContext, call: CodeCall): CodeCall[] {
+  const target = call.to ? ctx.byId.get(call.to) : undefined;
+  const declaring = target?.parent ? ctx.byId.get(target.parent) : undefined;
+  if (!target || !declaring || declaring.layer === 'FRONTEND') return [];
+  if (typeof declaring.detail?.declaration !== 'string') return [];
+  const receiver = receiverOf(ctx, call);
+  // Un dépôt Spring Data n'a pas d'implémentation dans la source, sauf pour ses fragments (interfaces écrites
+  // à la main qu'il étend) : l'appel d'une méthode de fragment s'exécute dans l'implémentation du fragment.
+  const fragment =
+    receiver?.type.kind === 'REPOSITORY' &&
+    declaring.id !== receiver.type.id &&
+    declaring.kind !== 'REPOSITORY' &&
+    declaring.detail.declaration === 'interface';
+  const type = fragment ? declaring : (receiver?.type ?? declaring);
+  const dispatched = type.detail?.declaration === 'interface' || type.detail?.abstract === true;
+  if (!dispatched || type.kind === 'REPOSITORY' || type.kind === 'HTTP_CLIENT') return [];
+  // L'appel doit bien viser ce type ou un de ses parents (pas une réécriture de l'appel).
+  if (type.id !== declaring.id && !ancestorsOf(ctx, type).some((a) => a.id === declaring.id)) return [];
+  const name = memberName(target);
+  const arity = list(target, 'params').length;
+  const all = concreteSubtypes(ctx, type)
+    .map((cls) => ({ cls, method: executedIn(ctx, cls, name, arity) }))
+    .filter((c): c is { cls: CodeSymbol; method: CodeSymbol } => !!c.method && c.method.id !== target.id);
+  if (all.length === 0) return [];
+  let chosen = all;
+  let why: string;
+  let perCaller = false;
+  if (all.length === 1) why = `implémentation unique de ${target.name}`;
+  else {
+    const primary = all.filter((c) => list(c.cls, 'annotations').includes('Primary'));
+    const named = receiver?.field ? all.filter((c) => beanName(c.cls) === receiver.field) : [];
+    if (primary.length === 1) {
+      chosen = primary;
+      why = `@Primary parmi ${String(all.length)} implémentations de ${target.name}`;
+    } else if (named.length === 1) {
+      chosen = named;
+      perCaller = true;
+      why = `bean nommé comme le champ « ${receiver?.field ?? ''} » parmi ${String(all.length)} implémentations de ${target.name}`;
+    } else
+      why = `une des ${String(all.length)} implémentations de ${target.name} ; aucune n’est désignée (@Primary, nom du champ)`;
+  }
+  const from = perCaller || type.id !== declaring.id ? call.from : target.id;
+  const candidates = chosen.length > 1 ? chosen.map((c) => c.method.id) : undefined;
+  return chosen.map(({ method }) => ({
+    from,
+    to: method.id,
+    text: `${method.name} (${why})`,
+    status: 'INFERRED',
+    file: method.file,
+    line: method.line,
+    via: why,
+    ...(candidates ? { candidates } : {}),
+  }));
 }
 
 // ── Frontend ─────────────────────────────────────────────────────────────────────────────────

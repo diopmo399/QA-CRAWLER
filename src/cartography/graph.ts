@@ -130,6 +130,8 @@ export interface GraphOutput {
   contractDiffs?: MapContractDiff[];
   modules?: MapModule[];
   configGraph?: MapConfigGraph;
+  /** Les relations lues dans le code mais non raccordées (extrémité absente), par type. */
+  unattached?: Partial<Record<MapEdgeKind, number>>;
 }
 
 /** Le type normalisé d'un champ, pour comparer les couches (text, number, date, boolean). */
@@ -178,6 +180,8 @@ const SUGGESTIONS: Partial<Record<CorrelationCause, string[]>> = {
 export function buildGraph(input: GraphInput): GraphOutput {
   const nodes = new Map<string, MapNode>();
   const edges = new Map<string, MapEdge>();
+  /** Les relations lues mais non raccordables (extrémité non représentée), comptées par type. */
+  const unattached: Partial<Record<MapEdgeKind, number>> = {};
   const sourceById = new Map(input.sources.map((source) => [source.id, source]));
   const revisionOf = new Map(input.facts.map((facts) => [facts.sourceId, facts.revision]));
 
@@ -482,6 +486,22 @@ export function buildGraph(input: GraphInput): GraphOutput {
       const backLayer: MapLayer = layer === 'BFF' ? 'BFF' : 'BACKEND';
       // Le préfixe sous lequel l'application expose ses routes (context-path…), lu dans sa configuration.
       const exposure = java.exposure?.find((e) => !e.profile);
+      // L'IDENTITÉ D'UNE CLASSE : son nom simple quand il est unique dans la source (identifiants stables pour
+      // les scans d'avant), son nom qualifié pour des homonymes de paquets différents : jamais fusionnés.
+      const simpleCount = new Map<string, number>();
+      for (const cls of java.classes) simpleCount.set(cls.name, (simpleCount.get(cls.name) ?? 0) + 1);
+      const serviceId = (cls: { name: string; qualified: string }): string =>
+        `SERVICE:${src}:${(simpleCount.get(cls.name) ?? 0) > 1 ? cls.qualified : cls.name}`;
+      /** La classe d'un symbole (`source:fichier#Classe.méthode`), par son fichier et son nom. */
+      const classOfSymbol = (id: string) => {
+        const hash = id.indexOf('#');
+        const file = id.slice(src.length + 1, hash);
+        const owner = (id.slice(hash + 1).split('(')[0] ?? '').split('.')[0] ?? '';
+        return (
+          java.classes.find((c) => c.name === owner && c.loc.file === file) ??
+          ((simpleCount.get(owner) ?? 0) === 1 ? java.classes.find((c) => c.name === owner) : undefined)
+        );
+      };
       for (const cls of java.classes) {
         javaClasses.set(cls.name, [
           ...(javaClasses.get(cls.name) ?? []),
@@ -573,7 +593,7 @@ export function buildGraph(input: GraphInput): GraphOutput {
             );
         } else if (cls.role === 'SERVICE' || cls.role === 'REPOSITORY' || cls.role === 'CLIENT')
           node(
-            `SERVICE:${src}:${cls.name}`,
+            serviceId(cls),
             'SERVICE',
             backLayer,
             cls.name,
@@ -598,13 +618,14 @@ export function buildGraph(input: GraphInput): GraphOutput {
           { owner: method.owner, role: method.role, ...(method.access ? { access: method.access } : {}) },
         );
       for (const method of java.methods) {
-        const owner = `SERVICE:${src}:${method.owner}`;
+        const ownerClass = classOfSymbol(method.id);
+        const owner = ownerClass ? serviceId(ownerClass) : `SERVICE:${src}:${method.owner}`;
         if (nodes.has(owner))
           edge(owner, `METHOD:${method.id}`, 'DEPENDS_ON', 'CONFIRMED', 'méthode de la classe', [
             ev(src, method.loc, 'STATIC_CODE', 'CONFIRMED'),
           ]);
         if (method.role === 'REPOSITORY') {
-          const repository = java.classes.find((entry) => entry.name === method.owner);
+          const repository = ownerClass ?? java.classes.find((entry) => entry.name === method.owner);
           const entity = repository?.repositoryOf ? `ENTITY:${src}:${repository.repositoryOf}` : undefined;
           const shape = method.query ? classifyQuery(method.query.text) : undefined;
           if (entity)
@@ -736,25 +757,43 @@ export function buildGraph(input: GraphInput): GraphOutput {
           ...exposurePaths(java.exposure, [endpoint.path]),
         });
       }
-      for (const call of java.calls)
-        if (call.to)
-          edge(
-            `METHOD:${call.from}`,
-            `METHOD:${call.to}`,
-            'CALLS',
-            call.status === 'STATICALLY_RESOLVED' ? 'CONFIRMED' : 'PROBABLE',
-            call.status === 'STATICALLY_RESOLVED'
-              ? 'appel résolu par le type'
-              : 'appel résolu par héritage ou implémentation unique',
-            [
-              ev(
-                src,
-                call.loc,
-                'STATIC_CODE',
-                call.status === 'STATICALLY_RESOLVED' ? 'CONFIRMED' : 'PROBABLE',
-              ),
-            ],
-          );
+      for (const call of java.calls) {
+        if (!call.to) continue;
+        const from = `METHOD:${call.from}`;
+        let to = `METHOD:${call.to}`;
+        // Ambigu (plusieurs implémentations sans désignation) : chaque candidate est gardée, aucune confirmée.
+        let confidence: MapConfidence = call.candidates
+          ? 'UNKNOWN'
+          : call.status === 'STATICALLY_RESOLVED'
+            ? 'CONFIRMED'
+            : 'PROBABLE';
+        let reason = call.via
+          ? `appel exécuté par ${call.via}`
+          : call.status === 'STATICALLY_RESOLVED'
+            ? 'appel résolu par le type'
+            : 'appel résolu par héritage ou implémentation unique';
+        if (call.candidates)
+          reason += ` ; candidates : ${call.candidates.map((c) => c.split('#').pop() ?? c).join(', ')}`;
+        if (!nodes.has(to)) {
+          // La cible est une classe dont la méthode n'est pas dans les sources (héritée d'une bibliothèque,
+          // générée) : le lien va à la classe quand elle est représentée ; sinon il est compté, pas perdu.
+          const owner = call.to.split('#').pop() ?? '';
+          const target = owner.includes('.') ? undefined : classOfSymbol(call.to);
+          const cls = target ? serviceId(target) : undefined;
+          if (!cls || !nodes.has(cls) || !nodes.has(from)) {
+            unattached.CALLS = (unattached.CALLS ?? 0) + 1;
+            continue;
+          }
+          to = cls;
+          confidence = 'PROBABLE';
+          reason = `méthode de ${owner} absente des sources (héritée d’une bibliothèque ou générée)`;
+        }
+        if (!nodes.has(from)) {
+          unattached.CALLS = (unattached.CALLS ?? 0) + 1;
+          continue;
+        }
+        edge(from, to, 'CALLS', confidence, reason, [ev(src, call.loc, 'STATIC_CODE', confidence)]);
+      }
       for (const mapping of java.mappings) {
         const from = fieldNode(src, mapping.fromClass, mapping.fromField);
         const to = fieldNode(src, mapping.toClass, mapping.toField);
@@ -3393,5 +3432,6 @@ export function buildGraph(input: GraphInput): GraphOutput {
     contractDiffs: contractIndex.diffs(),
     modules: contractIndex.moduleList(),
     configGraph: buildConfigGraph(input.facts),
+    ...(Object.keys(unattached).length ? { unattached } : {}),
   };
 }

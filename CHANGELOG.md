@@ -4,6 +4,22 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : fiabilisation de la résolution
+
+- Appels Java sur interface ou classe abstraite : implémentation par une classe abstraite intermédiaire,
+  méthode héritée d'un type parent, surcharges distinguées par l'arité ; plusieurs implémentations : `@Primary`,
+  bean nommé comme le champ, sinon toutes gardées `UNKNOWN` avec leurs candidates. Une classe abstraite
+  n'est plus présentée comme l'implémentation exécutée.
+- Appels dont la cible est une classe (méthode héritée d'une bibliothèque) : reliés à la classe au lieu
+  d'être perdus ; relations non raccordables comptées dans `scan.unattached`.
+- Imports Java à la demande pris en compte pour départager les homonymes ; classes homonymes de paquets
+  différents : deux nœuds `SERVICE` (nom qualifié) au lieu d'un seul ; champs typés par nom qualifié résolus.
+- Fragments de dépôt Spring Data suivis jusqu'à leur implémentation ; plus de lecture déduite du nom pour
+  une méthode écrite à la main.
+- Frontal : une constante exportée d'un autre fichier forme l'URL d'un appel HTTP (avec sa provenance).
+- Lecture sous limite : manifestes et code avant les données ; fichiers non lus nommés.
+- Version d'analyseur `cartography-9`.
+
 ### Cartographie : premier chargement
 
 - Le scan est écrit en JSON compact, et son relevé dans un fichier léger à côté (`<id>.record.json`) :

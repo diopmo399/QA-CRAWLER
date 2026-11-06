@@ -187,6 +187,8 @@ export function scanNote(m: MapStrings, note: string): string {
   const large = /^files larger than (\d+) bytes skipped(?: \((\d+)\): (.*))?$/.exec(note);
   if (large)
     return m.sd.notes.large(Math.round(Number(large[1]) / 1024), Number(large[2] ?? 0), large[3] ?? '');
+  const cut = /^files not read because of a limit \((\d+)\): (.*)$/.exec(note);
+  if (cut) return m.sd.notes.cut(Number(cut[1]), cut[2] ?? '');
   const files = /^file limit reached \((\d+)\)$/.exec(note);
   if (files) return m.sd.notes.fileLimit(Number(files[1]));
   const duration = /^duration limit reached \((\d+) ms\)$/.exec(note);

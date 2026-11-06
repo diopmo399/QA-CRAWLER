@@ -49,7 +49,7 @@ import { buildGraph } from './graph.js';
 // 8 : constantes Java entre fichiers (imports statiques, `Classe.CHAMP`), accès aux données hors Spring Data
 //     (EntityManager, JDBC, @Query classée), écritures des états du gabarit (signal, affectation), sources
 //     partielles (limites atteintes).
-export const ANALYZERS = `cartography-8;${RXJS_ANALYZER}`;
+export const ANALYZERS = `cartography-9;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;
@@ -240,7 +240,7 @@ export async function runScan(
       entry.notes.push(error instanceof Error ? error.message : String(error));
     }
   }
-  const graph = buildGraph({ sources: options.config.sources, facts });
+  const { unattached, ...graph } = buildGraph({ sources: options.config.sources, facts });
   const counts: ScanRecord['counts'] = {};
   for (const node of graph.nodes) counts[node.kind] = (counts[node.kind] ?? 0) + 1;
   counts.FEATURE = graph.features.length;
@@ -258,6 +258,7 @@ export async function runScan(
           : 'COMPLETED',
     counts,
     edges: graph.edges.length,
+    ...(unattached ? { unattached } : {}),
   };
   const base = { schema: 1 as const, scan: finished, ...graph };
   return { model: { ...base, apis: buildApis(base, facts) }, facts };

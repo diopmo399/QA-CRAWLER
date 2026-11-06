@@ -119,7 +119,12 @@ export function javaHierarchy(
     const simple = name.split('.').pop() ?? name;
     const all = types.get(simple) ?? [];
     const qualified = qualifiedOf(java, simple);
-    return all.find((t) => t.decl.qualifiedName === qualified) ?? (all.length === 1 ? all[0] : undefined);
+    const exact = all.find((t) => t.decl.qualifiedName === qualified);
+    if (exact) return exact;
+    if (all.length === 1) return all[0];
+    // Import à la demande (`import a.b.*;`) : il ne tranche que s'il désigne un seul type de ce nom.
+    const onDemand = all.filter((t) => java.imports.includes(`${t.java.package ?? ''}.*`));
+    return onDemand.length === 1 ? onDemand[0] : undefined;
   };
 
   const endpoints: JavaEndpoint[] = [];
