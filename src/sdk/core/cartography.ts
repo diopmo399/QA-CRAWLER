@@ -375,7 +375,11 @@ export interface CorrelationStep {
     | 'INTERFACE'
     | 'IMPLEMENTATION'
     | 'ENDPOINT'
-    | 'OUTGOING';
+    | 'OUTGOING'
+    /** Règle du proxy de développement, route d'une passerelle, destination résolue (source atteinte). */
+    | 'PROXY'
+    | 'GATEWAY'
+    | 'DESTINATION';
   label: string;
   node?: string;
   evidence?: Evidence;
@@ -401,6 +405,8 @@ export interface MapCorrelation {
   variants?: {
     variant: string;
     path: string;
+    /** La chaîne propre à la variante (proxy, passerelle, destination), en clair. */
+    chain?: string;
     status: CorrelationStatus;
     target?: string;
     exposed?: string;
@@ -478,6 +484,69 @@ export interface CartographyModel {
   contracts?: MapContract[];
   contractDiffs?: MapContractDiff[];
   modules?: MapModule[];
+  /** Le graphe de configuration : propriétés, profils, modules, générations, proxys, passerelles. */
+  configGraph?: MapConfigGraph;
+}
+
+/** Les relations du graphe de configuration. */
+export const CONFIG_RELATIONS = [
+  'DECLARES',
+  'REFERENCES',
+  'OVERRIDES',
+  'ACTIVATES',
+  'GENERATES',
+  'IMPLEMENTS',
+  'CONFIGURES',
+  'ROUTES_TO',
+  'REWRITES_TO',
+  'DEPENDS_ON',
+] as const;
+export type ConfigRelation = (typeof CONFIG_RELATIONS)[number];
+
+export interface ConfigNode {
+  id: string;
+  kind:
+    | 'SOURCE'
+    | 'FILE'
+    | 'PROPERTY'
+    | 'VARIABLE'
+    | 'PROFILE'
+    | 'MODULE'
+    | 'ARTIFACT'
+    | 'GENERATION'
+    | 'PACKAGE'
+    | 'CONTRACT'
+    | 'CLASS'
+    | 'CLIENT'
+    | 'METHOD'
+    | 'PROXY_RULE'
+    | 'ROUTE'
+    | 'PATH'
+    | 'ADDRESS';
+  label: string;
+  sourceId?: string;
+}
+
+/** Une relation : sa provenance (fichier, ligne), sa variante et son niveau de preuve ; jamais de doublon. */
+export interface ConfigEdge {
+  from: string;
+  to: string;
+  kind: ConfigRelation;
+  sourceId: string;
+  /** `default`, un profil Spring ou Maven, une configuration Angular. */
+  variant: string;
+  confidence: MapConfidence;
+  file?: string;
+  line?: number;
+  /** La valeur ou la règle lue (une valeur sensible est masquée). */
+  detail?: string;
+}
+
+export interface MapConfigGraph {
+  nodes: ConfigNode[];
+  edges: ConfigEdge[];
+  /** Vrai si la limite de taille a été atteinte (le reste n'est pas montré). */
+  truncated?: boolean;
 }
 
 // ── API & Services ───────────────────────────────────────────────────────────────────────────────

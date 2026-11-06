@@ -1,0 +1,14 @@
+server:
+  port: 8081
+  servlet:
+    context-path: /bff
+spring:
+  application:
+    name: bff
+backend:
+  url: http://localhost:8082
+catalogue:
+  url: ${CATALOGUE_URL}
+referentiel:
+  url: http://localhost:8084
+  token: jeton-fictif-a-masquer

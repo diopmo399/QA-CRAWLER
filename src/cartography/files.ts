@@ -70,7 +70,7 @@ const SECRET_FILE =
 
 /** Les fichiers utiles à la cartographie. */
 const USEFUL =
-  /\.(ts|tsx|js|jsx|vue|html|java|kt|cs|csproj|graphql|gql|sql|ya?ml|json|properties|xml|gradle|kts)$/i;
+  /\.(ts|tsx|js|jsx|vue|html|java|kt|cs|csproj|graphql|gql|sql|ya?ml|json|properties|xml|gradle|kts|conf)$/i;
 const IGNORED_FILE =
   /\.(spec|test|stories|d)\.(ts|tsx|js|jsx)$|\.min\.js$|Test\.java$|Tests\.java$|IT\.java$/;
 /** Les fichiers lock des dépendances : générés, souvent très gros, sans rien pour la cartographie. */

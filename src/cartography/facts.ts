@@ -1,5 +1,6 @@
 import type { MapLayer } from '../sdk/core/cartography.js';
 import type { SpringConfig } from './config.js';
+import type { GatewayFacts } from './gateway.js';
 
 /**
  * LES FAITS D'UNE SOURCE, tels que ses analyseurs les ont lus (sérialisables : un scan incrémental reprend
@@ -380,6 +381,19 @@ export interface JavaImplementation {
 }
 
 /** Un appel sur un objet dont le type est importé mais absent de la source (client généré, bibliothèque). */
+/** La base d'un client généré, réglée dans un bean : propriété lue (`@Value`) ou texte écrit, et sa condition. */
+export interface JavaClientBase {
+  /** Le type configuré (`ApiClient`). */
+  type: string;
+  property?: string;
+  value?: string;
+  /** `@Profile` du bean ou de sa classe : la base ne vaut que dans cette variante. */
+  profile?: string;
+  /** `@ConditionalOnProperty` du bean, en clair (non évaluée). */
+  condition?: string;
+  loc: Loc;
+}
+
 export interface JavaClientCall {
   /** La méthode appelante (symbole). */
   from: string;
@@ -479,6 +493,8 @@ export interface JavaFacts {
   decisions?: JavaDecision[];
   implementations?: JavaImplementation[];
   clients?: JavaClientCall[];
+  /** Les bases d'URL données aux clients générés par un bean (`apiClient.setBasePath(url)`). */
+  clientBases?: JavaClientBase[];
   exposure?: JavaExposure[];
   warnings: string[];
 }
@@ -640,4 +656,6 @@ export interface SourceFacts {
   maven?: MavenFacts;
   /** La configuration Spring par entrée et par profil (valeurs secrètes masquées). */
   config?: SpringConfig;
+  /** Les routes de passerelle lues (Spring Cloud Gateway, NGINX, Ingress), avec leur preuve. */
+  gateway?: GatewayFacts;
 }

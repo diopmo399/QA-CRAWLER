@@ -33,6 +33,7 @@ export default tseslint.config(
       'tests/fixtures/cartography-flow/',
       'tests/fixtures/cartography-entry/',
       'tests/fixtures/cartography-contract/',
+      'tests/fixtures/cartography-config/',
       // Les exemples importent les paquets compilés (dist) : ils se vérifient en les lançant.
       'examples/',
     ],

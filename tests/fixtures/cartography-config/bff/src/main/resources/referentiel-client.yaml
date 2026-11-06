@@ -1,0 +1,16 @@
+openapi: 3.0.1
+info:
+  title: Referentiel API
+  version: 1.0.0
+paths:
+  /codes/{code}:
+    get:
+      tags: [Codes]
+      operationId: lireCode
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: le code }

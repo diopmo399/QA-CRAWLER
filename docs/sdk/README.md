@@ -1440,8 +1440,8 @@ raisons et la raison de leur rejet), causes et chaîne d'étapes prouvées (fich
   la même valeur ; un champ affecté depuis un jeton injecté (`@Inject(BASE_PATH)`) prend la valeur du
   fournisseur `{ provide: BASE_PATH, useValue: … }`, jamais son défaut ; la justification est dans
   `UiCall.base`. Une enveloppe (`ApiClient.post(url)`) garde sa base résolue.
-- **Préfixes** : seuls le context-path, la base du contrat et une réécriture de `proxy.conf.json`
-  (`pathRewrite`) transforment un chemin ; aucun segment n'est retiré pour forcer une correspondance.
+- **Préfixes** : seuls le context-path, la base du contrat, une réécriture du proxy et les transformations
+  d'une passerelle désignée changent un chemin ; aucun segment n'est retiré pour forcer une correspondance.
 - **BFF → Backend** : les appels RestTemplate/WebClient/Feign déjà lus, et les appels sur un client Java
   généré (type importé absent des sources, package = `apiPackage` d'une génération cliente) traduits en
   méthode et chemin par le contrat d'entrée ; lien `PROBABLE`. Les versions du contrat côté client et côté
@@ -1458,10 +1458,68 @@ raisons et la raison de leur rejet), causes et chaîne d'étapes prouvées (fich
 L'arbre de parcours montre sous chaque appel une **corrélation** repliée (statut, chaîne, causes, candidats,
 liens vers le code) ; `FeatureDetail.correlations` la porte pour les appels de la fonctionnalité.
 
-Limites : le code généré n'est pas lu (le préfixe de type d'une interface générée absente reste inconnu) ;
-les profils Maven et Spring ne sont pas choisis (tous sont lus) ; les dépendances indirectes hors des
-sources analysées ne sont pas résolues ; un `proxy.conf.js` (code) n'est pas lu ; les routes d'une
-passerelle externe (configuration hors des sources) ne sont pas connues.
+Limites : le code généré n'est pas lu ; les routes d'une passerelle externe (configuration hors des
+sources) ne sont pas connues. Les configurations, profils, proxys et passerelles sont décrits ci-dessous.
+
+#### Configurations, variantes, proxys et passerelles
+
+Depuis `cartography-7`, la configuration de chaque source est lue entrée par entrée, avec son fichier, sa
+ligne et son profil. Elle n'est jamais fusionnée : le défaut et chaque profil découvert (fichier
+`application-{profil}`, document `spring.config.activate.on-profile`, profil Maven) sont des **variantes**.
+Une valeur de profil remplace celle du défaut (règle Spring), deux profils ne sont pas combinés. Les noms de
+variantes viennent des fichiers lus, jamais d'une liste supposée. Une clé sensible (`password`, `secret`,
+`token`, `api-key`…) garde sa provenance mais sa valeur est masquée (`***`) partout, exports compris.
+
+- **Interfaces générées absentes** : leur route est reconstruite depuis le contrat (`routeOrigin:
+RECONSTRUCTED`). Le préfixe de type n'est retenu que s'il est démontré : `@RequestMapping` du
+  contrôleur, `requestMappingMode=none`, `controller` avec `interfaceOnly`, ou `api_interface` avec une
+  seule propriété `openapi.*.base-path`. Sinon les routes possibles restent listées, avec
+  `GENERATION_OPTIONS_INSUFFICIENT`. Une génération déclarée seulement dans un profil Maven porte
+  `PROFILE_UNKNOWN`.
+- **Dépendances externes** : `metadata` (configuration de la cartographie) liste des dossiers locaux,
+  sous une racine autorisée, rangés comme un dépôt Maven. Leurs pom et les contrats empaquetés dans les jars
+  y sont lus, sans téléchargement ni exécution ; liens symboliques et fichiers de secrets sont ignorés.
+  Un artefact absent garde ses identifiants complets (`groupe:artefact:version`) : `MAVEN_MODULE_MISSING`
+  sans racine configurée, `DEPENDENCY_UNAVAILABLE` sinon.
+- **Proxys Angular** : `proxy.conf.json`, et `.js` / `.cjs` / `.mjs` lus par leur arbre syntaxique, jamais
+  exécutés (constantes du fichier, gabarits, `(p) => p.replace(/re/, 'x')`). `target`, `pathRewrite` ou
+  `rewrite`, `context`, `secure` et `changeOrigin` sont gardés. Les configurations d'`angular.json`
+  (`proxyConfig` de `serve`, `fileReplacements` de `build`) donnent une variante chacune, avec son proxy
+  et son fichier environment. Une règle non interprétable (`process.env`, appel, fonction quelconque)
+  reste dynamique : `PROXY_DYNAMIC`, aucune destination n'est déduite.
+- **Passerelles**, par adaptateur dans un modèle commun route → prédicats → transformations →
+  destination :
+  - Spring Cloud Gateway (`spring.cloud.gateway.routes`, prédicats `Path` et `Method`, transformations
+    `StripPrefix`, `PrefixPath` et `RewritePath`, `order`) ;
+  - NGINX (`location`, `proxy_pass`, `rewrite`, `upstream`, `listen`) ;
+  - Ingress (`path`, service, `rewrite-target`).
+
+  Une passerelle n'est suivie que si la destination d'un appel la désigne : sa seule présence ne prouve
+  rien. La première route qui correspond (par ordre) est suivie et les autres sont comptées.
+
+- **Destinations** : une adresse désigne une source par un port local égal à son `server.port` (ou à
+  l'écoute d'une passerelle), ou par un nom égal à `spring.application.name` ou au nom de la source
+  (`lb://nom`, service Kubernetes). Seule cette source est alors candidate. Une adresse à `${…}` non
+  résolue reste symbolique (`DESTINATION_SYMBOLIC`), une clé absente de toute configuration est dite non
+  résolue (`PROPERTY_UNRESOLVED`). Un hôte hors des sources analysées est signalé (`GATEWAY_EXTERNAL`),
+  plusieurs sources possibles aussi (`MULTIPLE_DESTINATIONS`). Un port qu'aucune source ne déclare,
+  alors que certaines n'écrivent pas le leur, laisse la destination indéterminée, sans restriction.
+- **Clients Java** : la base d'URL (`@Value`, `baseUrl(…)`, `UriComponentsBuilder`) est résolue dans
+  chaque variante. Un client généré prend la base réglée par son bean (`setBasePath`, `basePath`,
+  `setRootUri`), avec son `@Profile`. Son `@ConditionalOnProperty` est montré, jamais évalué.
+- **Variantes** : `MapCorrelation.variants` donne, pour chaque variante dont l'issue diffère, le chemin,
+  la chaîne (proxy, passerelle, destination), le statut, la cible et les causes. Une issue qui change
+  ajoute `ENVIRONMENT_INCONSISTENT` ; l'arbre de parcours les montre sous la corrélation.
+- **Graphe de configuration** (`model.configGraph`) : relations `DECLARES`, `REFERENCES`, `OVERRIDES`,
+  `ACTIVATES`, `GENERATES`, `IMPLEMENTS`, `CONFIGURES`, `ROUTES_TO`, `REWRITES_TO` et `DEPENDS_ON`.
+  Chacune porte sa source, sa variante, son niveau de preuve et sa provenance, sans doublon ; au-delà de
+  20 000 relations, le graphe est tronqué et le dit (`truncated`).
+
+Limites : un proxy dont la cible ou la réécriture est calculée reste dynamique. Les prédicats de passerelle
+autres que `Path` et `Method` (en-têtes, hôte, poids) ne sont pas évalués : la route est dite non
+interprétée. Les bases de client réglées par un bean valent pour tous les clients générés de la source
+(le lien bean → client précis n'est pas lu). Une base d'URL dont la partie chemin change selon le profil
+garde le chemin du défaut. Le graphe de configuration n'a pas encore de vue dans le Dashboard.
 
 #### Onglets Angular
 

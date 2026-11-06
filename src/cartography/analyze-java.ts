@@ -12,6 +12,7 @@ import type { ReadFile } from './files.js';
 import { javaHierarchy, type Parsed } from './java-hierarchy.js';
 import type {
   JavaClass,
+  JavaClientBase,
   JavaComputed,
   JavaDecision,
   JavaExposure,
@@ -588,7 +589,55 @@ export function analyzeJava(
     decisions,
     ...(hierarchy.implementations.length ? { implementations: hierarchy.implementations } : {}),
     ...(hierarchy.clients.length ? { clients: hierarchy.clients } : {}),
+    ...((): { clientBases?: JavaClientBase[] } => {
+      const bases = clientBasesOf(files);
+      return bases.length ? { clientBases: bases } : {};
+    })(),
     ...(exposure.length ? { exposure } : {}),
     warnings,
   };
+}
+
+/**
+ * Les bases d'URL des clients générés réglées dans un bean : `client.setBasePath(url)`, `.basePath(url)`,
+ * `.setRootUri(url)`. L'argument est un paramètre ou un champ `@Value("${clé}")` (propriété), ou un texte.
+ * Le `@Profile` du bean (ou de sa classe) et son `@ConditionalOnProperty` sont gardés : jamais évalués ici.
+ */
+function clientBasesOf(files: readonly ReadFile[]): JavaClientBase[] {
+  const out: JavaClientBase[] = [];
+  for (const file of files) {
+    if (!file.path.endsWith('.java') || !/\.(setBasePath|basePath|setRootUri)\s*\(/.test(file.text)) continue;
+    const text = file.text;
+    const classProfile = /@Profile\(\s*"([^"]+)"\s*\)[\s\S]*?\bclass\s/.exec(text)?.[1];
+    for (const m of text.matchAll(
+      /\b(\w+)\.(setBasePath|basePath|setRootUri)\s*\(\s*("([^"]*)"|\w+)\s*\)/g,
+    )) {
+      const at = m.index;
+      const variable = m[1] ?? '';
+      const arg = m[3] ?? '';
+      // Le type configuré : la déclaration de la variable (`ApiClient client = …`).
+      const type = new RegExp(`\\b([A-Z]\\w*)\\s+${variable}\\s*=`).exec(text)?.[1] ?? variable;
+      const literal = m[4];
+      const property = literal
+        ? undefined
+        : new RegExp(
+            `@Value\\(\\s*"\\$\\{([^}:"]+)(?::[^}"]*)?\\}"\\s*\\)\\s*(?:final\\s+)?String\\s+${arg}\\b`,
+          ).exec(text)?.[1];
+      // Le bean qui contient l'appel : ses annotations, entre le `@Bean` précédent et l'appel.
+      const bean = text.lastIndexOf('@Bean', at);
+      const head = bean >= 0 ? text.slice(bean, at) : '';
+      const profile = /@Profile\(\s*"([^"]+)"\s*\)/.exec(head)?.[1] ?? classProfile;
+      const condition = /@ConditionalOnProperty\(([^)]*)\)/.exec(head)?.[1]?.trim();
+      if (!literal && !property) continue;
+      out.push({
+        type,
+        ...(property ? { property } : {}),
+        ...(literal !== undefined ? { value: literal } : {}),
+        ...(profile ? { profile } : {}),
+        ...(condition ? { condition } : {}),
+        loc: { file: file.path, line: text.slice(0, at).split('\n').length },
+      });
+    }
+  }
+  return out;
 }

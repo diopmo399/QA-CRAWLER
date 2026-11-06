@@ -11,6 +11,7 @@ import { analyzeAngular } from './analyze-angular.js';
 import { analyzeJava } from './analyze-java.js';
 import { analyzeMaven } from './analyze-maven.js';
 import { readSpringConfig } from './config.js';
+import { readGateways } from './gateway.js';
 import { readMetadata } from './metadata.js';
 import { analyzeOpenApi } from './analyze-openapi.js';
 import { RXJS_ANALYZER } from './analyze-rxjs.js';
@@ -43,7 +44,9 @@ import { buildGraph } from './graph.js';
 // 5 : contrats ($ref, servers, paramètres), modules Maven et générations, routes héritées, bases d'URL.
 // 6 : configuration par profil (variantes), préfixe des interfaces générées, métadonnées locales, proxys
 //     (JSON et JS statique, angular.json), gabarits en ligne entre guillemets.
-export const ANALYZERS = `cartography-6;${RXJS_ANALYZER}`;
+// 7 : passerelles (Spring Cloud Gateway, NGINX, Ingress), bases des clients réglées par un bean, lignes des
+//     éléments de liste YAML.
+export const ANALYZERS = `cartography-7;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;
@@ -193,6 +196,9 @@ export async function runScan(
       // La configuration Spring par profil (modèle commun : contexte d'exposition, ports, clients, passerelles).
       const config = readSpringConfig(read.files);
       if (config.entries.length > 0) sourceFacts.config = config;
+      // Les passerelles (routes, transformations, destinations) : suivies seulement là où un appel les désigne.
+      const gateway = readGateways(read.files, config.entries.length > 0 ? config : undefined);
+      if (gateway) sourceFacts.gateway = gateway;
       if (read.limits.length > 0) scan.state = 'PARTIAL';
       if (found.size === 0) scan.errors.push('aucune technologie reconnue dans cette source');
       facts.push(sourceFacts);

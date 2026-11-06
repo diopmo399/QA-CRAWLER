@@ -686,7 +686,14 @@ function journeyCard(m: MapStrings, state: MapState, detail: FeatureDetail): str
               `<li>${esc(`${x.method} ${x.path}`)} <small class="mu">${esc(x.reasons.join(' ; '))}</small>${x.rejected ? ` <span class="jr-b warn">${esc(x.rejected)}</span>` : ''}</li>`,
           )
           .join('');
-        return `<details class="jr-corr" data-corr="${esc(c.status)}"><summary>${esc(j.corr.title)} <span class="jr-b ${status}">${esc(j.corr.status[c.status] ?? c.status)}</span> <small class="mono">${esc(`${c.method} ${c.path}`.trim())}</small></summary><p class="small"><b>${esc(j.corr.steps)}</b></p><ol class="jr-cs">${steps}</ol>${causes ? `<p class="small"><b>${esc(j.corr.causes)}</b></p><ul class="jr-cs">${causes}</ul>` : ''}${candidates ? `<p class="small"><b>${esc(j.corr.candidates)}</b></p><ul class="jr-cs">${candidates}</ul>` : ''}</details>`;
+        // Les variantes dont l'issue diffère : jamais fusionnées avec le défaut.
+        const variants = (c.variants ?? [])
+          .map(
+            (v) =>
+              `<li data-variant="${esc(v.variant)}"><b>${esc(v.variant)}</b> <span class="jr-b ${v.status === 'CONFIRMED' ? 'ok' : v.status === 'PROBABLE' ? 'prob' : 'warn'}">${esc(j.corr.status[v.status] ?? v.status)}</span> <small class="mono">${esc(v.exposed ?? v.path)}</small>${v.chain ? ` <small>${esc(v.chain)}</small>` : ''}${v.causes.length ? ` <small class="mu">${esc(v.causes.map((x) => x.message).join(' ; '))}</small>` : ''}</li>`,
+          )
+          .join('');
+        return `<details class="jr-corr" data-corr="${esc(c.status)}"><summary>${esc(j.corr.title)} <span class="jr-b ${status}">${esc(j.corr.status[c.status] ?? c.status)}</span> <small class="mono">${esc(`${c.method} ${c.path}`.trim())}</small></summary><p class="small"><b>${esc(j.corr.steps)}</b></p><ol class="jr-cs">${steps}</ol>${causes ? `<p class="small"><b>${esc(j.corr.causes)}</b></p><ul class="jr-cs">${causes}</ul>` : ''}${candidates ? `<p class="small"><b>${esc(j.corr.candidates)}</b></p><ul class="jr-cs">${candidates}</ul>` : ''}${variants ? `<p class="small"><b>${esc(j.corr.variants)}</b></p><ul class="jr-cs">${variants}</ul>` : ''}</details>`;
       })
       .join('');
   const branch = (id: string, e: MapEdge | undefined, depth: number, times: number): string => {

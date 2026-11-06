@@ -285,7 +285,17 @@ describe('correlation', () => {
       target: 'API:bff:GET /dossiers/{dossierId}',
       contract: 'API:contracts:GET /dossiers/{dossierId}',
     });
-    expect(c?.steps.map((s) => s.kind)).toEqual(['CALL', 'BASE', 'INTERFACE', 'ENDPOINT', 'CONTRACT']);
+    // Le proxy (`/api` → localhost:8081) est une étape ; aucune source ne déclare ce port : rien n'est restreint.
+    expect(c?.steps.map((s) => s.kind)).toEqual([
+      'CALL',
+      'BASE',
+      'PROXY',
+      'DESTINATION',
+      'INTERFACE',
+      'ENDPOINT',
+      'CONTRACT',
+    ]);
+    expect(c?.steps.find((s) => s.kind === 'DESTINATION')?.label).toContain('destination indéterminée');
     expect(c?.steps.find((s) => s.kind === 'ENDPOINT')?.label).toContain(
       'préfixe server.servlet.context-path = /api',
     );
@@ -307,6 +317,8 @@ describe('correlation', () => {
     expect(c?.steps.map((s) => s.kind)).toEqual([
       'CALL',
       'BASE',
+      'PROXY',
+      'DESTINATION',
       'MODULE',
       'GENERATION',
       'CONTRACT',
@@ -432,8 +444,12 @@ describe('correlation', () => {
     const ok = rewritten.model.correlations?.find((c) => c.from === 'METHOD:front:HistoriqueService#dossier');
     expect(ok).toMatchObject({ status: 'CONFIRMED', target: 'API:bff:GET /dossiers/{dossierId}' });
     expect(
-      ok?.steps.some((s) => s.label.startsWith('réécriture du proxy « ^/api » → «  » : /dossiers/')),
+      ok?.steps.some(
+        (s) => s.kind === 'PROXY' && s.label.includes('réécriture « ^/api » → «  » : /dossiers/'),
+      ),
     ).toBe(true);
+    // Le port de la cible est celui du BFF : la destination est démontrée, seule cette source est candidate.
+    expect(ok?.steps.find((s) => s.kind === 'DESTINATION')?.label).toBe('port 8081 = server.port de BFF');
     // Sans réécriture ni context-path, /api n'est jamais retiré pour forcer la correspondance.
     const bare = await variant(noContext);
     const no = bare.model.correlations?.find((c) => c.from === 'METHOD:front:HistoriqueService#dossier');

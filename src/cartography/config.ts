@@ -37,7 +37,11 @@ const SECRET = /(password|passwd|pwd|secret|token|credential|api[-_.]?key|privat
 export const MASK = '***';
 const CONFIG_FILE = /(^|\/)(application|bootstrap)(-([\w.-]+))?\.(ya?ml|properties)$/i;
 
-const lineOf = (lines: readonly string[], key: string): number => {
+/**
+ * La ligne d'une clé : écrite en entier (`a.b=…`), sinon sa dernière partie ; `occurrence` choisit la n-ième
+ * ligne de cette partie (les éléments d'une liste YAML répètent les mêmes noms, lus dans l'ordre du document).
+ */
+const lineOf = (lines: readonly string[], key: string, occurrence = 0): number => {
   const leaf =
     key
       .split('.')
@@ -47,10 +51,10 @@ const lineOf = (lines: readonly string[], key: string): number => {
     (l) => l.trimStart().startsWith(`${key}=`) || l.trimStart().startsWith(`${key}:`),
   );
   if (exact >= 0) return exact + 1;
-  const near = lines.findIndex((l) =>
-    new RegExp(`^\\s*-?\\s*${leaf.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}\\s*[:=]`).test(l),
-  );
-  return near >= 0 ? near + 1 : 1;
+  const re = new RegExp(`^\\s*-?\\s*${leaf.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}\\s*[:=]`);
+  const all = lines.flatMap((l, i) => (re.test(l) ? [i] : []));
+  const near = all[Math.min(occurrence, all.length - 1)];
+  return near !== undefined ? near + 1 : 1;
 };
 
 function flatten(value: unknown, prefix: string, out: Map<string, string>): void {
@@ -117,16 +121,25 @@ export function readSpringConfig(files: readonly ReadFile[]): SpringConfig {
           profiles.push({ name: on, file: file.path, line: lineOf(lines, 'on-profile'), how: 'DOCUMENT' });
       }
     }
+    // Combien de fois chaque dernière partie de clé a déjà été vue dans ce fichier (ordre du document).
+    const seen = new Map<string, number>();
     for (const doc of docs) {
       const profile = doc.profile ?? fileProfile;
       for (const [key, value] of doc.values) {
+        const leaf =
+          key
+            .split('.')
+            .pop()
+            ?.replace(/\[\d+\]$/, '') ?? key;
+        const occurrence = seen.get(leaf) ?? 0;
+        seen.set(leaf, occurrence + 1);
         if (key === 'spring.config.activate.on-profile' || key === 'spring.profiles') continue;
         const secret = SECRET.test(key);
         entries.push({
           key,
           value: secret ? MASK : value,
           file: file.path,
-          line: lineOf(lines, key),
+          line: lineOf(lines, key, occurrence),
           ...(profile ? { profile } : {}),
           ...(secret ? { secret: true as const } : {}),
         });

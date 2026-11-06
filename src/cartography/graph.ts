@@ -15,6 +15,7 @@ import type {
   MapContract,
   MapContractDiff,
   MapCorrelation,
+  MapConfigGraph,
   MapModule,
   CorrelationStep,
 } from '../sdk/core/cartography.js';
@@ -23,6 +24,16 @@ import { matchEndpoint, normalizePath } from '../incident/code/paths.js';
 import { membersOf } from './analyze-template.js';
 import type { Loc, SourceFacts } from './facts.js';
 import { ConfigResolver, DEFAULT_VARIANT } from './config.js';
+import { buildConfigGraph } from './config-graph.js';
+import {
+  destinationOf,
+  routedPath,
+  routeMatches,
+  servicesOf,
+  type GatewayFacts,
+  type GatewayRoute,
+  type ServiceSource,
+} from './gateway.js';
 import {
   apiNamesOf,
   ContractIndex,
@@ -116,6 +127,7 @@ export interface GraphOutput {
   contracts?: MapContract[];
   contractDiffs?: MapContractDiff[];
   modules?: MapModule[];
+  configGraph?: MapConfigGraph;
 }
 
 /** Le type normalisé d'un champ, pour comparer les couches (text, number, date, boolean). */
@@ -1063,6 +1075,234 @@ export function buildGraph(input: GraphInput): GraphOutput {
       ),
     ),
   ];
+  // ── Destinations : à quelle source mène une adresse (proxy, base d'URL, client), passerelles comprises ──
+  const services = servicesOf(
+    input.facts.map((f) => ({
+      sourceId: f.sourceId,
+      name: sourceById.get(f.sourceId)?.name ?? f.sourceId,
+      serves: !!f.java,
+      ...(f.config ? { config: f.config } : {}),
+      ...(f.gateway ? { gateway: f.gateway } : {}),
+    })),
+  );
+  interface Reach {
+    /** Le chemin reçu par la destination (après les transformations prouvées). */
+    path: string;
+    /** Les seules sources admises ; absent : la destination n'est pas établie, rien n'est restreint. */
+    only?: ReadonlySet<string>;
+    steps: CorrelationStep[];
+    causes: Cause[];
+    /** Une destination incertaine : une correspondance par le seul chemin reste probable. */
+    uncertain: boolean;
+  }
+  /** Les routes d'une passerelle dans une variante : celles du profil remplacent celles du défaut de même id. */
+  const gatewayRoutes = (gw: GatewayFacts, variant: string): GatewayRoute[] => {
+    const own = gw.routes.filter((r) => r.variant === variant);
+    return [...gw.routes.filter((r) => !r.variant && !own.some((o) => o.id === r.id)), ...own].sort(
+      (a, b) => a.order - b.order,
+    );
+  };
+  const reachOf = (
+    address: string,
+    method: string,
+    path: string,
+    variant: string,
+    upstream?: readonly string[],
+    depth = 0,
+  ): Reach => {
+    const d = destinationOf(address, services, variant, upstream);
+    const label = (rule: string): CorrelationStep => ({ kind: 'DESTINATION', label: rule });
+    if (d.symbolic)
+      return {
+        path,
+        steps: [label(d.rule)],
+        causes: [
+          {
+            code: 'DESTINATION_SYMBOLIC',
+            message: `${d.rule} : la destination n’est connue qu’à l’exécution, elle n’est pas inventée`,
+          },
+        ],
+        uncertain: true,
+      };
+    if (d.external)
+      return {
+        path,
+        steps: [label(d.rule)],
+        causes: [
+          {
+            code: 'GATEWAY_EXTERNAL',
+            message: `${address} (variante ${variant}) : passerelle ou service non fourni parmi les sources analysées ; une correspondance par le seul chemin reste à confirmer`,
+          },
+        ],
+        uncertain: true,
+      };
+    const gateways = d.sources
+      .map((id) => services.find((s) => s.sourceId === id))
+      .filter((s): s is ServiceSource => !!s?.gateway);
+    if (d.sources.length === 1 && gateways.length === 1 && depth < 3) {
+      const gw = gateways[0] as ServiceSource & { gateway: GatewayFacts };
+      const routes = gatewayRoutes(gw.gateway, variant).filter((r) => routeMatches(r, method, path));
+      const first = routes[0];
+      if (!first)
+        return {
+          path,
+          only: new Set(),
+          steps: [label(`${d.rule} (passerelle)`)],
+          causes: [
+            {
+              code: 'NO_ENDPOINT',
+              message: `aucune route de la passerelle ${gw.name} ne correspond à ${method} ${path} (variante ${variant})`,
+            },
+          ],
+          uncertain: false,
+        };
+      const routed = routedPath(first, path);
+      const step: CorrelationStep = {
+        kind: 'GATEWAY',
+        label: `${gw.name} (${first.adapter}) route ${first.id}${first.variant ? ` [${first.variant}]` : ''} : ${first.paths.join(', ')}${first.methods.length ? ` ${first.methods.join(',')}` : ''}${routed.steps.length ? ` ; ${routed.steps.join(' ; ')}` : ''} → ${first.uri}${routes.length > 1 ? ` (première de ${String(routes.length)} routes possibles, par ordre)` : ''}`,
+        evidence: ev(gw.sourceId, { file: first.file, line: first.line }, 'STATIC_CODE', 'CONFIRMED'),
+      };
+      const next = reachOf(first.uri, method, routed.path, variant, first.upstream, depth + 1);
+      return {
+        ...next,
+        steps: [label(`${d.rule} (passerelle)`), step, ...next.steps],
+        causes: [
+          ...(first.dynamic
+            ? [{ code: 'PROXY_DYNAMIC' as const, message: `route ${first.id} : ${first.dynamic}` }]
+            : []),
+          ...next.causes,
+        ],
+        uncertain: next.uncertain || !!first.dynamic,
+      };
+    }
+    if (d.sources.length > 1)
+      return {
+        path,
+        only: new Set(d.sources),
+        steps: [label(d.rule)],
+        causes: [
+          {
+            code: 'MULTIPLE_DESTINATIONS',
+            message: `${address} désigne plusieurs sources (${d.sources.join(', ')}) : ${d.rule}`,
+          },
+        ],
+        uncertain: true,
+      };
+    // Indéterminée (port non déclaré par certaines sources) : rien n'est restreint ni supposé.
+    if (d.sources.length === 0) return { path, steps: [label(d.rule)], causes: [], uncertain: false };
+    return { path, only: new Set(d.sources), steps: [label(d.rule)], causes: [], uncertain: false };
+  };
+
+  /**
+   * La destination d'un appel Java dans une variante : la première propriété de son URL (`@Value`, base d'un
+   * client) qui vaut une adresse, résolue dans le profil ; une valeur fournie à l'exécution reste symbolique,
+   * une clé absente est dite non résolue. Sans propriété, l'origine lue dans le code.
+   */
+  const javaReach = (
+    sourceId: string,
+    keys: readonly string[],
+    literal: string | undefined,
+    method: string,
+    path: string,
+    variant: string,
+    /** La base est une adresse complète (client généré) : sa partie chemin précède le chemin de l'opération. */
+    prefixBase = false,
+  ): Reach | undefined => {
+    const withBase = (url: string): string =>
+      prefixBase
+        ? normalizePath(`${(/^[a-z]+:\/\/[^/]+(\/[^?#]*)?/i.exec(url)?.[1] ?? '').replace(/\/$/, '')}${path}`)
+        : path;
+    const config = input.facts.find((f) => f.sourceId === sourceId)?.config;
+    const resolver = config ? new ConfigResolver(config) : undefined;
+    for (const key of [...new Set(keys)]) {
+      const r = resolver?.resolve(key, variant);
+      const entry = r?.from[0];
+      const where = entry
+        ? ` (${entry.file}:${String(entry.line)}${entry.profile ? `, profil ${entry.profile}` : ''})`
+        : '';
+      const step: CorrelationStep = {
+        kind: 'DESTINATION',
+        label: `${key} = ${r?.value ?? entry?.value ?? '?'}${where}`,
+        ...(entry
+          ? { evidence: ev(sourceId, { file: entry.file, line: entry.line }, 'STATIC_CODE', 'CONFIRMED') }
+          : {}),
+      };
+      if (r?.value !== undefined && /^[a-z]+:\/\//i.test(r.value)) {
+        const reach = reachOf(r.value, method, withBase(r.value), variant);
+        return { ...reach, steps: [step, ...reach.steps] };
+      }
+      if (r?.runtime.length)
+        return {
+          path,
+          steps: [step],
+          causes: [
+            {
+              code: 'DESTINATION_SYMBOLIC',
+              message: `${key} = ${entry?.value ?? ''} : fournie à l’exécution (${r.runtime.join(', ')}), la destination n’est pas inventée`,
+            },
+          ],
+          uncertain: true,
+        };
+      if (!r || r.unresolved.length)
+        return {
+          path,
+          steps: [
+            { kind: 'DESTINATION', label: `${key} : absente de la configuration lue (variante ${variant})` },
+          ],
+          causes: [
+            {
+              code: 'PROPERTY_UNRESOLVED',
+              message: `la propriété ${key} n’a aucune valeur dans la configuration lue (variante ${variant}) : la destination n’est pas résolue`,
+            },
+          ],
+          uncertain: true,
+        };
+    }
+    if (literal && /^[a-z]+:\/\//i.test(literal)) return reachOf(literal, method, withBase(literal), variant);
+    return undefined;
+  };
+  /** Les variantes d'une source (défaut et profils Spring), pour ses appels sortants. */
+  const variantsOf = (sourceId: string): string[] => {
+    const config = input.facts.find((f) => f.sourceId === sourceId)?.config;
+    return config ? new ConfigResolver(config).variants() : [DEFAULT_VARIANT];
+  };
+  /** Le résultat d'une destination par variante, dans la forme attendue par la corrélation. */
+  const perVariant = (
+    sourceId: string,
+    reachIn: (variant: string) => Reach | undefined,
+  ): {
+    main?: Reach;
+    only?: ReadonlySet<string>;
+    variantOnly?: Record<string, ReadonlySet<string> | undefined>;
+    variantCauses?: Record<string, Cause[]>;
+    variantSteps?: Record<string, string>;
+  } => {
+    const main = reachIn(DEFAULT_VARIANT);
+    const variantOnly: Record<string, ReadonlySet<string> | undefined> = {};
+    const variantCauses: Record<string, Cause[]> = {};
+    const variantSteps: Record<string, string> = {};
+    for (const v of variantsOf(sourceId)) {
+      if (v === DEFAULT_VARIANT) continue;
+      const r = reachIn(v);
+      const same =
+        r?.only === main?.only ||
+        (!!r?.only &&
+          !!main?.only &&
+          r.only.size === main.only.size &&
+          [...r.only].every((x) => main.only?.has(x)));
+      variantOnly[v] = same ? main?.only : r?.only;
+      if (r?.causes.length) variantCauses[v] = r.causes;
+      if (r?.steps.length) variantSteps[v] = r.steps.map((st) => st.label).join(' → ');
+    }
+    return {
+      ...(main ? { main } : {}),
+      ...(main?.only ? { only: main.only } : {}),
+      ...(Object.keys(variantOnly).length ? { variantOnly } : {}),
+      ...(Object.keys(variantCauses).length ? { variantCauses } : {}),
+      ...(Object.keys(variantSteps).length ? { variantSteps } : {}),
+    };
+  };
+
   /**
    * La corrélation d'un appel avec les couches en aval, dans l'ordre : la première couche qui en démontre
    * une cible l'emporte ; les causes des autres sont gardées. Le résultat est noté dans `correlations`.
@@ -1077,6 +1317,12 @@ export function buildGraph(input: GraphInput): GraphOutput {
       variants?: Record<string, string>;
       /** Les sources où la destination est démontrée (passerelle, base d'un client) : seules cibles admises. */
       only?: ReadonlySet<string>;
+      /** La destination propre à une variante (proxy de la configuration, base d'URL du profil). */
+      variantOnly?: Record<string, ReadonlySet<string> | undefined>;
+      /** Les causes propres à une variante (destination symbolique, passerelle externe…). */
+      variantCauses?: Record<string, Cause[]>;
+      /** Les étapes propres à une variante (proxy, passerelle, destination) : montrées avec son issue. */
+      variantSteps?: Record<string, string>;
     },
     layers: readonly MapLayer[],
     steps: CorrelationStep[],
@@ -1137,14 +1383,21 @@ export function buildGraph(input: GraphInput): GraphOutput {
             ? 'PROBABLE'
             : m.status;
     const variantResults: NonNullable<MapCorrelation['variants']> = [];
-    for (const v of [...new Set([...knownVariants, ...Object.keys(call.variants ?? {})])]) {
+    for (const v of [
+      ...new Set([
+        ...knownVariants,
+        ...Object.keys(call.variants ?? {}),
+        ...Object.keys(call.variantOnly ?? {}),
+      ]),
+    ]) {
       const p = call.variants?.[v] ?? call.path;
-      const vc: Cause[] = [];
+      const vOnly = call.variantOnly && v in call.variantOnly ? call.variantOnly[v] : call.only;
+      const vc: Cause[] = [...(call.variantCauses?.[v] ?? [])];
       let m: Match | undefined;
       for (const layer of layers) {
         const r = matchCall(
           { ...call, path: p, baseUnknown: p.startsWith('{base}') },
-          targetsOf(layer, v, call.only),
+          targetsOf(layer, v, vOnly),
         );
         vc.push(...r.causes);
         if (r.target) {
@@ -1152,17 +1405,22 @@ export function buildGraph(input: GraphInput): GraphOutput {
           break;
         }
       }
-      const st = statusOf(m);
+      const own = call.variantCauses?.[v] ?? [];
+      const raw = statusOf(m);
+      // Une destination incertaine dans cette variante : une correspondance par le seul chemin reste probable.
+      const st = own.length && raw === 'CONFIRMED' ? 'PROBABLE' : raw;
       if (
         m?.target?.node === target?.node &&
         m?.target?.path === target?.path &&
         st === status &&
-        p === call.path
+        p === call.path &&
+        vOnly === call.only
       )
         continue;
       variantResults.push({
         variant: v,
         path: p,
+        ...(call.variantSteps?.[v] ? { chain: call.variantSteps[v] } : {}),
         status: st,
         ...(m?.target ? { target: m.target.node, exposed: m.target.path } : {}),
         causes: dedupeCauses(
@@ -1179,10 +1437,11 @@ export function buildGraph(input: GraphInput): GraphOutput {
         ),
       });
     }
-    if (variantResults.length > 0)
+    // Incohérente seulement si l'issue change (statut ou cible) : un chemin différent sans effet n'en est pas une.
+    if (variantResults.some((r) => r.status !== status || r.target !== target?.node))
       causes.push({
         code: 'ENVIRONMENT_INCONSISTENT',
-        message: `l’issue change selon la variante (${variantResults.map((r) => `${r.variant} : ${r.status}`).join(', ')}) ; le profil actif n’est pas connu`,
+        message: `l’issue change selon la variante (${variantResults.map((r) => `${r.variant} : ${r.status}${r.target ? ` → ${r.target}` : ''}`).join(', ')}) ; le profil actif n’est pas connu`,
       });
     correlations.push({
       from,
@@ -1346,47 +1605,158 @@ export function buildGraph(input: GraphInput): GraphOutput {
             });
           continue;
         }
-        // Une réécriture du proxy démontrée par la configuration (`"^/api": ""`) : le chemin reçu en aval.
-        const local = normalizePath(call.path);
-        const proxy = (ui.proxies ?? []).find(
-          (p) => p.rewrite && (local === p.context || local.startsWith(`${p.context.replace(/\/$/, '')}/`)),
-        );
-        let rewritten: string | undefined;
-        if (proxy?.rewrite)
-          try {
-            rewritten = local.replace(new RegExp(proxy.rewrite.pattern), proxy.rewrite.replacement) || '/';
-          } catch {
-            rewritten = undefined;
+        // Par variante du frontal (défaut, configurations d'angular.json) : la base de l'environnement, la règle
+        // du proxy de cette variante (réécriture, règle dynamique), puis la destination (passerelle comprise).
+        const frontVariants = [DEFAULT_VARIANT, ...(ui.variants ?? []).map((v) => v.name)];
+        interface FrontRoute {
+          path: string;
+          reach?: Reach;
+          proxy?: NonNullable<typeof ui.proxies>[number];
+          rewritten?: string;
+          steps: CorrelationStep[];
+          causes: Cause[];
+        }
+        const frontRoute = (variant: string): FrontRoute => {
+          let path = call.path ?? '';
+          let address: string | undefined;
+          const steps: CorrelationStep[] = [];
+          // La base lue dans le fichier environment de la variante (remplacement d'angular.json).
+          if (call.baseKey && path.startsWith('{base}')) {
+            const entry = ui.environment?.find((e) => e.key === call.baseKey);
+            const defaultFile =
+              (ui.variants ?? []).flatMap((v) => v.replacements.map((r) => r.replace))[0] ??
+              entry?.values.find((v) => /(^|\/)environment\.ts$/.test(v.file))?.file;
+            const file =
+              (ui.variants ?? [])
+                .find((v) => v.name === variant)
+                ?.replacements.find((r) => r.replace === defaultFile)?.with ?? defaultFile;
+            const value = entry?.values.find((v) => v.file === file)?.value;
+            if (value !== undefined) {
+              const rest = path.slice('{base}'.length);
+              const abs = /^([a-z]+:\/\/[^/]+)(\/.*)?$/i.exec(value);
+              address = abs?.[1];
+              path = `${(abs ? (abs[2] ?? '') : value).replace(/\/$/, '')}${rest}`.replace(/\/{2,}/g, '/');
+              steps.push({
+                kind: 'BASE',
+                label: `${call.baseKey} = '${value}' (${file ?? ''}, variante ${variant})`,
+                ...(file ? { evidence: ev(src, { file, line: 1 }, 'STATIC_CODE', 'CONFIRMED') } : {}),
+              });
+            }
           }
+          if (address) {
+            const reach = reachOf(address, call.method, path, variant);
+            return { path: reach.path, reach, steps: [...steps, ...reach.steps], causes: reach.causes };
+          }
+          // Le proxy de développement : celui de la variante, sinon celui du défaut ; la règle au plus long contexte.
+          const local = path.replace(/\/{2,}/g, '/');
+          const own = (ui.proxies ?? []).some((p) => p.variant === variant);
+          const rules = (ui.proxies ?? [])
+            .filter((p) => (p.variant ?? DEFAULT_VARIANT) === (own ? variant : DEFAULT_VARIANT))
+            .filter(
+              (p) =>
+                local === p.context ||
+                local.startsWith(`${p.context.replace(/\/$/, '')}/`) ||
+                p.context === '/',
+            )
+            .sort((a, b) => b.context.length - a.context.length);
+          const proxy = rules[0];
+          if (!proxy) return { path, steps, causes: [] };
+          const proxyEv = ev(src, { file: proxy.file, line: proxy.line }, 'STATIC_CODE', 'CONFIRMED');
+          if (proxy.dynamic)
+            return {
+              path,
+              proxy,
+              steps: [
+                ...steps,
+                {
+                  kind: 'PROXY',
+                  label: `${proxy.file} « ${proxy.context} » : ${proxy.dynamic}`,
+                  evidence: proxyEv,
+                },
+              ],
+              causes: [
+                {
+                  code: 'PROXY_DYNAMIC',
+                  message: `règle « ${proxy.context} » de ${proxy.file} non interprétable sans exécution (${proxy.dynamic}) : la destination n’est pas déduite`,
+                },
+              ],
+            };
+          let rewritten: string | undefined;
+          if (proxy.rewrite)
+            try {
+              rewritten = local.replace(new RegExp(proxy.rewrite.pattern), proxy.rewrite.replacement) || '/';
+            } catch {
+              rewritten = undefined;
+            }
+          const sent = rewritten ?? local;
+          const proxyStep: CorrelationStep = {
+            kind: 'PROXY',
+            label: `${proxy.file} « ${proxy.context} »${proxy.target ? ` → ${proxy.target}` : ''}${rewritten ? ` ; réécriture « ${proxy.rewrite?.pattern ?? ''} » → « ${proxy.rewrite?.replacement ?? ''} » : ${rewritten}` : ''}`,
+            evidence: proxyEv,
+          };
+          if (!proxy.target)
+            return {
+              path: sent,
+              proxy,
+              ...(rewritten ? { rewritten } : {}),
+              steps: [...steps, proxyStep],
+              causes: [],
+            };
+          const reach = reachOf(proxy.target, call.method, sent, variant);
+          return {
+            path: reach.path,
+            reach,
+            proxy,
+            ...(rewritten ? { rewritten } : {}),
+            steps: [...steps, proxyStep, ...reach.steps],
+            causes: reach.causes,
+          };
+        };
+        const routes = new Map(frontVariants.map((v) => [v, frontRoute(v)]));
+        const main = routes.get(DEFAULT_VARIANT) ?? frontRoute(DEFAULT_VARIANT);
+        const proxy = main.proxy;
         const baseSteps: CorrelationStep[] = [
           callStep,
           ...(call.base ? [{ kind: 'BASE' as const, label: call.base }] : []),
         ];
-        let result = rewritten
-          ? correlateCall(
-              id,
-              { method: call.method, path: rewritten, baseUnknown: false },
-              downstream('FRONTEND'),
-              [
-                ...baseSteps,
-                {
-                  kind: 'BASE',
-                  label: `réécriture du proxy « ${proxy?.rewrite?.pattern ?? ''} » → « ${proxy?.rewrite?.replacement ?? ''} » : ${rewritten}`,
-                  ...(proxy
-                    ? {
-                        evidence: ev(src, { file: proxy.file, line: proxy.line }, 'STATIC_CODE', 'CONFIRMED'),
-                      }
-                    : {}),
-                },
-              ],
-            )
-          : undefined;
-        const usedRewrite = result?.found !== undefined;
-        if (!result?.found) {
-          if (result) correlations.pop();
+        const sameSet = (a?: ReadonlySet<string>, b?: ReadonlySet<string>): boolean =>
+          a === b || (!!a && !!b && a.size === b.size && [...a].every((x) => b.has(x)));
+        const variantPaths: Record<string, string> = {};
+        const variantOnly: Record<string, ReadonlySet<string> | undefined> = {};
+        const variantCauses: Record<string, Cause[]> = {};
+        const variantSteps: Record<string, string> = {};
+        for (const [v, r] of routes) {
+          if (v === DEFAULT_VARIANT) continue;
+          if (r.path !== main.path) variantPaths[v] = r.path;
+          variantOnly[v] = sameSet(r.reach?.only, main.reach?.only) ? main.reach?.only : r.reach?.only;
+          if (r.causes.length) variantCauses[v] = r.causes;
+          if (r.steps.length) variantSteps[v] = r.steps.map((st) => st.label).join(' → ');
+        }
+        const callFor = (path: string) => ({
+          method: call.method,
+          path,
+          baseUnknown: path.startsWith('{base}'),
+          ...(main.reach?.only ? { only: main.reach.only } : {}),
+          ...(Object.keys(variantPaths).length ? { variants: variantPaths } : {}),
+          ...(Object.keys(variantOnly).length ? { variantOnly } : {}),
+          ...(Object.keys(variantCauses).length ? { variantCauses } : {}),
+          ...(Object.keys(variantSteps).length ? { variantSteps } : {}),
+        });
+        let result = correlateCall(
+          id,
+          callFor(main.path),
+          downstream('FRONTEND'),
+          [...baseSteps, ...main.steps],
+          main.causes,
+          main.reach?.uncertain ?? false,
+        );
+        const usedRewrite = result.found !== undefined && main.rewritten !== undefined;
+        // Sans destination établie, une réécriture qui ne mène nulle part n'empêche pas la comparaison directe.
+        if (!result.found && main.rewritten !== undefined && !main.reach) {
+          correlations.pop();
           result = correlateCall(
             id,
-            { method: call.method, path: call.path, baseUnknown: call.path.startsWith('{base}') },
+            { ...callFor(call.path), only: undefined },
             downstream('FRONTEND'),
             baseSteps,
           );
@@ -1477,9 +1847,23 @@ export function buildGraph(input: GraphInput): GraphOutput {
       const layer: MapLayer = (sourceById.get(src)?.layer ?? facts.layer) === 'BFF' ? 'BFF' : 'BACKEND';
       for (const out of facts.java.outgoing) {
         if (!out.path || !out.method) continue;
+        const outPath = out.path;
+        const outMethod = out.method;
+        // La destination par variante : la base d'URL (`@Value`) résolue dans chaque profil de la source.
+        const dest = perVariant(src, (v) =>
+          javaReach(src, out.properties ?? [], out.origin, outMethod, outPath, v),
+        );
         const result = correlateCall(
           `METHOD:${out.from}`,
-          { method: out.method, path: out.path, baseUnknown: /^\{/.test(out.path) },
+          {
+            method: out.method,
+            path: dest.main?.path ?? out.path,
+            baseUnknown: /^\{/.test(out.path),
+            ...(dest.only ? { only: dest.only } : {}),
+            ...(dest.variantOnly ? { variantOnly: dest.variantOnly } : {}),
+            ...(dest.variantCauses ? { variantCauses: dest.variantCauses } : {}),
+            ...(dest.variantSteps ? { variantSteps: dest.variantSteps } : {}),
+          },
           downstream(layer),
           [
             {
@@ -1488,7 +1872,10 @@ export function buildGraph(input: GraphInput): GraphOutput {
               node: `METHOD:${out.from}`,
               evidence: ev(src, out.loc, 'STATIC_CODE', 'CONFIRMED'),
             },
+            ...(dest.main?.steps ?? []),
           ],
+          dest.main?.causes ?? [],
+          dest.main?.uncertain ?? false,
         );
         const found = result.found;
         if (!found) continue;
@@ -1604,17 +1991,56 @@ export function buildGraph(input: GraphInput): GraphOutput {
           label: `${op.method} ${route} (operationId ${op.operationId ?? ''}, ${contract.doc.title ?? contract.doc.file} ${contract.doc.version ?? ''})`,
           node: opNodeOf(contract.sourceId, op.id),
         });
-        // L'adresse de base du client est réglée à l'exécution : la route est comparée seule, puis en suffixe.
+        // La base du client réglée par un bean (`setBasePath`) : la destination par variante ; sans bean lu,
+        // l'adresse est réglée à l'exécution : la route est comparée seule, puis en suffixe.
+        const bases = facts.java.clientBases ?? [];
+        const clientReach = (v: string): Reach | undefined => {
+          const own = bases.filter((b) => b.profile === v);
+          const applicable = own.length ? own : bases.filter((b) => !b.profile);
+          const reaches = applicable.flatMap((b) => {
+            const r = javaReach(src, b.property ? [b.property] : [], b.value, op.method, route, v, true);
+            if (!r) return [];
+            const beanStep: CorrelationStep = {
+              kind: 'DESTINATION',
+              label: `${b.type} réglé par un bean : base ${b.property ? `\${${b.property}}` : (b.value ?? '')}${b.profile ? ` (@Profile ${b.profile})` : ''}${b.condition ? ` (@ConditionalOnProperty(${b.condition}), condition non évaluée)` : ''}`,
+              evidence: ev(src, b.loc, 'STATIC_CODE', 'CONFIRMED'),
+            };
+            return [{ ...r, steps: [beanStep, ...r.steps], uncertain: r.uncertain || !!b.condition }];
+          });
+          if (reaches.length <= 1) return reaches[0];
+          const all = new Set(reaches.flatMap((r) => [...(r.only ?? [])]));
+          return {
+            path: route,
+            ...(all.size ? { only: all } : {}),
+            steps: reaches.flatMap((r) => r.steps),
+            causes: [
+              {
+                code: 'MULTIPLE_DESTINATIONS',
+                message: `${String(reaches.length)} bases de client réglées par des beans dans la variante ${v} : le client utilisé par ${cc.type} n’est pas établi`,
+              },
+            ],
+            uncertain: true,
+          };
+        };
+        const dest = perVariant(src, clientReach);
         const layers = downstream(layer).filter((l) => l !== 'API');
         let result = correlateCall(
           from,
-          { method: op.method, path: route, baseUnknown: false },
+          {
+            method: op.method,
+            path: dest.main?.path ?? route,
+            baseUnknown: false,
+            ...(dest.only ? { only: dest.only } : {}),
+            ...(dest.variantOnly ? { variantOnly: dest.variantOnly } : {}),
+            ...(dest.variantCauses ? { variantCauses: dest.variantCauses } : {}),
+            ...(dest.variantSteps ? { variantSteps: dest.variantSteps } : {}),
+          },
           layers,
-          steps,
-          resolved.causes,
+          [...steps, ...(dest.main?.steps ?? [])],
+          [...resolved.causes, ...(dest.main?.causes ?? [])],
           true,
         );
-        if (!result.found) {
+        if (!result.found && !dest.only) {
           correlations.pop();
           result = correlateCall(
             from,
@@ -2819,5 +3245,6 @@ export function buildGraph(input: GraphInput): GraphOutput {
     contracts: contractIndex.contracts(),
     contractDiffs: contractIndex.diffs(),
     modules: contractIndex.moduleList(),
+    configGraph: buildConfigGraph(input.facts),
   };
 }

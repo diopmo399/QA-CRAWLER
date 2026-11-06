@@ -4,6 +4,25 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : passerelles, destinations et graphe de configuration (étape 2)
+
+- Version d'analyseur `cartography-7`.
+- Passerelles lues par adaptateur dans un modèle commun (route, prédicats, transformations, destination) :
+  Spring Cloud Gateway, NGINX et Ingress. Une passerelle n'est suivie que si la destination d'un appel la
+  désigne.
+- Destination d'un appel : la cible du proxy, la base d'URL ou la base d'un client mène à une source par son
+  port (`server.port`) ou son nom (`spring.application.name`, `lb://nom`) ; seule cette source est alors
+  candidate. Causes : `DESTINATION_SYMBOLIC`, `PROPERTY_UNRESOLVED`, `GATEWAY_EXTERNAL`,
+  `MULTIPLE_DESTINATIONS`, `PROXY_DYNAMIC`.
+- Frontal : base de l'environnement et proxy propres à chaque configuration d'`angular.json`.
+- Clients Java : base d'URL résolue par profil ; client généré réglé par un bean (`setBasePath`).
+- `MapCorrelation.variants` : l'issue de chaque variante qui diffère (chemin, chaîne, statut, cible) ;
+  `ENVIRONMENT_INCONSISTENT` quand elle change. L'arbre de parcours les affiche.
+- `model.configGraph` : dix relations typées (`DECLARES`, `REFERENCES`, `OVERRIDES`, `ACTIVATES`,
+  `GENERATES`, `IMPLEMENTS`, `CONFIGURES`, `ROUTES_TO`, `REWRITES_TO`, `DEPENDS_ON`) avec provenance,
+  variante et niveau de preuve ; valeurs sensibles masquées.
+- La ligne d'un élément de liste YAML est la sienne (et non celle du premier élément).
+
 ### Cartographie : configuration par variante (étape 1)
 
 - Version d'analyseur `cartography-6` : un scan incrémental ne reprend pas les faits d'avant.
