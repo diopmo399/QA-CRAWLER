@@ -1,0 +1,8 @@
+<project><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>acme-parent</artifactId><version>1.0.0</version><relativePath/></parent>
+  <artifactId>orders-backend</artifactId><version>1.0.0</version>
+  <dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId><version>3.2.0</version></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>orders-api</artifactId><version>${orders.api.version}</version></dependency>
+  </dependencies>
+</project>

@@ -23,6 +23,7 @@ import {
   type GitPolicy,
 } from '../../cartography/git-source.js';
 import { computeImpact } from '../../cartography/impact.js';
+import type { MavenOptions } from '../../cartography/maven-resolve.js';
 import {
   apiSheet,
   buildIndex,
@@ -350,6 +351,8 @@ export async function startScan(
   allowedRoots: readonly string[],
   options: { incremental?: unknown },
   git?: GitPolicy,
+  /** La résolution des contrats Maven (absente : désactivée). */
+  maven?: MavenOptions,
 ): Promise<ScanRecord> {
   if (JOBS.has(project.dir))
     throw new CartographyInputError(409, 'SCAN_RUNNING', 'a scan is already running for this project');
@@ -391,6 +394,7 @@ export async function startScan(
         incremental,
         ...(previous ? { previous: { facts: previous.facts, sources: previous.model.scan.sources } } : {}),
         signal: controller.signal,
+        ...(maven ? { maven } : {}),
         ...(git
           ? {
               prepareGit: (source: MapSource, signal?: AbortSignal) =>

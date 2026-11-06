@@ -4,6 +4,22 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : contrats d'API des dépendances Maven
+
+- Un contrôleur qui implémente une interface publiée dans un jar de contrat expose ses endpoints : le jar
+  de sources, sinon les classes compilées (bytecode lu, jamais chargé), avec les routes héritées et les
+  surcharges ; la preuve pointe le fichier du jar.
+- Dépendances résolues par application : parents, propriétés, BOM importés, `dependencyManagement`,
+  scopes, exclusions, la plus proche l'emporte (conflits notés) ; état par artefact dans
+  `scan.sources[].dependencies` et types introuvables dans `unresolvedTypes`.
+- Dépôts locaux (lecture seule), cache, dépôts distants autorisés (https, identifiants par nom de variable,
+  empreinte SHA-1 vérifiée), mode hors ligne, limites de taille, de nombre et de durée. Désactivé par
+  défaut : `--maven-repo`, `--maven-remote`, `--maven-auth`, `--maven-cache`, `--maven-offline`
+  (`mavenContracts` dans `startSdkServer`).
+- Clients `@HttpExchange` et `@FeignClient` lus dans un jar : appel sortant reconstruit ; sans adresse lue,
+  la corrélation BFF → Backend reste `PROBABLE`.
+- Version d'analyseur `cartography-10`.
+
 ### Cartographie : fiabilisation de la résolution
 
 - Appels Java sur interface ou classe abstraite : implémentation par une classe abstraite intermédiaire,

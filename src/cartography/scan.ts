@@ -27,6 +27,7 @@ import {
 } from './files.js';
 import { GitSourceError, type PreparedGit } from './git-source.js';
 import { buildGraph } from './graph.js';
+import { resolveContracts, type MavenOptions } from './maven-resolve.js';
 
 /**
  * LE SCAN D'UN PROJET : chaque source activée est lue (sous une racine autorisée, sans secrets, dans des
@@ -49,7 +50,7 @@ import { buildGraph } from './graph.js';
 // 8 : constantes Java entre fichiers (imports statiques, `Classe.CHAMP`), accès aux données hors Spring Data
 //     (EntityManager, JDBC, @Query classée), écritures des états du gabarit (signal, affectation), sources
 //     partielles (limites atteintes).
-export const ANALYZERS = `cartography-9;${RXJS_ANALYZER}`;
+export const ANALYZERS = `cartography-10;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;
@@ -65,6 +66,11 @@ export interface ScanOptions {
    * serveur n'accepte pas de source distante. Le reste du scan ne voit qu'un dossier.
    */
   prepareGit?: (source: MapSource, signal?: AbortSignal) => Promise<PreparedGit>;
+  /**
+   * La résolution des dépendances Maven (dépôts locaux, cache, dépôts distants autorisés) pour retrouver les
+   * contrats absents des sources ; absente : aucune dépendance n'est lue.
+   */
+  maven?: MavenOptions;
 }
 
 export const newScanId = (now: Date): string =>
@@ -183,7 +189,33 @@ export async function runScan(
         scan.errors.push(...sourceFacts.ui.warnings.slice(0, 20));
       }
       if (found.has('SPRING') || found.has('JPA')) {
-        sourceFacts.java = analyzeJava(source.id, source.layer === 'BFF' ? 'BFF' : 'BACKEND', read.files);
+        const javaLayer = source.layer === 'BFF' ? 'BFF' : 'BACKEND';
+        sourceFacts.java = analyzeJava(source.id, javaLayer, read.files);
+        // Les types absents des sources (interfaces implémentées, clients appelés) : cherchés dans les
+        // dépendances Maven de CETTE source, puis l'analyse est refaite avec eux.
+        const java = sourceFacts.java;
+        const needed = [
+          ...new Set([
+            ...(java.implementations ?? []).flatMap((i) => i.missing.flatMap((m) => m.qualified ?? [])),
+            ...(java.clients ?? []).map((c) => c.qualified),
+          ]),
+        ];
+        const poms = read.files.filter((f) => f.path === 'pom.xml' || f.path.endsWith('/pom.xml'));
+        if (options.maven && needed.length > 0 && poms.length > 0) {
+          const resolution = await resolveContracts({
+            sourceId: source.id,
+            poms,
+            needed,
+            known: new Set(java.classes.map((c) => c.qualified)),
+            options: options.maven,
+            ...(options.signal ? { signal: options.signal } : {}),
+          });
+          scan.dependencies = resolution.artifacts;
+          if (resolution.unresolved.length) scan.unresolvedTypes = resolution.unresolved;
+          scan.errors.push(...resolution.notes.slice(0, 20));
+          if (resolution.external.length > 0)
+            sourceFacts.java = analyzeJava(source.id, javaLayer, read.files, resolution.external);
+        }
         scan.errors.push(...sourceFacts.java.warnings.slice(0, 20));
       }
       if (found.has('OPENAPI')) {

@@ -35,6 +35,7 @@
     "tests/fixtures/cartography-entry/**",
     "tests/fixtures/cartography-contract/**",
     "tests/fixtures/cartography-config/**",
-    "tests/fixtures/cartography-trace/**"
+    "tests/fixtures/cartography-trace/**",
+    "tests/fixtures/maven-contracts/**"
   ]
 }

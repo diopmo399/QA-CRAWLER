@@ -1,0 +1,4 @@
+<project><modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId><artifactId>acme-parent</artifactId><version>1.0.0</version><packaging>pom</packaging>
+  <properties><common.version>1.0.0</common.version><orders.api.version>2.0.0</orders.api.version></properties>
+</project>

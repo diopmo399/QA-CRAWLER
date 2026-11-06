@@ -204,12 +204,53 @@ export interface TechnologyStatus {
   note?: string;
 }
 
+/**
+ * Une dépendance Maven d'une source, telle que résolue pour cette source seule (BFF et Backend résolus à part) :
+ * trouvée (dépôt local, cache, dépôt distant autorisé), ou pourquoi elle ne l'est pas. Une dépendance déclarée
+ * n'est jamais tenue pour disponible sans avoir été lue.
+ */
+export interface MavenArtifactStatus {
+  /** `groupe:artefact:version` (et `:classifieur` s'il y en a un). */
+  coordinates: string;
+  scope?: string;
+  /** 1 : déclarée par la source ; 2 et plus : apportée par une autre dépendance. */
+  depth: number;
+  requestedBy?: string;
+  state:
+    | 'RESOLVED'
+    | 'NOT_FOUND'
+    | 'OFFLINE'
+    | 'DENIED'
+    | 'INTEGRITY'
+    | 'TOO_LARGE'
+    | 'BUDGET'
+    | 'NO_VERSION'
+    | 'LIBRARY'
+    | 'ERROR';
+  origin?: 'LOCAL' | 'CACHE' | 'REMOTE';
+  /** L'identifiant du dépôt d'où il vient (jamais d'adresse ni d'identifiant de connexion). */
+  repository?: string;
+  /** L'empreinte SHA-1 du fichier lu (pom ou jar). */
+  sha1?: string;
+  /** Ce qui a été lu : pom, jar de sources, classes compilées. */
+  read?: ('POM' | 'SOURCES_JAR' | 'CLASS')[];
+  /** Les types de contrat lus dans cet artefact. */
+  types?: string[];
+  /** D'autres versions demandées ailleurs dans l'arbre (la plus proche l'emporte, comme Maven). */
+  conflicts?: string[];
+  note?: string;
+}
+
 export interface SourceScan {
   sourceId: string;
   name: string;
   layer: MapLayer;
   state: 'SCANNED' | 'PARTIAL' | 'FAILED' | 'DENIED' | 'DISABLED' | 'REUSED';
   technologies: TechnologyStatus[];
+  /** Les dépendances Maven résolues pour retrouver les contrats absents des sources (si la résolution est active). */
+  dependencies?: MavenArtifactStatus[];
+  /** Les types de contrat cherchés dans les dépendances et introuvables. */
+  unresolvedTypes?: string[];
   files: number;
   /** Fichiers laissés de côté (limites, taille, secrets), comptés. */
   skipped: number;

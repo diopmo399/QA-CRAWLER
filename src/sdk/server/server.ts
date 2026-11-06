@@ -255,6 +255,7 @@ import {
   startScan,
 } from './cartography.js';
 import type { GitPolicy } from '../../cartography/git-source.js';
+import type { MavenLimits, MavenOptions, MavenRemote } from '../../cartography/maven-resolve.js';
 import { AccessError, AccessStore, actionOf, can, rightFor, roleIn, type Identity } from './access.js';
 import { handleIncidentRoutes } from './incidents.js';
 import { IncidentService, type HostReplay, type IncidentHost } from '../../incident/service.js';
@@ -318,6 +319,21 @@ export interface SdkServerOptions {
     protocols?: ('https' | 'http' | 'file')[];
     timeoutMs?: number;
     maxRepoBytes?: number;
+  };
+  /**
+   * Les contrats d'API des dépendances Maven (jars de sources ou classes compilées, lus sans être exécutés) :
+   * désactivés si absents. `localRepositories` : dépôts locaux lus (jamais écrits) ; `remotes` : dépôts
+   * distants autorisés (https), identifiants lus dans des variables d'environnement dont le nom suit
+   * `envNames` ; les téléchargements vont sous `cacheDir` (défaut : `<workspace>/.maven-cache`).
+   */
+  mavenContracts?: {
+    localRepositories: string[];
+    remotes?: MavenRemote[];
+    cacheDir?: string;
+    offline?: boolean;
+    limits?: Partial<MavenLimits>;
+    /** Dépôt de test en http sur l'adresse de boucle (tests seulement). */
+    allowLoopbackHttp?: boolean;
   };
   env?: NodeJS.ProcessEnv;
   /** Langue de la page autonome et des rapports du moteur. */
@@ -446,11 +462,13 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
         ...(options.gitSources.maxRepoBytes ? { maxRepoBytes: options.gitSources.maxRepoBytes } : {}),
       }
     : undefined;
+  const maven = mavenPolicy(options.mavenContracts, workspace, env, envNames);
   const context: Context = {
     token,
     env,
     envNames,
     ...(git ? { git } : {}),
+    ...(maven ? { maven } : {}),
     allowedOrigins,
     rules,
     workspace,
@@ -525,6 +543,8 @@ interface Context {
   envNames: RegExp;
   /** La préparation des sources Git distantes (absente : refusées). */
   git?: GitPolicy;
+  /** La résolution des contrats Maven (absente : désactivée). */
+  maven?: MavenOptions;
   allowedOrigins: Set<string>;
   rules: ProjectRules;
   workspace: string;
@@ -3890,6 +3910,43 @@ function incidentService(ctx: Context, project: StoredProject): IncidentService 
 }
 
 /**
+ * La résolution des contrats Maven, validée au démarrage : dépôts distants en https (ou boucle de test),
+ * sans identifiants dans l'adresse, et variables d'identifiants dont le nom suit `envNames` (jamais une
+ * variable quelconque de l'environnement). Absente : désactivée.
+ */
+function mavenPolicy(
+  config: SdkServerOptions['mavenContracts'],
+  workspace: string,
+  env: NodeJS.ProcessEnv,
+  envNames: RegExp,
+): MavenOptions | undefined {
+  if (!config) return undefined;
+  const ids = new Set<string>();
+  for (const remote of config.remotes ?? []) {
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(remote.id) || ids.has(remote.id))
+      throw new Error(`maven repository id "${remote.id}" is invalid or repeated`);
+    ids.add(remote.id);
+    const url = URL.canParse(remote.url) ? new URL(remote.url) : undefined;
+    if (!url || (url.protocol !== 'https:' && !(config.allowLoopbackHttp && url.protocol === 'http:')))
+      throw new Error(`maven repository ${remote.id} must use https`);
+    if (url.username || url.password)
+      throw new Error(`maven repository ${remote.id}: credentials must come from environment variables`);
+    for (const name of [remote.usernameEnv, remote.passwordEnv, remote.tokenEnv])
+      if (name !== undefined && !envNames.test(name))
+        throw new Error(`maven repository ${remote.id}: variable ${name} does not match the allowed names`);
+  }
+  return {
+    local: config.localRepositories.map((dir) => path.resolve(dir)),
+    remote: config.remotes ?? [],
+    cacheDir: path.resolve(config.cacheDir ?? path.join(workspace, '.maven-cache')),
+    ...(config.offline ? { offline: true } : {}),
+    ...(config.allowLoopbackHttp ? { allowLoopbackHttp: true } : {}),
+    ...(config.limits ? { limits: config.limits } : {}),
+    env,
+  };
+}
+
+/**
  * Le runtime IA des incidents : un runtime fourni (tests) ; sinon, assemblé d'après `ai.incidents` seulement quand le
  * mode configuré n'est pas DETERMINISTIC — le module src/incident/ai n'est pas chargé autrement, et aucun
  * fournisseur n'est créé.
@@ -4384,7 +4441,7 @@ async function handleCartography(
     if (part === 'scans' && item === undefined && method === 'POST') {
       refuseArchived(project);
       const body = await readOptionalJson(request);
-      json(await startScan(project, roots, { incremental: body.incremental }, ctx.git), 202);
+      json(await startScan(project, roots, { incremental: body.incremental }, ctx.git, ctx.maven), 202);
       return;
     }
     if (part === 'scans' && item === 'current' && action === undefined && method === 'GET') {

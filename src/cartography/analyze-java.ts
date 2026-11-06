@@ -10,7 +10,7 @@ import {
 } from '../incident/code/java-parser.js';
 import type { ReadFile } from './files.js';
 import { classifyQuery, dataAccessOf } from './data-access.js';
-import { javaHierarchy, type Parsed } from './java-hierarchy.js';
+import { javaHierarchy, type ExternalParsed, type Parsed } from './java-hierarchy.js';
 import type {
   JavaClass,
   JavaClientBase,
@@ -369,6 +369,8 @@ export function analyzeJava(
   sourceId: string,
   layer: 'BFF' | 'BACKEND',
   files: readonly ReadFile[],
+  /** Les types des dépendances Maven résolues (jars de contrats) : routes héritées et clients HTTP. */
+  external: readonly ExternalParsed[] = [],
 ): JavaFacts {
   const warnings: string[] = [];
   // La variante par défaut seulement (entrées sans profil) : les valeurs d'un profil ne sont jamais
@@ -569,6 +571,7 @@ export function analyzeJava(
     uses,
     (owner, name) => methods.find((m) => m.owner === owner && m.name === name)?.id,
     (java) => fileConstants(java, shared),
+    external,
   );
   // Le préfixe d'exposition de l'application (context-path, base-path), lu dans sa configuration.
   // Par profil : une valeur d'un profil est une variante, jamais fusionnée avec celle du défaut.
@@ -612,7 +615,7 @@ export function analyzeJava(
         ),
       ),
     methods,
-    outgoing,
+    outgoing: [...outgoing, ...hierarchy.outgoing],
     calls: index.calls.map((call) => ({
       from: call.from,
       ...(call.to ? { to: call.to } : {}),

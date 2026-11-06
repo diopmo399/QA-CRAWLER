@@ -362,7 +362,14 @@ export interface JavaEndpoint {
    * La route vient d'un type parent (interface générée, classe de base) : le type qui porte l'annotation et
    * où, et le contrôleur concret qui l'expose.
    */
-  via?: { type: string; file: string; line: number };
+  via?: {
+    type: string;
+    file: string;
+    line: number;
+    /** Le type vient d'une dépendance Maven (absent des sources) : son artefact et ce qui a été lu. */
+    artifact?: string;
+    read?: 'SOURCES_JAR' | 'CLASS';
+  };
   controller?: string;
   loc: Loc;
 }
@@ -455,6 +462,8 @@ export interface JavaOutgoing {
   client?: string;
   /** Les clés de configuration lues pour l'URL. */
   properties?: string[];
+  /** L'adresse du service appelé n'est pas lue (base d'une interface HTTP réglée à l'exécution). */
+  addressUnknown?: boolean;
   loc: Loc;
 }
 
@@ -612,6 +621,12 @@ export interface MavenDependency {
   artifactId: string;
   version?: string;
   scope?: string;
+  /** `jar` par défaut ; `pom` pour un BOM importé. */
+  type?: string;
+  classifier?: string;
+  optional?: boolean;
+  /** Les dépendances indirectes écartées (`groupe:artefact`, `*` permis). */
+  exclusions?: string[];
   managed?: boolean;
   line: number;
 }

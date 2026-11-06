@@ -246,12 +246,21 @@ export function analyzeMaven(files: readonly ReadFile[]): MavenFacts {
       if (!artifactId) return undefined;
       const groupId = resolve(value(el, 'groupId'));
       const version = resolve(value(el, 'version'));
-      const scope = value(el, 'scope');
+      const scope = resolve(value(el, 'scope'));
+      const type = resolve(value(el, 'type'));
+      const classifier = resolve(value(el, 'classifier'));
+      const exclusions = children(child(el, 'exclusions'), 'exclusion').map(
+        (x) => `${resolve(value(x, 'groupId')) ?? '*'}:${resolve(value(x, 'artifactId')) ?? '*'}`,
+      );
       return {
         ...(groupId ? { groupId } : {}),
         artifactId,
         ...(version ? { version } : {}),
         ...(scope ? { scope } : {}),
+        ...(type && type !== 'jar' ? { type } : {}),
+        ...(classifier ? { classifier } : {}),
+        ...(resolve(value(el, 'optional')) === 'true' ? { optional: true } : {}),
+        ...(exclusions.length ? { exclusions } : {}),
         line: el.line,
       };
     };

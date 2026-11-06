@@ -2024,7 +2024,8 @@ export function buildGraph(input: GraphInput): GraphOutput {
             ...(dest.main?.steps ?? []),
           ],
           dest.main?.causes ?? [],
-          dest.main?.uncertain ?? false,
+          // Un appel dont l'adresse n'est pas lue (base réglée à l'exécution) ne confirme jamais sa cible.
+          (dest.main?.uncertain ?? false) || out.addressUnknown === true,
         );
         const found = result.found;
         if (!found) continue;

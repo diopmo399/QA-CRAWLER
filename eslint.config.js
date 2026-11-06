@@ -35,6 +35,8 @@ export default tseslint.config(
       'tests/fixtures/cartography-contract/',
       'tests/fixtures/cartography-config/',
       'tests/fixtures/cartography-trace/',
+      // Les applications et contrats Maven analysés par la résolution des contrats (dépendances absentes).
+      'tests/fixtures/maven-contracts/',
       // Les exemples importent les paquets compilés (dist) : ils se vérifient en les lançant.
       'examples/',
     ],

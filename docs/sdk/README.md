@@ -1752,6 +1752,57 @@ source non lue dans l'un des scans est « indéterminée ».
 fois : la liste des hôtes autorisés reste la protection principale. Seul https est proposé (pas de SSH).
 Les preuves donnent une ligne, pas encore une ligne de fin.
 
+#### Contrats d'API des dépendances Maven
+
+Un contrôleur Spring qui implémente une interface absente des sources (un module de contrat publié en jar)
+n'exposait aucun endpoint : les annotations HTTP sont sur l'interface, dans le jar. Désactivée par défaut,
+la résolution des contrats Maven lit ces jars, sans jamais charger ni exécuter leur code.
+
+- **Par application.** Les dépendances de chaque source Java sont résolues seules, à partir de ses `pom.xml` :
+  parents (lus aussi dans les dépôts), propriétés, `dependencyManagement`, BOM importés, scopes (`test`,
+  `provided` et optionnelles non suivies), exclusions, versions gérées par la racine ; la plus proche
+  l'emporte et l'autre version est notée (`conflicts`). Le BFF et le Backend gardent chacun leur version.
+- **Lecture.** Seuls les types cherchés (interfaces implémentées introuvables, clients injectés) et leurs
+  parents sont lus : dans le jar de sources s'il existe, sinon dans les classes compilées (bytecode :
+  annotations de type, de méthode et de paramètre, `MethodParameters`, héritage). Un type des sources n'est
+  jamais remplacé par celui d'un jar ; une interface annotée seule n'expose rien sans contrôleur.
+- **Endpoints.** Préfixe de type, routes héritées d'une interface parente (autre jar compris), surcharges ;
+  la preuve pointe le fichier du jar (`groupe:artefact:version!/chemin/Type.class` ou `.java`).
+- **Clients HTTP d'un jar.** Interfaces `@HttpExchange`/`@GetExchange`… et `@FeignClient` (`path`, `url`) :
+  l'appel sortant est reconstruit. Sans adresse lue (`url`, propriété), il est marqué `addressUnknown` et
+  sa corrélation reste `PROBABLE`, jamais `CONFIRMED`.
+- **Diagnostic.** `scan.sources[].dependencies` donne, par artefact : groupe:artefact:version, profondeur, demandeur,
+  état (`RESOLVED`, `NOT_FOUND`, `OFFLINE`, `DENIED`, `INTEGRITY`, `TOO_LARGE`, `BUDGET`, `NO_VERSION`,
+  `LIBRARY`, `ERROR`), origine (`LOCAL`, `CACHE`, `REMOTE`), dépôt, SHA-1, ce qui a été lu (`POM`,
+  `SOURCES_JAR`, `CLASS`) et les types trouvés ; `unresolvedTypes` liste ceux qui restent introuvables. Les
+  bibliothèques connues (Spring, Jackson…) ne sont pas ouvertes.
+
+**Réglage (opérateur du serveur).**
+
+```bash
+qa-crawler sdk-server --workspace ./ws \
+  --maven-repo ~/.m2/repository \
+  --maven-remote corp=https://nexus.example/repository/maven-public \
+  --maven-auth corp=QA_MAVEN_USER:QA_MAVEN_PASS   # ou corp=token:QA_MAVEN_TOKEN
+# --maven-offline : dépôts locaux et cache seulement ; --maven-cache <dir> (défaut <workspace>/.maven-cache)
+```
+
+`startSdkServer({ mavenContracts: { localRepositories, remotes, cacheDir, offline, limits } })` fait de même.
+
+**Sécurité.** Dépôts locaux en lecture seule. Dépôts distants : seulement ceux listés, en https, sans
+redirection suivie ni identifiants dans l'adresse ; identifiants lus dans des variables d'environnement
+dont le nom suit `QA_*` (vérifié au démarrage), jamais écrits dans un scan, un diagnostic ou un journal.
+Empreinte `.sha1` vérifiée (dépôt, cache et dépôt local) : une empreinte différente refuse le fichier
+(`INTEGRITY`) et rien n'est gardé. Les téléchargements vont au cache (écriture atomique, avec leur
+empreinte) et ne sont plus redemandés. Aucun plugin Maven n'est lancé, aucun `settings.xml` n'est lu.
+
+**Limites (défauts).** Profondeur 4, 300 pom, 40 jars ouverts, 20 Mo par fichier, 100 Mo téléchargés,
+15 s par requête, 60 s au total (`limits`) ; au-delà, l'état `BUDGET`/`TOO_LARGE` le dit. Pas de
+`SNAPSHOT` (`maven-metadata.xml`), pas de profils Maven activés pour les dépendances, pas de proxy HTTP
+propre au client (celui de Node s'il est réglé), pas de méta-annotations composées. Un contrôleur situé
+dans un jar n'est pas considéré. Une source réutilisée par un scan incrémental garde la résolution du
+scan précédent.
+
 « Planifier » est affiché désactivé : la planification des scans de cartographie n'existe pas encore.
 
 **Limites.** Le corps d'une méthode n'est pas comparé entre deux scans (seule sa signature l'est).
