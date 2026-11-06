@@ -109,6 +109,33 @@ describe('cartography structure routes', () => {
       .catch((e: unknown) => e);
     expect((missing as QaCrawlerError).status).toBe(404);
   });
+
+  it('the trace of an element: downstream, upstream, bounded, with its breaks; bad criteria are refused', async () => {
+    const conditions = await client.cartography.conditions(project.id, { q: 'canValidate' });
+    const button = conditions.items[0]?.element.id ?? '';
+    const down = await client.cartography.trace(project.id, button, { direction: 'DOWN' });
+    expect(down.start).toBe(button);
+    expect(down.levels[button]).toBe(0);
+    expect(Object.values(down.levels).every((l) => l >= 0)).toBe(true);
+    expect(down.nodes.some((n) => n.kind === 'API')).toBe(true);
+    expect(down.outbound.map((o) => o.path)).toContain('/partner/verify');
+    const up = await client.cartography.trace(project.id, button, { direction: 'UP' });
+    expect(Object.values(up.levels).every((l) => l <= 0)).toBe(true);
+    expect(up.nodes.some((n) => n.kind === 'COMPONENT')).toBe(true);
+    const small = await client.cartography.trace(project.id, button, { direction: 'DOWN', limit: 2 });
+    expect([small.nodes.length, small.truncated]).toEqual([2, true]);
+    const front = await client.cartography.trace(project.id, button, { layers: ['FRONTEND'] });
+    expect(front.nodes.every((n) => n.layer === 'FRONTEND')).toBe(true);
+    for (const bad of [`direction=SIDEWAYS`, `layers=NOWHERE`, `kinds=TELEPORTS`]) {
+      const response = await fetch(
+        `${server.url}/api/projects/${project.id}/cartography/trace?id=${encodeURIComponent(button)}&${bad}`,
+        { headers: { authorization: `Bearer ${server.token}` } },
+      );
+      expect(response.status).toBe(400);
+    }
+    const missing = await client.cartography.trace(project.id, 'BUTTON:front:nope').catch((e: unknown) => e);
+    expect((missing as QaCrawlerError).status).toBe(404);
+  });
 });
 
 describe('Dashboard — Structure & Conditions, in Chromium', () => {
@@ -190,6 +217,60 @@ describe('Dashboard — Structure & Conditions, in Chromium', () => {
     await expect.poll(async () => dashboard().locator('.st-center tbody tr').count()).toBe(3);
     const row = dashboard().locator('.st-center tbody tr', { hasText: 'Validate' });
     expect(await row.textContent()).toContain('/partner/verify');
+  });
+
+  it('upstream, downstream and complete views; a details window that keeps the zoom and position', async () => {
+    await dashboard().locator('[data-action="map-st-tab"][data-tab="graph"]').click();
+    await dashboard().locator('.st-row', { hasText: 'Validate' }).click();
+    await sheet().locator('h2', { hasText: 'Bouton : Validate' }).waitFor();
+    await dashboard().locator('[data-action="map-st-dir"][data-dir="DOWN"]').click();
+    const stats = dashboard().locator('[data-trace-stats]');
+    await stats.waitFor();
+    expect(calls.some((c) => c.startsWith('GET /cartography/trace?') && c.includes('direction=DOWN'))).toBe(
+      true,
+    );
+    expect(await stats.textContent()).toMatch(/\d+ éléments · \d+ liens/);
+    expect(await dashboard().locator('[data-lanes]').textContent()).toContain('/partner/verify');
+    // Les critères : une seule couche ; le parcours est relu et le dit.
+    await dashboard().locator('[data-action="map-st-tl"][data-layer="FRONTEND"]').click();
+    await expect
+      .poll(() => calls.some((c) => c.includes('/cartography/trace?') && c.includes('layers=FRONTEND')))
+      .toBe(true);
+    await dashboard().locator('[data-action="map-st-tclear"]').click();
+    await stats.waitFor();
+    // Une carte choisie ouvre la fenêtre de détail ; le zoom et la position ne bougent pas.
+    await dashboard().locator('[data-action="map-g-zoom"][data-dir="1"]').click();
+    const inner = dashboard().locator('.map-canvas-in');
+    const before = await inner.getAttribute('style');
+    await dashboard().locator('[data-lanes] .ln-card').first().click();
+    await dashboard().locator('[data-action="map-st-detail"]').first().click();
+    const modal = dashboard().locator('[data-st-detail]');
+    await modal.waitFor();
+    for (const key of [
+      'description',
+      'conditions',
+      'apis',
+      'data',
+      'evidence',
+      'code',
+      'diagnostics',
+      'path',
+    ])
+      expect(await modal.locator(`[data-detail="${key}"]`).count()).toBe(1);
+    expect(await inner.getAttribute('style')).toBe(before);
+    await page.keyboard.press('Escape');
+    await expect.poll(() => modal.count()).toBe(0);
+    expect(await inner.getAttribute('style')).toBe(before);
+    // L'amont puis le complet, et retour à la fiche.
+    await dashboard().locator('[data-action="map-st-dir"][data-dir="UP"]').click();
+    await expect.poll(() => calls.some((c) => c.includes('direction=UP'))).toBe(true);
+    await stats.waitFor();
+    await dashboard().locator('[data-action="map-st-dir"][data-dir="BOTH"]').click();
+    await expect.poll(() => calls.some((c) => c.includes('direction=BOTH'))).toBe(true);
+    await stats.waitFor();
+    await dashboard().locator('[data-action="map-st-dir"][data-dir="SHEET"]').click();
+    await expect.poll(() => stats.count()).toBe(0);
+    expect(calls.some((c) => c.startsWith('GET /cartography/graph'))).toBe(false);
   });
 
   it('a network error on an element sheet is shown, and a new selection recovers', async () => {

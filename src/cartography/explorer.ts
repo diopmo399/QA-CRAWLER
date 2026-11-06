@@ -29,7 +29,9 @@ import type {
   MapNode,
   MapPage,
   MapSubgraph,
+  MapTrace,
   ScenarioLink,
+  TraceDirection,
 } from '../sdk/core/cartography.js';
 import type { LastRun } from './coverage.js';
 
@@ -548,6 +550,122 @@ export function subgraph(
     depth,
     limit,
     truncated,
+  };
+}
+
+// ── Le parcours d'un élément, vers l'amont ou l'aval ─────────────────────────────────────────────────
+
+export const MAX_TRACE_DEPTH = 24;
+/** Ce qui relève de la couverture (scénarios), pas du parcours fonctionnel. */
+const NOT_JOURNEY: ReadonlySet<MapEdgeKind> = new Set(['VERIFIES', 'COVERS']);
+const breaksOf = new WeakMap<CartographyModel, Map<string, MapCorrelation[]>>();
+
+/**
+ * Le parcours d'un élément : l'aval suit les liens sortants (ce que l'élément contient, déclenche, appelle,
+ * lit, écrit ou dont il dépend, jusqu'à la persistance), l'amont les liens entrants (ce qui le contient,
+ * le déclenche, l'appelle ou en dépend, jusqu'à l'écran). Les deux sens partent du même élément sans
+ * jamais bifurquer : un nœud atteint vers l'aval ne poursuit que vers l'aval. Profondeur et nombre de
+ * nœuds sont bornés ; la frontière dit où et pourquoi le parcours s'arrête ; les critères (couches,
+ * relations) restreignent ce qui est parcouru, jamais ce qui est démontré. Une classe de service n'est pas
+ * dépliée (elle mènerait à toutes ses méthodes), sauf si elle est le point de départ.
+ */
+export function traceOf(
+  index: MapIndex,
+  start: string,
+  options: {
+    direction?: TraceDirection;
+    depth?: number;
+    limit?: number;
+    layers?: readonly MapLayer[];
+    kinds?: readonly MapEdgeKind[];
+  } = {},
+): MapTrace | undefined {
+  if (!index.nodes.has(start)) return undefined;
+  const direction: TraceDirection = options.direction ?? 'BOTH';
+  const depth = Math.min(MAX_TRACE_DEPTH, Math.max(0, Math.trunc(options.depth ?? 12)));
+  const limit = Math.min(MAX_SUBGRAPH, Math.max(1, Math.trunc(options.limit ?? 120)));
+  const layers = options.layers?.length ? new Set(options.layers) : undefined;
+  const kinds = options.kinds?.length ? new Set(options.kinds) : undefined;
+  const allowed = (edge: MapEdge): boolean => !NOT_JOURNEY.has(edge.kind) && (!kinds || kinds.has(edge.kind));
+  const levels = new Map<string, number>([[start, 0]]);
+  const frontier = new Map<string, MapTrace['frontier'][number]['reason']>();
+  let truncated = false;
+  const steps = (id: string, sign: 1 | -1): string[] => {
+    const list = sign === 1 ? (index.out.get(id) ?? []) : (index.in.get(id) ?? []);
+    return list.filter(allowed).map((edge) => (sign === 1 ? edge.to : edge.from));
+  };
+  const signs: (1 | -1)[] = direction === 'UP' ? [-1] : direction === 'DOWN' ? [1] : [1, -1];
+  let wave: { id: string; sign: 1 | -1 }[] = signs.map((sign) => ({ id: start, sign }));
+  for (let level = 1; level <= depth && wave.length > 0; level += 1) {
+    const next: { id: string; sign: 1 | -1 }[] = [];
+    for (const { id, sign } of wave) {
+      if (id !== start && index.nodes.get(id)?.kind === 'SERVICE') continue;
+      for (const to of steps(id, sign)) {
+        if (levels.has(to)) continue;
+        const node = index.nodes.get(to);
+        if (!node) continue;
+        if (layers && !layers.has(node.layer)) {
+          frontier.set(id, 'FILTERED');
+          continue;
+        }
+        if (levels.size >= limit) {
+          truncated = true;
+          frontier.set(id, 'LIMIT');
+          continue;
+        }
+        levels.set(to, sign * level);
+        next.push({ id: to, sign });
+      }
+    }
+    wave = next;
+  }
+  // Les nœuds du dernier niveau qui ont encore une suite : la profondeur les a coupés.
+  for (const { id, sign } of wave)
+    if (
+      !frontier.has(id) &&
+      index.nodes.get(id)?.kind !== 'SERVICE' &&
+      steps(id, sign).some((to) => !levels.has(to))
+    )
+      frontier.set(id, 'DEPTH');
+  const edges: MapEdge[] = [];
+  for (const id of levels.keys())
+    for (const edge of index.out.get(id) ?? []) if (levels.has(edge.to) && allowed(edge)) edges.push(edge);
+  let byFrom = breaksOf.get(index.model);
+  if (!byFrom) {
+    byFrom = new Map();
+    for (const c of index.model.correlations ?? [])
+      if (c.status !== 'CONFIRMED') byFrom.set(c.from, [...(byFrom.get(c.from) ?? []), c]);
+    breaksOf.set(index.model, byFrom);
+  }
+  const breaks: MapTrace['breaks'] = [];
+  for (const id of levels.keys())
+    for (const c of byFrom.get(id) ?? [])
+      breaks.push({
+        node: id,
+        method: c.method,
+        path: c.path,
+        status: c.status,
+        causes: c.causes,
+        ...(c.diagnostic ? { diagnostic: c.diagnostic } : {}),
+      });
+  const graph: MapSubgraph = {
+    nodes: [...levels.keys()].map((id) => index.nodes.get(id)).filter((n): n is MapNode => n !== undefined),
+    edges,
+    depth,
+    limit,
+    truncated,
+  };
+  return {
+    start,
+    direction,
+    ...graph,
+    outbound: outboundOf(index, graph),
+    levels: Object.fromEntries(levels),
+    frontier: [...frontier].map(([node, reason]) => ({ node, reason })),
+    breaks,
+    ...(layers ? { layers: [...layers] } : {}),
+    ...(kinds ? { kinds: [...kinds] } : {}),
+    scanId: index.scanId,
   };
 }
 

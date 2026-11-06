@@ -240,6 +240,8 @@ import {
   mapActions,
   mapConditions,
   mapElement,
+  mapTrace,
+  traceOptions,
   mapStructure,
   mapNeighbours,
   mapSummary,
@@ -4453,6 +4455,9 @@ async function handleCartography(
           return;
         case 'element':
           json(await mapElement(project, id));
+          return;
+        case 'trace':
+          json(await mapTrace(project, id, { ...bounds, ...traceOptions(params) }));
           return;
         case 'conditions':
           json(await mapConditions(project, listQuery(params)));

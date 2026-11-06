@@ -4,6 +4,31 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : traçabilité de bout en bout
+
+- Version d'analyseur `cartography-8`.
+- Constantes Java lues entre fichiers (imports statiques, `Classe.CHAMP`, même paquetage) : les routes
+  écrites avec des constantes d'une autre classe sont résolues.
+- Accès aux données hors Spring Data : `EntityManager` (JPQL, SQL natif, `find`, `persist`, `merge`,
+  `remove`) et JDBC (`JdbcTemplate`, `NamedParameterJdbcTemplate`, `JdbcClient`), classés en lecture,
+  insertion, mise à jour, suppression ou indéterminé ; `@Query` classée ; opération et requête portées par
+  le lien (`MapEdge.detail.operation`, `statement`). Table non déclarée par une entité : nœud propre, lien
+  probable.
+- Écritures des états du gabarit (signal `set`/`update`, affectation) reliées aux conditions : le parcours
+  local d'un écran est démontré ; producteurs des conditions classés (démontré, origine locale, candidat,
+  inconnu).
+- Plus de « méthode introuvable » sur la lecture d'un signal (`signal`, `computed`, `input`, `model`,
+  `toSignal`, `linkedSignal`).
+- Un bouton qui appelle un service dont l'`Observable` n'est jamais souscrit n'est plus confirmé par le
+  raccourci bouton → méthode.
+- `MapCorrelation.diagnostic` (départ, dernier élément démontré, relation recherchée, sources examinées et
+  manquantes, limites, pistes) ; cause `SOURCE_PARTIAL` quand une source n'a été lue qu'en partie.
+- Route `GET …/cartography/trace` et `client.cartography.trace()` : parcours amont, aval ou complet, borné,
+  avec frontière, ruptures et appels sortants.
+- Structure & Conditions : vues Fiche / Amont / Aval / Complet, critères par couche et par relation,
+  bilan, frontière (« Recentrer ici »), ruptures, fenêtre de détail d'un élément qui garde le zoom et la
+  position.
+
 ### Cartographie : passerelles, destinations et graphe de configuration (étape 2)
 
 - Version d'analyseur `cartography-7`.

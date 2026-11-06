@@ -17,6 +17,7 @@ import type {
   MapCorrelation,
   MapConfigGraph,
   MapModule,
+  CorrelationCause,
   CorrelationStep,
 } from '../sdk/core/cartography.js';
 import type { CodeEndpoint } from '../sdk/core/incident-contracts.js';
@@ -25,6 +26,7 @@ import { membersOf } from './analyze-template.js';
 import type { Loc, SourceFacts } from './facts.js';
 import { ConfigResolver, DEFAULT_VARIANT } from './config.js';
 import { buildConfigGraph } from './config-graph.js';
+import { classifyQuery } from './data-access.js';
 import {
   destinationOf,
   routedPath,
@@ -145,6 +147,33 @@ export function normalizedType(type: string | undefined): string | undefined {
   if (/^(bool|boolean|checkbox)/.test(t)) return 'boolean';
   return undefined;
 }
+
+/** Les pistes de résolution d'une cause de rupture (jamais une correction automatique). */
+const SUGGESTIONS: Partial<Record<CorrelationCause, string[]>> = {
+  NO_ENDPOINT: [
+    'ajouter la source qui sert cette route',
+    'vérifier les préfixes en jeu (context-path, proxy, passerelle, base du contrat)',
+  ],
+  METHOD_MISMATCH: ['vérifier la méthode HTTP de l’appel et celle de l’endpoint'],
+  AMBIGUOUS: ['établir la destination (proxy, base d’URL, configuration) pour départager les candidats'],
+  DYNAMIC_URL: ['rendre l’URL lisible statiquement (constante, fichier environment, configuration)'],
+  LAYER_MISSING: ['ajouter une source de la couche manquante'],
+  CONTRACT_NOT_FOUND: ['ajouter le module de contrats aux sources, ou une racine de métadonnées locale'],
+  MAVEN_MODULE_MISSING: ['ajouter le module Maven aux sources, ou une racine de métadonnées locale'],
+  DEPENDENCY_UNAVAILABLE: ['déposer le pom et le jar de l’artefact dans une racine de métadonnées autorisée'],
+  PROPERTY_UNRESOLVED: ['déclarer la propriété dans la configuration lue (fichier ou profil)'],
+  DESTINATION_SYMBOLIC: ['fournir un profil ou un fichier de configuration qui donne la valeur'],
+  GATEWAY_EXTERNAL: ['ajouter la configuration de la passerelle comme source'],
+  PROXY_DYNAMIC: ['écrire la règle de proxy avec des valeurs littérales'],
+  ENVIRONMENT_INCONSISTENT: ['préciser la variante (profil, configuration) réellement déployée'],
+  GENERATION_OPTIONS_INSUFFICIENT: ['déclarer requestMappingMode dans les options de génération'],
+  GENERATED_INTERFACE_ABSENT: [
+    'ajouter le code généré aux sources, ou garder la route reconstruite du contrat',
+  ],
+  CONTRACT_NOT_IMPLEMENTED: ['ajouter la source qui implémente le contrat'],
+  SOURCE_PARTIAL: ['relancer le scan avec des limites de lecture plus larges'],
+  MULTIPLE_DESTINATIONS: ['préciser la destination (une seule source par adresse)'],
+};
 
 export function buildGraph(input: GraphInput): GraphOutput {
   const nodes = new Map<string, MapNode>();
@@ -570,15 +599,58 @@ export function buildGraph(input: GraphInput): GraphOutput {
         if (method.role === 'REPOSITORY') {
           const repository = java.classes.find((entry) => entry.name === method.owner);
           const entity = repository?.repositoryOf ? `ENTITY:${src}:${repository.repositoryOf}` : undefined;
+          const shape = method.query ? classifyQuery(method.query.text) : undefined;
           if (entity)
             edge(
               `METHOD:${method.id}`,
               entity,
               method.access === 'WRITE' ? 'WRITES' : 'READS',
               'CONFIRMED',
-              `dépôt Spring Data de ${repository?.repositoryOf ?? ''} (${method.access === 'WRITE' ? 'écriture' : 'lecture'} d’après le nom)`,
+              shape && shape.operation !== 'UNKNOWN'
+                ? `dépôt Spring Data de ${repository?.repositoryOf ?? ''} : requête @Query ${method.query?.native ? 'SQL native' : 'JPQL'} (${shape.operation})`
+                : `dépôt Spring Data de ${repository?.repositoryOf ?? ''} (${method.access === 'WRITE' ? 'écriture' : 'lecture'} d’après le nom)`,
               [ev(src, method.loc, 'STATIC_CODE', 'CONFIRMED')],
+              shape
+                ? {
+                    operation: shape.operation,
+                    ...(method.query ? { statement: method.query.text.slice(0, 240) } : {}),
+                  }
+                : undefined,
             );
+        }
+      }
+      // Les accès hors Spring Data (EntityManager, JdbcTemplate) : la cible est l'entité citée (JPQL), ou la
+      // table citée (SQL) rattachée à l'entité qui la déclare ; une table qu'aucune entité ne déclare devient
+      // un nœud de données non mappé. Une opération illisible reste une dépendance probable, jamais une écriture.
+      for (const access of java.dataAccess ?? []) {
+        const targets = access.targets.length ? access.targets : [];
+        for (const t of targets) {
+          const entity =
+            t.kind === 'ENTITY'
+              ? java.classes.find((c) => c.role === 'ENTITY' && c.name === t.name)
+              : java.classes.find(
+                  (c) => c.role === 'ENTITY' && c.table?.toLowerCase() === t.name.toLowerCase(),
+                );
+          const target = entity
+            ? `ENTITY:${src}:${entity.name}`
+            : node(
+                `ENTITY:${src}:table:${t.name}`,
+                'ENTITY',
+                backLayer,
+                t.name,
+                ev(src, access.loc, 'STATIC_CODE', 'PROBABLE', `table ${t.name} citée par ${access.via}`),
+                { table: t.name, mapped: false },
+              );
+          const known = access.operation !== 'UNKNOWN';
+          edge(
+            `METHOD:${access.from}`,
+            target,
+            !known ? 'DEPENDS_ON' : access.operation === 'SELECT' ? 'READS' : 'WRITES',
+            known && entity ? 'CONFIRMED' : 'PROBABLE',
+            `${access.via} (${access.mechanism === 'JPQL' ? 'JPQL' : access.mechanism === 'NATIVE_SQL' ? 'SQL natif' : access.mechanism === 'JDBC' ? 'JDBC' : 'EntityManager'}) : ${known ? access.operation : 'opération non lisible'} de ${t.name}${entity ? '' : ' (aucune entité ne déclare cette table)'}`,
+            [ev(src, access.loc, 'STATIC_CODE', known && entity ? 'CONFIRMED' : 'PROBABLE')],
+            { operation: access.operation, ...(access.statement ? { statement: access.statement } : {}) },
+          );
         }
       }
       for (const access of java.repositoryAccess ?? []) {
@@ -1443,11 +1515,42 @@ export function buildGraph(input: GraphInput): GraphOutput {
         code: 'ENVIRONMENT_INCONSISTENT',
         message: `l’issue change selon la variante (${variantResults.map((r) => `${r.variant} : ${r.status}${r.target ? ` → ${r.target}` : ''}`).join(', ')}) ; le profil actif n’est pas connu`,
       });
+    // Une source examinée lue en partie : l'absence de cible n'est pas une preuve.
+    const examinedSources = input.sources.filter((s) => s.enabled && layers.includes(s.layer));
+    const limits = examinedSources.flatMap((s) =>
+      (input.facts.find((f) => f.sourceId === s.id)?.partial ?? []).map((l) => `${s.name} : ${l}`),
+    );
+    if (!target && limits.length)
+      causes.push({
+        code: 'SOURCE_PARTIAL',
+        message: `lecture partielle (${limits.join(' ; ')}) : la cible peut se trouver dans la partie non lue`,
+      });
+    const diagnostic: MapCorrelation['diagnostic'] =
+      status === 'CONFIRMED'
+        ? undefined
+        : {
+            start: from,
+            lastDemonstrated:
+              (target ? steps : steps.filter((st) => st.kind !== 'ENDPOINT')).at(-1)?.label ?? from,
+            sought: `${call.method} ${call.path} servi par ${layers.join(', ')}${call.only ? ` (destination : ${[...call.only].join(', ') || 'aucune source'})` : ''}`,
+            examined: examinedSources.map(
+              (s) =>
+                `${s.name} (${s.layer}, ${String(targetsOf(s.layer, DEFAULT_VARIANT, call.only).filter((t) => servedByNode.get(t.node)?.sourceId === s.id).length)} cibles)`,
+            ),
+            // Les contrats (API) sont facultatifs : leur absence n'est citée que si rien d'autre n'a été examiné.
+            missing: layers.filter(
+              (l) =>
+                !examinedSources.some((s) => s.layer === l) && (l !== 'API' || examinedSources.length === 0),
+            ),
+            limits,
+            suggestions: [...new Set(dedupeCauses(causes).flatMap((c) => SUGGESTIONS[c.code] ?? []))],
+          };
     correlations.push({
       from,
       method: call.method,
       path: call.path,
       status,
+      ...(diagnostic ? { diagnostic } : {}),
       ...(target ? { target: target.node } : {}),
       ...(variantResults.length ? { variants: variantResults } : {}),
       candidates: candidates.slice(0, 12),
@@ -2195,6 +2298,18 @@ export function buildGraph(input: GraphInput): GraphOutput {
               whenTrue,
               element: id,
               sources: states.map(({ m, state }) => `${m.root}:${state?.kind ?? 'UNKNOWN'}`),
+              // D'où vient chaque membre lu : producteur démontré (flux, réponse, écrivain), origine locale
+              // terminale (valeur posée, accesseur, formulaire), candidat (entrée du parent) ou inconnu.
+              producers: states.map(({ m, state }) => {
+                const status = !state
+                  ? 'UNKNOWN'
+                  : state.kind === 'STREAM' || state.kind === 'RESPONSE' || state.writers?.length
+                    ? 'DEMONSTRATED'
+                    : state.kind === 'INPUT'
+                      ? 'CANDIDATE'
+                      : 'LOCAL_TERMINAL';
+                return `${m.root}:${status}${status === 'UNKNOWN' ? ' (PRODUCER_UNRESOLVED)' : ''}`;
+              }),
             },
             { parent: id },
           );
@@ -2207,6 +2322,16 @@ export function buildGraph(input: GraphInput): GraphOutput {
             [ev(src, cond.loc, 'STATIC_CODE', 'CONFIRMED')],
           );
           for (const { m, state } of states) {
+            // Les méthodes qui écrivent le membre (affectation, signal.set/update) : la condition en dépend.
+            for (const w of state?.writers ?? [])
+              edge(
+                condition,
+                `METHOD:${src}:${el.component}#${w.method}`,
+                'DEPENDS_ON',
+                'CONFIRMED',
+                `${m.root} est écrit par ${w.method}() (${w.how === 'ASSIGN' ? 'affectation' : w.how === 'SET' ? 'set' : 'update'})`,
+                [ev(src, w.loc, 'STATIC_CODE', 'CONFIRMED')],
+              );
             if (state?.kind === 'STREAM' && state.stream) {
               edge(
                 condition,
@@ -2724,6 +2849,21 @@ export function buildGraph(input: GraphInput): GraphOutput {
       tab.detail.preconditions = steps;
     }
   }
+
+  // Le raccourci « bouton → méthode appelée par son gestionnaire » ne vaut pas mieux que l'appel lui-même :
+  // un appel dont l'Observable n'est jamais souscrit crée la requête sans l'exécuter (non démontré).
+  const triggered = new Map<string, MapEdge[]>();
+  for (const e of edges.values())
+    if (e.kind === 'TRIGGERS' && nodes.get(e.from)?.kind === 'BUTTON')
+      triggered.set(e.from, [...(triggered.get(e.from) ?? []), e]);
+  for (const list of triggered.values())
+    for (const e of list) {
+      const via = list.find((t) => t.to !== e.to && edges.has(`CALLS:${t.to}->${e.to}`));
+      const call = via ? edges.get(`CALLS:${via.to}->${e.to}`) : undefined;
+      if (!call || RANK[call.confidence] >= RANK[e.confidence]) continue;
+      e.confidence = call.confidence;
+      e.reason = `${e.reason} — ${call.reason}`;
+    }
 
   // ── Fonctionnalités ───────────────────────────────────────────────────────────────────────────
   const out = new Map<string, MapEdge[]>();

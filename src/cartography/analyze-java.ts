@@ -1,5 +1,5 @@
 import type { CodeIndex } from '../sdk/core/incident-contracts.js';
-import { analyzeJavaSource, resolveCalls } from '../incident/code/index.js';
+import { analyzeJavaSource, fileConstants, resolveCalls, sourceConstants } from '../incident/code/index.js';
 import { readSpringConfig } from './config.js';
 import {
   parseJava,
@@ -9,10 +9,12 @@ import {
   type JavaTypeDecl,
 } from '../incident/code/java-parser.js';
 import type { ReadFile } from './files.js';
+import { classifyQuery, dataAccessOf } from './data-access.js';
 import { javaHierarchy, type Parsed } from './java-hierarchy.js';
 import type {
   JavaClass,
   JavaClientBase,
+  JavaDataAccess,
   JavaComputed,
   JavaDecision,
   JavaExposure,
@@ -391,8 +393,12 @@ export function analyzeJava(
   const computed: JavaComputed[] = [];
   const decisions: JavaDecision[] = [];
   const parsed: Parsed[] = [];
-  for (const file of files.filter((entry) => entry.path.endsWith('.java'))) {
-    const result = analyzeJavaSource(sourceId, layer, file.path, file.text, properties);
+  // Les constantes de toute la source d'abord : une route citée par import statique ou `Classe.CHAMP`
+  // d'un autre fichier est ainsi résolue (sinon elle resterait un segment inconnu `{}`).
+  const javaFiles = files.filter((entry) => entry.path.endsWith('.java'));
+  const shared = sourceConstants(javaFiles);
+  for (const file of javaFiles) {
+    const result = analyzeJavaSource(sourceId, layer, file.path, file.text, properties, shared);
     index = {
       ...index,
       symbols: [...index.symbols, ...result.symbols],
@@ -449,9 +455,23 @@ export function analyzeJava(
         name: simple,
         owner,
         role,
-        ...(role === 'REPOSITORY'
-          ? { access: WRITE_OPERATION.test(simple) ? ('WRITE' as const) : ('READ' as const) }
-          : {}),
+        // Une requête `@Query` lisible décide de l'accès ; sinon le nom de l'opération Spring Data.
+        ...((): Pick<JavaMethod, 'access' | 'query'> => {
+          if (role !== 'REPOSITORY') return {};
+          const sql = typeof symbol.detail?.sql === 'string' ? symbol.detail.sql : undefined;
+          const shape = sql ? classifyQuery(sql) : undefined;
+          return {
+            access:
+              shape && shape.operation !== 'UNKNOWN'
+                ? shape.operation === 'SELECT'
+                  ? 'READ'
+                  : 'WRITE'
+                : WRITE_OPERATION.test(simple)
+                  ? 'WRITE'
+                  : 'READ',
+            ...(sql ? { query: { text: sql, native: symbol.detail?.nativeQuery === true } } : {}),
+          };
+        })(),
         loc: { file: symbol.file, line: symbol.line },
       };
     });
@@ -533,6 +553,7 @@ export function analyzeJava(
     },
     uses,
     (owner, name) => methods.find((m) => m.owner === owner && m.name === name)?.id,
+    (java) => fileConstants(java, shared),
   );
   // Le préfixe d'exposition de l'application (context-path, base-path), lu dans sa configuration.
   // Par profil : une valeur d'un profil est une variante, jamais fusionnée avec celle du défaut.
@@ -589,6 +610,17 @@ export function analyzeJava(
     decisions,
     ...(hierarchy.implementations.length ? { implementations: hierarchy.implementations } : {}),
     ...(hierarchy.clients.length ? { clients: hierarchy.clients } : {}),
+    ...((): { dataAccess?: JavaDataAccess[] } => {
+      const found = dataAccessOf(
+        parsed,
+        (java) => fileConstants(java, shared),
+        (owner, name, arity) => {
+          const all = methods.filter((m) => m.owner === owner && m.name === name);
+          return (all.find((m) => arityOf(m.id) === arity) ?? (all.length === 1 ? all[0] : undefined))?.id;
+        },
+      );
+      return found.length ? { dataAccess: found } : {};
+    })(),
     ...((): { clientBases?: JavaClientBase[] } => {
       const bases = clientBasesOf(files);
       return bases.length ? { clientBases: bases } : {};

@@ -296,6 +296,8 @@ export function analyzeJavaSource(
   file: string,
   text: string,
   properties: Record<string, string> = {},
+  /** Les constantes de toute la source (`sourceConstants`) : imports statiques et `Classe.CHAMP` d'autres fichiers. */
+  shared?: ReadonlyMap<string, string>,
 ): JavaResult {
   const out: JavaResult = { symbols: [], endpoints: [], outgoing: [], calls: [] };
   let java: JavaFile;
@@ -310,7 +312,7 @@ export function analyzeJavaSource(
     file,
     java,
     properties,
-    constants: collectConstants(java),
+    constants: collectConstants(java, shared ? constantScope(java, shared) : undefined),
     ids: new Set(),
     out,
   };
@@ -333,21 +335,95 @@ function annotation(list: JavaAnnotation[], ...names: string[]): JavaAnnotation 
   return list.find((a) => names.includes(a.name));
 }
 
-function collectConstants(java: JavaFile): Map<string, string> {
-  const constants = new Map<string, string>();
-  for (const decl of java.types) {
-    for (const field of decl.fields) {
-      const isConstant =
-        (field.modifiers.includes('static') && field.modifiers.includes('final')) ||
-        decl.kind === 'interface';
-      if (!isConstant || !field.initializer || field.type.name !== 'String') continue;
-      const value = literalConcat(java.tokens, field.initializer.start, field.initializer.end, constants);
-      if (value === undefined) continue;
-      constants.set(field.name, value);
-      constants.set(`${decl.simpleName}.${field.name}`, value);
+function collectConstants(java: JavaFile, scope?: ReadonlyMap<string, string>): Map<string, string> {
+  const constants = new Map<string, string>(scope ?? []);
+  // Deux passes : une constante peut citer une constante déclarée plus bas dans le fichier.
+  for (let pass = 0; pass < 2; pass++)
+    for (const decl of java.types) {
+      for (const field of decl.fields) {
+        const isConstant =
+          (field.modifiers.includes('static') && field.modifiers.includes('final')) ||
+          decl.kind === 'interface';
+        if (!isConstant || !field.initializer || field.type.name !== 'String') continue;
+        const value = literalConcat(java.tokens, field.initializer.start, field.initializer.end, constants);
+        if (value === undefined) continue;
+        constants.set(field.name, value);
+        constants.set(`${decl.simpleName}.${field.name}`, value);
+      }
+    }
+  return constants;
+}
+
+/**
+ * Les constantes d'autres fichiers visibles depuis celui-ci, selon les règles de Java : import statique d'un
+ * champ (`CHAMP`) ou de tous (`.*`), import d'une classe (`Classe.CHAMP`), classe du même paquet, nom
+ * entièrement qualifié. Une constante du fichier lui-même l'emporte (ajoutée ensuite).
+ */
+function constantScope(java: JavaFile, shared: ReadonlyMap<string, string>): Map<string, string> {
+  const scope = new Map<string, string>();
+  const fieldsOf = (cls: string): [string, string][] =>
+    [...shared]
+      .filter(([key]) => key.startsWith(`${cls}.`) && !key.slice(cls.length + 1).includes('.'))
+      .map(([key, value]) => [key.slice(cls.length + 1), value]);
+  if (java.package)
+    for (const [key, value] of shared) {
+      const rest = key.startsWith(`${java.package}.`) ? key.slice(java.package.length + 1) : '';
+      if (rest.split('.').length === 2) scope.set(rest, value);
+    }
+  for (const imported of java.imports) {
+    const simple = imported.split('.').pop() ?? imported;
+    for (const [field, value] of fieldsOf(imported)) scope.set(`${simple}.${field}`, value);
+  }
+  for (const imported of java.staticImports) {
+    if (imported.endsWith('.*'))
+      for (const [field, value] of fieldsOf(imported.slice(0, -2))) scope.set(field, value);
+    else {
+      const value = shared.get(imported);
+      if (value !== undefined) scope.set(imported.split('.').pop() ?? imported, value);
     }
   }
-  return constants;
+  for (const [key, value] of shared) scope.set(key, value);
+  return scope;
+}
+
+/** Les constantes visibles dans un fichier : les siennes, puis celles d'autres fichiers qu'il importe. */
+export function fileConstants(java: JavaFile, shared: ReadonlyMap<string, string>): Map<string, string> {
+  return collectConstants(java, constantScope(java, shared));
+}
+
+/**
+ * Les constantes `String` (`static final`, ou d'interface) de toute une source, par nom qualifié
+ * (`paquet.Classe.CHAMP`), résolues d'un fichier à l'autre en quelques passes bornées : un fichier n'est lu
+ * qu'une fois, une constante qui dépend d'une valeur inconnue reste absente (jamais devinée).
+ */
+export function sourceConstants(files: readonly { text: string }[], maxPasses = 6): Map<string, string> {
+  const parsed: JavaFile[] = [];
+  for (const file of files) {
+    if (!/\bstatic\s+final\b|\binterface\b/.test(file.text)) continue;
+    try {
+      parsed.push(parseJava(file.text));
+    } catch {
+      // Un fichier illisible n'apporte aucune constante.
+    }
+  }
+  const shared = new Map<string, string>();
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let added = 0;
+    for (const java of parsed) {
+      const own = collectConstants(java, constantScope(java, shared));
+      for (const decl of java.types)
+        for (const field of decl.fields) {
+          const value = own.get(`${decl.simpleName}.${field.name}`);
+          const key = `${java.package ? `${java.package}.` : ''}${decl.simpleName}.${field.name}`;
+          if (value !== undefined && !shared.has(key)) {
+            shared.set(key, value);
+            added++;
+          }
+        }
+    }
+    if (added === 0) break;
+  }
+  return shared;
 }
 
 /** Une concaténation de littéraux et de constantes déjà connues ; undefined sinon. */

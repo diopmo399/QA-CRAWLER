@@ -830,6 +830,23 @@ export function analyzeTemplates(files: readonly ReadFile[], knownCalls: Readonl
             loc: { file: file.path, line: lineOf(local.index) },
           });
       }
+      // Les écrivains de chaque membre lu : une méthode qui l'affecte ou appelle set/update (signal).
+      for (const state of states.filter((st) => st.component === component && st.kind !== 'STREAM')) {
+        const escaped = state.member.replace(/[$]/g, '\\$');
+        const writers: NonNullable<UiState['writers']> = [];
+        for (const method of methods) {
+          const w = new RegExp(`this\\.${escaped}\\s*(?:=(?!=)|\\.(set|update|mutate)\\s*\\()`).exec(
+            method.text,
+          );
+          if (!w) continue;
+          writers.push({
+            method: method.name,
+            how: w[1] === 'set' ? 'SET' : w[1] ? 'UPDATE' : 'ASSIGN',
+            loc: { file: file.path, line: lineOf(body.indexOf(method.text, method.at) + w.index) },
+          });
+        }
+        if (writers.length) state.writers = writers;
+      }
       if (!template && /\btemplate(Url)?\s*:/.test(decorator))
         warnings.push(`gabarit de ${component} introuvable : structure non analysée`);
     }

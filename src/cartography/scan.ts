@@ -46,7 +46,10 @@ import { buildGraph } from './graph.js';
 //     (JSON et JS statique, angular.json), gabarits en ligne entre guillemets.
 // 7 : passerelles (Spring Cloud Gateway, NGINX, Ingress), bases des clients réglées par un bean, lignes des
 //     éléments de liste YAML.
-export const ANALYZERS = `cartography-7;${RXJS_ANALYZER}`;
+// 8 : constantes Java entre fichiers (imports statiques, `Classe.CHAMP`), accès aux données hors Spring Data
+//     (EntityManager, JDBC, @Query classée), écritures des états du gabarit (signal, affectation), sources
+//     partielles (limites atteintes).
+export const ANALYZERS = `cartography-8;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;
@@ -199,7 +202,10 @@ export async function runScan(
       // Les passerelles (routes, transformations, destinations) : suivies seulement là où un appel les désigne.
       const gateway = readGateways(read.files, config.entries.length > 0 ? config : undefined);
       if (gateway) sourceFacts.gateway = gateway;
-      if (read.limits.length > 0) scan.state = 'PARTIAL';
+      if (read.limits.length > 0) {
+        scan.state = 'PARTIAL';
+        sourceFacts.partial = [...read.limits];
+      }
       if (found.size === 0) scan.errors.push('aucune technologie reconnue dans cette source');
       facts.push(sourceFacts);
     } catch (error) {

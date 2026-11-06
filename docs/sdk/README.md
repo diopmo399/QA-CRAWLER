@@ -1291,9 +1291,61 @@ description, conditions d'affichage et d'activation, « Calculé par » et la pr
 appels d'API, preuves, scénarios associés. Sous 1680 px, la fiche passe sous l'arbre pour laisser au
 graphe la largeur de la zone centrale.
 
-**Limites.** Une condition fondée sur un `Observable` lu par `async`, un signal Angular ou un service
-d'état partagé n'est pas suivie jusqu'au Backend : elle reste non déterminée. Une décision prise dans une
-requête SQL ou une règle externe n'est pas lue.
+**Limites.** Une condition fondée sur un `Observable` lu par `async` ou un service d'état partagé n'est pas
+suivie jusqu'au Backend : elle reste non déterminée. Un signal Angular ou un champ du composant est relié
+aux méthodes du composant qui l'écrivent (`this.x = …`, `this.x.set(…)`, `this.x.update(…)`) : le parcours
+local bouton → méthode → condition → conteneur est démontré, sans producteur manquant. Une décision prise
+dans une requête SQL ou une règle externe n'est pas lue.
+
+#### Parcours de bout en bout : amont, aval, complet
+
+`GET …/cartography/trace?id=&direction=UP|DOWN|BOTH&depth=&limit=&layers=&kinds=`
+(`trace(projectId, id, query)`) rend le parcours d'un élément, borné (profondeur 24 au plus, 300 nœuds au
+plus, 120 par défaut) :
+
+- **aval** : les liens sortants — ce que l'élément contient, déclenche, appelle, lit, écrit ou dont il
+  dépend — jusqu'à la persistance ;
+- **amont** : les liens entrants — ce qui le contient, le déclenche, l'appelle ou en dépend — jusqu'à
+  l'écran ;
+- **complet** : les deux, sans bifurcation latérale (un nœud atteint vers l'aval ne poursuit que vers
+  l'aval). Une classe de service n'est pas dépliée, sauf si elle est le point de départ.
+
+La réponse (`MapTrace`) donne la distance de chaque nœud au départ (négative vers l'amont), la
+**frontière** (nœuds dont la suite n'est pas affichée : `DEPTH`, `LIMIT` ou `FILTERED`), les **ruptures**
+(appels dont la liaison n'est pas confirmée, avec leurs causes et leur diagnostic) et les appels sortants.
+Les critères `layers` et `kinds` restreignent ce qui est parcouru, jamais ce qui est démontré ; une valeur
+inconnue est refusée (400), un élément inconnu aussi (404). Les liens de couverture (`VERIFIES`, `COVERS`)
+n'en font pas partie.
+
+Dans **Structure & Conditions**, le graphe de l'élément passe de la **Fiche** à **Amont**, **Aval** ou
+**Complet** ; les critères (couches, relations) se cochent au-dessus du graphe, avec le bilan (éléments,
+liens confirmés, probables ou non démontrés), la troncature éventuelle, la frontière (chaque nœud peut
+devenir le nouveau point de départ : « Recentrer ici ») et la liste des ruptures. Une carte choisie ouvre
+une **fenêtre de détail** par élément : description (les liens qui l'y relient), conditions, appels d'API,
+lectures et écritures (opération et requête), preuves, code, diagnostics, chemin depuis le départ. La
+fenêtre se superpose au graphe sans en changer le zoom ni la position ; Échap la ferme.
+
+**Diagnostic d'une liaison non confirmée** (`MapCorrelation.diagnostic`) : point de départ, dernier
+élément démontré, relation recherchée, sources examinées et manquantes, limites de lecture atteintes et
+pistes de résolution. Une source lue en partie (limite de fichiers, de taille ou de durée) ajoute la cause
+`SOURCE_PARTIAL` à un appel sans cible : l'absence de cible n'est alors pas une preuve.
+
+**Accès aux données** (Backend) : en plus des dépôts Spring Data (méthodes dérivées, `@Query` classée en
+lecture, insertion, mise à jour ou suppression avec sa requête), le corps des méthodes est lu pour
+`EntityManager` (`createQuery` JPQL, `createNativeQuery` SQL, `find`, `persist`, `merge`, `remove`) et
+`JdbcTemplate` / `NamedParameterJdbcTemplate` / `JdbcClient`. Le texte de la requête est reconstitué à
+partir des littéraux et des constantes ; s'il ne l'est pas, l'opération reste indéterminée (`DEPENDS_ON`).
+Une entité est désignée par son nom de classe (JPQL) ou sa table (`@Table`) ; une table qu'aucune entité
+ne déclare devient un nœud propre, et le lien reste probable. Chaque méthode ne mène qu'aux tables qu'elle
+touche : un service partagé par plusieurs endpoints n'attribue pas toutes ses tables à chacun.
+
+**Constantes Java entre fichiers** : une route écrite avec une constante d'une autre classe
+(`Routes.STATS`, `import static …Routes.COMMANDES`, import `.*`, même paquetage) est résolue en lisant
+les classes du dépôt qui déclarent des `static final`, sans rien exécuter ; une constante inconnue reste
+inconnue.
+
+Un bouton qui déclenche un appel dont l'`Observable` n'est jamais souscrit ne le démontre pas : le
+raccourci bouton → méthode appelée prend la confiance de l'appel lui-même.
 
 #### Stores et flux RxJS du frontal
 

@@ -227,15 +227,20 @@ describe('scan réel : structure, conditions Backend, actions', () => {
     });
     expect(condition?.decision?.method.name).toBe('ValidationEligibilityService.isEligibleForValidation');
     expect(condition?.decision?.reads).toContain('Request.status');
+    // La méthode qui écrit `state` (ngOnInit, depuis la réponse de loadState) fait partie de la provenance.
     expect(condition?.chain.nodes.map((n) => n.kind)).toEqual([
       'CONDITION',
       'FIELD',
+      'METHOD',
       'METHOD',
       'FIELD',
       'FIELD',
       'METHOD',
       'ENTITY',
     ]);
+    expect(condition?.chain.edges.map((e) => e.reason)).toContain(
+      'state est écrit par ngOnInit() (affectation)',
+    );
     // Les liens de nom (même propriété JSON entre BFF et Backend) sont probables, jamais affirmés.
     expect(condition?.status).toBe('PROBABLE');
     expect(

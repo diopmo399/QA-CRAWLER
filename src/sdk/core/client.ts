@@ -118,6 +118,10 @@ import type {
   MapListQuery,
   MapPage,
   MapSubgraph,
+  MapTrace,
+  MapEdgeKind,
+  MapLayer,
+  TraceDirection,
   MapSummary,
   MapDecision,
   MapDecisionInput,
@@ -583,6 +587,19 @@ export interface QaCrawlerClient {
     structure(projectId: string, feature?: string, options?: MapRequestOptions): Promise<MapStructure>;
     /** La fiche d'un élément (conteneur, bouton, champ) : conditions, décision Backend, actions, sous-graphe. */
     element(projectId: string, id: string, options?: MapRequestOptions): Promise<ElementSheet>;
+    /** Le parcours d'un élément vers l'amont, l'aval ou les deux, borné, avec frontière et ruptures. */
+    trace(
+      projectId: string,
+      id: string,
+      query?: {
+        direction?: TraceDirection;
+        depth?: number;
+        limit?: number;
+        layers?: readonly MapLayer[];
+        kinds?: readonly MapEdgeKind[];
+      },
+      options?: MapRequestOptions,
+    ): Promise<MapTrace>;
     /** Les conditions d'affichage et d'activation du projet, avec leur décision (ou la cause). */
     conditions(
       projectId: string,
@@ -1432,6 +1449,20 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request(
           'GET',
           `${project(projectId)}/cartography/element${queryString({ id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      trace: (projectId, id, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/trace${queryString({
+            id,
+            direction: query.direction,
+            depth: query.depth,
+            limit: query.limit,
+            layers: query.layers?.join(','),
+            kinds: query.kinds?.join(','),
+          })}`,
           undefined,
           mapOptions.signal,
         ),

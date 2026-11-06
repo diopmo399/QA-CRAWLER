@@ -34,6 +34,7 @@ import {
   queryFeatures,
   queryApis,
   queryIssues,
+  traceOf,
   type CoverageContext,
   type MapIndex,
 } from '../../cartography/explorer.js';
@@ -53,13 +54,19 @@ import {
 import {
   DECISION_KINDS,
   GIT_PROVIDERS,
+  MAP_EDGE_KINDS,
   MAP_LAYERS,
+  TRACE_DIRECTIONS,
   SUPPORTED_TECHNOLOGIES,
   type ActionRow,
   type ApiCatalog,
   type ApiSheet,
   type ConditionRow,
   type ElementSheet,
+  type MapEdgeKind,
+  type MapLayer,
+  type MapTrace,
+  type TraceDirection,
   type MapStructure,
   type CartographyConfig,
   type CartographyView,
@@ -1062,6 +1069,45 @@ export async function mapElement(project: CartographyProject, id: string): Promi
   const sheet = elementSheet(state.index, state.cov, id);
   if (!sheet) throw new CartographyInputError(404, 'NOT_FOUND', 'unknown element');
   return sheet;
+}
+
+/** Les critères d'un parcours lus dans la requête : sens, couches et relations connus, sinon refusés. */
+export function traceOptions(params: URLSearchParams): {
+  direction?: TraceDirection;
+  layers?: MapLayer[];
+  kinds?: MapEdgeKind[];
+} {
+  const list = (key: string): string[] =>
+    (params.get(key) ?? '')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+  const direction = params.get('direction') ?? undefined;
+  if (direction !== undefined && !(TRACE_DIRECTIONS as readonly string[]).includes(direction))
+    throw new CartographyInputError(400, 'INVALID_DIRECTION', 'direction must be UP, DOWN or BOTH');
+  const layers = list('layers');
+  if (layers.some((l) => !(MAP_LAYERS as readonly string[]).includes(l)))
+    throw new CartographyInputError(400, 'INVALID_LAYER', 'unknown layer');
+  const kinds = list('kinds');
+  if (kinds.some((k) => !(MAP_EDGE_KINDS as readonly string[]).includes(k)))
+    throw new CartographyInputError(400, 'INVALID_KIND', 'unknown relation kind');
+  return {
+    ...(direction ? { direction: direction as TraceDirection } : {}),
+    ...(layers.length ? { layers: layers as MapLayer[] } : {}),
+    ...(kinds.length ? { kinds: kinds as MapEdgeKind[] } : {}),
+  };
+}
+
+/** Le parcours d'un élément vers l'amont, l'aval ou les deux, borné, avec sa frontière et ses ruptures. */
+export async function mapTrace(
+  project: CartographyProject,
+  id: string,
+  options: Parameters<typeof traceOf>[2] = {},
+): Promise<MapTrace> {
+  const state = await required(project);
+  const trace = traceOf(state.index, id, options);
+  if (!trace) throw new CartographyInputError(404, 'NOT_FOUND', 'unknown element');
+  return trace;
 }
 
 export async function mapConditions(

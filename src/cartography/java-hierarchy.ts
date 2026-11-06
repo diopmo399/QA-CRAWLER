@@ -51,13 +51,16 @@ function strings(
   ann: JavaAnnotation | undefined,
   keys: string[],
   properties: Readonly<Record<string, string>>,
+  constants?: ReadonlyMap<string, string>,
 ): string[] {
   if (!ann) return [];
   const out: string[] = [];
   for (const key of keys)
     for (const value of ann.args[key] ?? []) {
       let text = '';
-      for (const part of value.parts) text += 'string' in part ? part.string : '{}';
+      // Une constante (du fichier, ou importée d'un autre) est remplacée par sa valeur ; sinon `{}`.
+      for (const part of value.parts)
+        text += 'string' in part ? part.string : (constants?.get(part.name) ?? '{}');
       out.push(placeholders(text, properties));
     }
   return out;
@@ -67,11 +70,12 @@ function strings(
 function mappingOf(
   method: JavaMethod,
   properties: Readonly<Record<string, string>>,
+  constants?: ReadonlyMap<string, string>,
 ): { verbs: string[]; paths: string[] } | undefined {
   for (const ann of method.annotations) {
     const verb = VERBS[ann.name];
     if (!verb && ann.name !== 'RequestMapping') continue;
-    const paths = strings(ann, ['value', 'path'], properties);
+    const paths = strings(ann, ['value', 'path'], properties, constants);
     const verbs = verb
       ? [verb]
       : (ann.args.method ?? [])
@@ -91,7 +95,18 @@ export function javaHierarchy(
   handlerOf: Handler,
   uses: readonly { method: string; type: string; operation: string; loc: Loc }[],
   methodId: (owner: string, method: string) => string | undefined,
+  /** Les constantes visibles dans un fichier (imports statiques, `Classe.CHAMP` d'autres fichiers). */
+  constantsOf?: (java: JavaFile) => ReadonlyMap<string, string>,
 ): { endpoints: JavaEndpoint[]; implementations: JavaImplementation[]; clients: JavaClientCall[] } {
+  const scopes = new WeakMap<JavaFile, ReadonlyMap<string, string>>();
+  const consts = (java: JavaFile): ReadonlyMap<string, string> | undefined => {
+    if (!constantsOf) return undefined;
+    const cached = scopes.get(java);
+    if (cached) return cached;
+    const scope = constantsOf(java);
+    scopes.set(java, scope);
+    return scope;
+  };
   const types = new Map<string, { decl: JavaTypeDecl; file: string; java: JavaFile }[]>();
   for (const { file, java } of parsed)
     for (const decl of java.types)
@@ -143,7 +158,12 @@ export function javaHierarchy(
     // Le préfixe de type : la première `@RequestMapping` de type dans la hiérarchie (Spring).
     const typeMapping = lineage.find((t) => has(t.decl.annotations, 'RequestMapping'));
     const bases = typeMapping
-      ? strings(has(typeMapping.decl.annotations, 'RequestMapping'), ['value', 'path'], properties)
+      ? strings(
+          has(typeMapping.decl.annotations, 'RequestMapping'),
+          ['value', 'path'],
+          properties,
+          consts(typeMapping.java),
+        )
       : [];
     const keys = new Map<string, { name: string; arity: number }>();
     for (const t of lineage)
@@ -156,7 +176,7 @@ export function javaHierarchy(
         t.decl.methods.find((m) => `${m.name}/${String(m.params.length)}` === key);
       const declaring = lineage.find((t) => {
         const m = sameIn(t);
-        return m !== undefined && mappingOf(m, properties) !== undefined;
+        return m !== undefined && mappingOf(m, properties, consts(t.java)) !== undefined;
       });
       // L'implémentation : la plus dérivée qui a un corps (une méthode `default` d'interface en est une).
       const implementing = lineage.find((t) => sameIn(t)?.body !== undefined);
@@ -177,7 +197,7 @@ export function javaHierarchy(
       // Une route écrite sur le contrôleur lui-même est déjà lue par l'analyseur de fichier.
       if (declaring.decl === decl) continue;
       const mapped = sameIn(declaring);
-      const mapping = mapped ? mappingOf(mapped, properties) : undefined;
+      const mapping = mapped ? mappingOf(mapped, properties, consts(declaring.java)) : undefined;
       const target = implementing ?? declaring;
       const handler = handlerOf(target.decl.simpleName, name, arity);
       if (!mapping || !mapped || !handler) continue;
@@ -205,7 +225,7 @@ export function javaHierarchy(
     }
     if (missing.length > 0) {
       const own = has(decl.annotations, 'RequestMapping');
-      const basePath = own ? strings(own, ['value', 'path'], properties)[0] : undefined;
+      const basePath = own ? strings(own, ['value', 'path'], properties, consts(java))[0] : undefined;
       implementations.push({
         controller: decl.simpleName,
         ...(basePath !== undefined ? { basePath } : {}),

@@ -14,13 +14,17 @@ import type {
   FieldSheet,
   ImpactReport,
   MapEdge,
+  MapEdgeKind,
+  MapLayer,
   MapNode,
   MapPage,
   MapSource,
   MapStructure,
   MapSubgraph,
   MapSummary,
+  MapTrace,
   SourceScan,
+  TraceDirection,
 } from '../core/cartography.js';
 import type { ScenarioView } from '../core/contracts.js';
 import { can } from './dashboard-access.js';
@@ -102,6 +106,7 @@ export type MapPane =
   | 'apiSheet'
   | 'structure'
   | 'element'
+  | 'trace'
   | 'conditions'
   | 'actions';
 
@@ -209,6 +214,15 @@ export interface CartographyUi {
   structTab: StructTab;
   sheetTab: SheetTab;
   bottomTab: BottomTab;
+  /** Le graphe de l'élément : sa fiche (conditions, actions) ou son parcours amont, aval ou complet. */
+  traceDir: 'SHEET' | TraceDirection;
+  /** Le point de départ du parcours quand on l'a recentré sur un autre élément que celui de la fiche. */
+  traceFrom?: string;
+  trace?: MapTrace;
+  traceLayers: MapLayer[];
+  traceKinds: MapEdgeKind[];
+  /** L'élément dont la fenêtre de détail est ouverte : le zoom et la position du graphe ne changent pas. */
+  detailNode?: string;
   /** Les listes du projet : conditions, actions. */
   conditionsPage?: MapPage<ConditionRow>;
   condCriteria: ListCriteria;
@@ -267,6 +281,9 @@ export const emptyCartographyUi = (): CartographyUi => ({
   structTab: 'graph',
   sheetTab: 'details',
   bottomTab: 'elements',
+  traceDir: 'SHEET',
+  traceLayers: [],
+  traceKinds: [],
   condCriteria: emptyCriteria(10),
   actCriteria: emptyCriteria(10),
   srcClosed: [],

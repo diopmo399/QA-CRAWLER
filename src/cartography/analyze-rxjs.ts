@@ -2163,7 +2163,15 @@ function resolve(
     }
     const found = lookup(target, cs.method);
     if (!found) {
-      if (!streamLookup(target, cs.method))
+      // Lire un signal (`this.visible()`) n'est pas un appel de méthode : rien n'est introuvable.
+      const init = target.values.get(cs.method);
+      const signal =
+        init !== undefined &&
+        ts.isCallExpression(init) &&
+        /^(signal|computed|input|model|toSignal|linkedSignal)$/.test(
+          init.expression.getText().replace(/\.required$/, ''),
+        );
+      if (!signal && !streamLookup(target, cs.method))
         problem(
           from,
           'METHOD_NOT_FOUND',

@@ -186,6 +186,10 @@ export interface MapEdge {
     timing?: string;
     concurrent?: boolean;
     cancellable?: boolean;
+    /** Accès aux données : SELECT, INSERT, UPDATE, DELETE, ou UNKNOWN (requête illisible). */
+    operation?: string;
+    /** La requête lue (JPQL, SQL), tronquée. */
+    statement?: string;
   };
 }
 
@@ -350,6 +354,8 @@ export const CORRELATION_CAUSES = [
   'DESTINATION_SYMBOLIC',
   'MULTIPLE_DESTINATIONS',
   'ENVIRONMENT_INCONSISTENT',
+  /** Une source examinée a été lue en partie (limite de fichiers ou de durée) : l'absence n'est pas prouvée. */
+  'SOURCE_PARTIAL',
 ] as const;
 export type CorrelationCause = (typeof CORRELATION_CAUSES)[number];
 
@@ -398,6 +404,19 @@ export interface MapCorrelation {
   candidates: CorrelationCandidate[];
   causes: { code: CorrelationCause; message: string }[];
   steps: CorrelationStep[];
+  /**
+   * Où et pourquoi la traçabilité s'interrompt (lien non confirmé) : point de départ, dernier élément
+   * démontré, relation recherchée, sources examinées et manquantes, limites atteintes, pistes de résolution.
+   */
+  diagnostic?: {
+    start: string;
+    lastDemonstrated: string;
+    sought: string;
+    examined: string[];
+    missing: string[];
+    limits: string[];
+    suggestions: string[];
+  };
   /**
    * Les variantes (profil Spring, configuration du frontal) dont l'issue diffère du défaut : une liaison
    * peut être confirmée dans l'une et indéterminée dans l'autre ; elles ne sont jamais fusionnées.
@@ -992,6 +1011,37 @@ export interface MapSubgraph {
   limit: number;
   /** La limite de nœuds a coupé l'exploration. */
   truncated: boolean;
+}
+
+/** Le sens d'un parcours : vers l'amont (ce qui déclenche, contient ou contrôle), l'aval (ce qui suit jusqu'à la persistance), ou les deux. */
+export const TRACE_DIRECTIONS = ['UP', 'DOWN', 'BOTH'] as const;
+export type TraceDirection = (typeof TRACE_DIRECTIONS)[number];
+
+/**
+ * Le parcours d'un élément, dans un sens, borné en profondeur et en nombre de nœuds. Chaque nœud porte sa
+ * distance au départ (négative vers l'amont) ; la frontière liste les nœuds dont la suite n'a pas été
+ * parcourue (profondeur ou limite atteinte, ou critères) ; les ruptures sont les appels dont la liaison n'est
+ * pas confirmée, avec leur diagnostic. Rien n'est complété : un parcours s'arrête là où les sources s'arrêtent.
+ */
+export interface MapTrace extends MapSubgraph {
+  start: string;
+  direction: TraceDirection;
+  levels: Record<string, number>;
+  frontier: { node: string; reason: 'DEPTH' | 'LIMIT' | 'FILTERED' }[];
+  breaks: {
+    node: string;
+    method: string;
+    path: string;
+    status: CorrelationStatus;
+    causes: { code: CorrelationCause; message: string }[];
+    diagnostic?: MapCorrelation['diagnostic'];
+  }[];
+  /** Les appels sortants (externes ou à classifier) faits depuis un nœud du parcours. */
+  outbound: ApiOutbound[];
+  /** Les critères retenus (couches, relations) : un parcours filtré le dit. */
+  layers?: MapLayer[];
+  kinds?: MapEdgeKind[];
+  scanId: string;
 }
 
 export interface FieldScenario {

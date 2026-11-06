@@ -5,12 +5,16 @@ import type {
   ElementSheet,
   Evidence,
   MapConfidence,
+  MapEdge,
   MapNode,
   MapPage,
   MapStructure,
+  MapSubgraph,
+  MapTrace,
   StructureItem,
   TabSheet,
 } from '../core/cartography.js';
+import { MAP_EDGE_KINDS, MAP_LAYERS, TRACE_DIRECTIONS } from '../core/cartography.js';
 import type { ApiViewHelpers } from './dashboard-cartography-apis.js';
 import { breakable, shortPath } from './dashboard-cartography-graph.js';
 import type { MapStrings } from './dashboard-cartography-i18n.js';
@@ -224,14 +228,230 @@ function bottomTabs(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, sheet: 
   return `<section class="st-bottom">${tabs}<div class="tbl-w">${body}</div></section>`;
 }
 
-function graphPane(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, sheet: ElementSheet): string {
-  const input: LaneInput = {
-    graph: sheet.graph,
-    outbound: sheet.outbound,
-    ownNodes: [sheet.element.id],
-    extraKinds: ['TRANSFORMS'],
-    scanId: sheet.scanId,
+/** Le parcours affiché : celui demandé pour l'élément (ou le point recentré), dans le sens choisi. */
+export function shownTrace(ui: CartographyUi, sheet: ElementSheet): MapTrace | undefined {
+  const start = ui.traceFrom ?? sheet.element.id;
+  return ui.traceDir !== 'SHEET' && ui.trace?.start === start && ui.trace.direction === ui.traceDir
+    ? ui.trace
+    : undefined;
+}
+
+const nodeIcon = (node: MapNode): string =>
+  KIND_ICON[node.kind] ?? (node.kind === 'ENTITY' ? 'data' : node.kind === 'API' ? 'code' : 'gear');
+
+/** Le sens du parcours (fiche, amont, aval, complet), les critères, le bilan, la frontière et les ruptures. */
+function traceBar(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, trace: MapTrace | undefined): string {
+  const dirs = `<div class="st-dirs" role="group" aria-label="${esc(m.st.dirLabel)}">${(
+    ['SHEET', ...TRACE_DIRECTIONS] as const
+  )
+    .map(
+      (d) =>
+        `<button class="chip small" data-action="map-st-dir" data-dir="${d}" aria-pressed="${String(ui.traceDir === d)}">${esc(m.st.dirs[d] ?? d)}</button>`,
+    )
+    .join('')}</div>`;
+  if (ui.traceDir === 'SHEET') return `<div class="st-tbar">${dirs}</div>`;
+  if (!trace)
+    return `<div class="st-tbar">${dirs}${ui.errors.trace ? h.paneError(ui.errors.trace) : h.spinner()}</div>`;
+  const name = (id: string): string => {
+    const n = trace.nodes.find((x) => x.id === id);
+    return n ? (n.label ?? n.name) : id;
   };
+  const confirmed = trace.edges.filter((e) => e.confidence === 'CONFIRMED').length;
+  const layers = MAP_LAYERS.filter(
+    (l) => ui.traceLayers.includes(l) || trace.nodes.some((n) => n.layer === l),
+  );
+  const kinds = MAP_EDGE_KINDS.filter(
+    (k) => ui.traceKinds.includes(k) || trace.edges.some((e) => e.kind === k),
+  );
+  const chip = (action: string, attr: string, value: string, label: string, on: boolean): string =>
+    `<button class="chip small" data-action="${action}" data-${attr}="${esc(value)}" aria-pressed="${String(on)}">${esc(label)}</button>`;
+  const criteria = `<div class="st-crit"><span class="mu small">${esc(m.st.layersLabel)}</span>${layers.map((l) => chip('map-st-tl', 'layer', l, m.layers[l] ?? l, ui.traceLayers.includes(l))).join('')}<span class="mu small">${esc(m.st.kindsLabel)}</span>${kinds.map((k) => chip('map-st-tk', 'kind', k, m.edgeKinds[k] ?? m.st.kinds[k] ?? k.toLowerCase(), ui.traceKinds.includes(k))).join('')}${ui.traceLayers.length || ui.traceKinds.length ? `<button class="btn small ghost" data-action="map-st-tclear">${esc(m.st.clearCriteria)}</button>` : ''}</div>`;
+  const stats = `<p class="small st-tstats" data-trace-stats>${esc(m.st.traceStats(trace.nodes.length, trace.edges.length, confirmed, trace.edges.length - confirmed))}</p>`;
+  const truncated = trace.truncated
+    ? `<p class="warn-t small" role="status" data-trace-truncated>${esc(m.st.truncatedNote(trace.limit))}</p>`
+    : '';
+  const frontier = trace.frontier.length
+    ? `<details class="st-front"><summary class="small">${esc(m.st.frontierNote(trace.frontier.length))}</summary><ul class="st-list">${trace.frontier
+        .slice(0, 40)
+        .map(
+          (f) =>
+            `<li>${breakable(name(f.node))} <small class="mu">${esc(m.st.frontierReasons[f.reason] ?? f.reason)}</small> <button class="btn small ghost" data-action="map-st-recenter" data-id="${esc(f.node)}">${esc(m.st.recenter)}</button></li>`,
+        )
+        .join('')}</ul></details>`
+    : '';
+  const breaks = `<div class="st-breaks" data-trace-breaks><h4 class="small">${esc(m.st.breaksTitle(trace.breaks.length))}</h4>${
+    trace.breaks.length
+      ? `<ul class="st-list">${trace.breaks
+          .slice(0, 30)
+          .map(
+            (b) =>
+              `<li>${h.conf(b.status)} <code>${esc(`${b.method} ${b.path}`)}</code> <small class="mu">${esc(name(b.node))} — ${esc(b.causes[0]?.message ?? '')}</small> <button class="btn small ghost" data-action="map-st-detail" data-id="${esc(b.node)}">${esc(m.st.detailsBtn)}</button></li>`,
+          )
+          .join('')}</ul>`
+      : `<p class="mu small">${esc(m.st.noBreaks)}</p>`
+  }</div>`;
+  return `<div class="st-tbar">${dirs}${criteria}${stats}${truncated}${frontier}${breaks}</div>`;
+}
+
+/** Le chemin du point de départ à un nœud, par les liens du parcours (le plus court). */
+function pathTo(graph: MapSubgraph, start: string, target: string): { node: string; edge?: MapEdge }[] {
+  const prev = new Map<string, { from: string; edge: MapEdge }>();
+  const seen = new Set([start]);
+  let wave = [start];
+  while (wave.length && !seen.has(target)) {
+    const next: string[] = [];
+    for (const id of wave)
+      for (const edge of graph.edges) {
+        const other = edge.from === id ? edge.to : edge.to === id ? edge.from : undefined;
+        if (!other || seen.has(other)) continue;
+        seen.add(other);
+        prev.set(other, { from: id, edge });
+        next.push(other);
+      }
+    wave = next;
+  }
+  if (!seen.has(target)) return [];
+  const out: { node: string; edge?: MapEdge }[] = [{ node: target }];
+  for (let cur = target; cur !== start;) {
+    const p = prev.get(cur);
+    if (!p) break;
+    const head = out[0];
+    if (head) head.edge = p.edge;
+    out.unshift({ node: p.from });
+    cur = p.from;
+  }
+  return out;
+}
+
+/**
+ * La fenêtre de détail d'un élément du graphe : description (les liens qui l'y relient), conditions, appels
+ * d'API, lectures et écritures, preuves et code, diagnostics des ruptures, chemin depuis le départ. Elle se
+ * superpose au graphe sans toucher au zoom ni à la position.
+ */
+function detailModal(
+  m: MapStrings,
+  ui: CartographyUi,
+  h: ApiViewHelpers,
+  graph: MapSubgraph & { outbound: ElementSheet['outbound'] },
+  trace: MapTrace | undefined,
+  start: string,
+): string {
+  const id = ui.detailNode ?? '';
+  const node = graph.nodes.find((n) => n.id === id);
+  if (!node) return '';
+  const d = m.st.detail;
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const label = (nid: string): string => {
+    const n = byId.get(nid);
+    return n ? (n.label ?? n.name) : nid;
+  };
+  const touching = graph.edges.filter((e) => e.from === id || e.to === id);
+  const edgeRow = (e: MapEdge): string =>
+    `<li>${h.conf(e.confidence)} <b>${esc(m.edgeKinds[e.kind] ?? m.st.kinds[e.kind] ?? e.kind)}</b> ${breakable(label(e.from === id ? e.to : e.from))}<br><small class="mu">${esc(e.reason)}</small>${e.detail?.condition ? `<br><code>${esc(e.detail.condition)}</code>` : ''}</li>`;
+  const list = (items: string[]): string =>
+    items.length ? `<ul class="st-list">${items.join('')}</ul>` : `<p class="mu small">${esc(d.none)}</p>`;
+  const section = (title: string, body: string, key: string): string =>
+    `<section class="st-sec" data-detail="${key}"><h4>${esc(title)}</h4>${body}</section>`;
+  const conditions = touching.filter(
+    (e) =>
+      e.kind === 'VISIBLE_WHEN' ||
+      e.kind === 'ENABLED_WHEN' ||
+      e.kind === 'CONTROLLED_BY' ||
+      e.detail?.condition !== undefined ||
+      (node.kind === 'CONDITION' && e.kind === 'DEPENDS_ON'),
+  );
+  const apis = touching.filter(
+    (e) => e.kind === 'CALLS' && byId.get(e.from === id ? e.to : e.from)?.kind === 'API',
+  );
+  const outbound = graph.outbound.filter((o) => o.from === id);
+  const data = touching.filter((e) => e.kind === 'READS' || e.kind === 'WRITES');
+  const where = node.evidence.find((e) => e.file) ?? node.evidence[0];
+  const breaks = trace?.breaks.filter((b) => b.node === id) ?? [];
+  const diag = (b: MapTrace['breaks'][number]): string => {
+    const g = b.diagnostic;
+    const rows: [string, string[]][] = g
+      ? [
+          [d.start, [g.start]],
+          [d.lastDemonstrated, [g.lastDemonstrated]],
+          [d.sought, [g.sought]],
+          [d.examined, g.examined],
+          [d.missing, g.missing],
+          [d.limits, g.limits],
+          [d.suggestions, g.suggestions],
+        ]
+      : [];
+    return `<div class="st-cblock"><div class="st-chead">${h.conf(b.status)} <code>${esc(`${b.method} ${b.path}`)}</code></div><ul class="st-list">${b.causes.map((c) => `<li><b>${esc(c.code)}</b> — ${esc(c.message)}</li>`).join('')}</ul>${rows
+      .filter(([, v]) => v.length > 0)
+      .map(([k, v]) => `<p class="small"><b>${esc(k)}</b> : ${v.map((x) => esc(x)).join(' · ')}</p>`)
+      .join('')}</div>`;
+  };
+  const path = pathTo(graph, start, id);
+  const level = trace?.levels[id];
+  const kind = layerTypeOf(m, node);
+  const head = `<div class="st-shead"><span class="st-ic big k-${node.kind.toLowerCase()}">${icon(nodeIcon(node))}</span><div><h2 id="st-detail-t">${breakable(node.label ?? node.name)}</h2><p class="small mu">${esc(d.kind)} : ${esc(kind)}${level !== undefined ? ` · ${esc(d.level(level))}` : ''}</p></div><button class="btn small ghost icon-only" data-action="map-st-detail-close" aria-label="${esc(d.close)}" title="${esc(d.close)}">${icon('close')}</button></div>`;
+  const body = [
+    section(d.description, list(touching.slice(0, 12).map(edgeRow)), 'description'),
+    section(d.conditions, list(conditions.map(edgeRow)), 'conditions'),
+    section(
+      d.apis,
+      list([
+        ...apis.map(edgeRow),
+        ...outbound.map(
+          (o) =>
+            `<li>${h.conf(o.confidence)} <code>${esc(`${o.method ?? '?'} ${o.path ?? '?'}`)}</code> <small class="mu">${esc(o.provider ?? o.name)}</small></li>`,
+        ),
+      ]),
+      'apis',
+    ),
+    section(
+      d.data,
+      list(
+        data.map(
+          (e) =>
+            `<li>${h.conf(e.confidence)} <b>${esc(m.edgeKinds[e.kind] ?? e.kind)}</b> ${breakable(label(e.from === id ? e.to : e.from))}${e.detail?.operation ? ` <span class="st-type">${esc(e.detail.operation)}</span>` : ''}${e.detail?.statement ? `<br><code>${esc(e.detail.statement)}</code>` : ''}<br><small class="mu">${esc(e.reason)}</small></li>`,
+        ),
+      ),
+      'data',
+    ),
+    section(
+      d.evidence,
+      list(node.evidence.slice(0, 10).map((e) => `<li>${h.where(e)} ${h.evidence(e)}</li>`)),
+      'evidence',
+    ),
+    section(d.code, where ? `<p class="small">${h.where(where)} ${h.evidence(where)}</p>` : list([]), 'code'),
+    section(d.diagnostics, breaks.length ? breaks.map(diag).join('') : list([]), 'diagnostics'),
+    section(
+      d.path,
+      path.length
+        ? `<ol class="st-list st-pre">${path.map((p) => `<li>${breakable(label(p.node))}${p.edge ? ` <small class="mu">← ${esc(m.edgeKinds[p.edge.kind] ?? p.edge.kind)}</small> ${h.conf(p.edge.confidence)}` : ''}</li>`).join('')}</ol>`
+        : list([]),
+      'path',
+    ),
+  ].join('');
+  const recenter =
+    ui.traceDir !== 'SHEET' && id !== start
+      ? `<button class="btn small" data-action="map-st-recenter" data-id="${esc(id)}">${esc(m.st.recenter)}</button>`
+      : '';
+  return `<div class="lib-sheet-bg" data-action="map-st-detail-close"></div><aside class="lib-sheet st-detail" role="dialog" aria-modal="true" aria-labelledby="st-detail-t" tabindex="-1" data-st-detail>${head}${recenter}${body}</aside>`;
+}
+
+function graphPane(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, sheet: ElementSheet): string {
+  const trace = shownTrace(ui, sheet);
+  const input: LaneInput = trace
+    ? {
+        graph: trace,
+        outbound: trace.outbound,
+        ownNodes: [trace.start],
+        extraKinds: ['TRANSFORMS'],
+        scanId: trace.scanId,
+      }
+    : {
+        graph: sheet.graph,
+        outbound: sheet.outbound,
+        ownNodes: [sheet.element.id],
+        extraKinds: ['TRANSFORMS'],
+        scanId: sheet.scanId,
+      };
   const model = laneModel(input, 'architecture', ui.apiFilters);
   const selection =
     ui.graphSel?.kind === 'node' && !model.cards.has(ui.graphSel.id) ? undefined : ui.graphSel;
@@ -249,9 +469,36 @@ function graphPane(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, sheet: E
   const btn = (action: string, label: string, name: string, extra = ''): string =>
     `<button class="btn small icon-only" data-action="${action}" aria-label="${esc(label)}" title="${esc(label)}"${extra}>${icon(name)}</button>`;
   const kind = m.st.kinds[sheet.element.kind] ?? sheet.element.kind;
-  const head = `<div class="map-gtitle st-gtitle"><div><h3><span class="st-ic k-${sheet.element.kind.toLowerCase()}">${icon(KIND_ICON[sheet.element.kind] ?? 'layers')}</span>${esc(m.st.traceOf(kind, sheet.element.label ?? sheet.element.name))}</h3><p class="mu small">${esc(m.st.traceSub)}</p></div><div class="map-gtools"><span class="map-gbtns">${btn('map-g-full', ui.fullscreen ? m.g.exitFullscreen : m.g.fullscreen, ui.fullscreen ? 'minimize' : 'maximize', ` aria-pressed="${String(ui.fullscreen)}"`)}${btn('map-g-fit', m.g.fit, 'scan')}${btn('map-g-zoom', m.g.zoomOut, 'minus', ' data-dir="-1"')}<output class="map-gzoom" aria-live="polite">${esc(m.g.zoomLevel(ui.zoom))}</output>${btn('map-g-zoom', m.g.zoomIn, 'plus', ' data-dir="1"')}</span></div></div>`;
+  const sub = trace ? (m.st.dirSubs[trace.direction] ?? m.st.traceSub) : m.st.traceSub;
+  const head = `<div class="map-gtitle st-gtitle"><div><h3><span class="st-ic k-${sheet.element.kind.toLowerCase()}">${icon(KIND_ICON[sheet.element.kind] ?? 'layers')}</span>${esc(m.st.traceOf(kind, sheet.element.label ?? sheet.element.name))}</h3><p class="mu small">${esc(sub)}</p></div><div class="map-gtools"><span class="map-gbtns">${btn('map-g-full', ui.fullscreen ? m.g.exitFullscreen : m.g.fullscreen, ui.fullscreen ? 'minimize' : 'maximize', ` aria-pressed="${String(ui.fullscreen)}"`)}${btn('map-g-fit', m.g.fit, 'scan')}${btn('map-g-zoom', m.g.zoomOut, 'minus', ' data-dir="-1"')}<output class="map-gzoom" aria-live="polite">${esc(m.g.zoomLevel(ui.zoom))}</output>${btn('map-g-zoom', m.g.zoomIn, 'plus', ' data-dir="1"')}</span></div></div>`;
   const canvas = `<div class="map-canvas full lanes" data-map-canvas tabindex="0" style="--ln-h:${String(height)}px" aria-label="${esc(m.st.traceOf(kind, sheet.element.name))}"><div class="map-canvas-in" style="transform:translate(${String(ui.panX)}px,${String(ui.panY)}px) scale(${String(ui.zoom)})">${drawn.html}</div></div>`;
-  return `<div class="map-trace ln-wrap st-trace${ui.fullscreen ? ' full' : ''}" data-map-trace>${head}${canvas}${laneLegend(m, model)}${laneSelection({ ...options, conf: h.conf, evidence: h.evidence, where: h.where })}${bottomTabs(m, ui, h, sheet)}</div>`;
+  // La carte choisie regroupe un ou plusieurs éléments : chacun ouvre sa fenêtre de détail.
+  const card = ui.graphSel?.kind === 'node' ? model.cards.get(ui.graphSel.id) : undefined;
+  const inGraph = new Map(input.graph.nodes.map((n) => [n.id, n]));
+  const pickedNodes = (card?.nodes ?? []).flatMap((id) => {
+    const n = inGraph.get(id);
+    return n ? [n] : [];
+  });
+  const details = pickedNodes.length
+    ? `<p class="st-pickd">${pickedNodes
+        .slice(0, 8)
+        .map(
+          (n) =>
+            `<button class="btn small" data-action="map-st-detail" data-id="${esc(n.id)}">${icon('info')} ${esc(m.st.detailsBtn)} · ${esc(n.label ?? n.name)}</button>`,
+        )
+        .join('')}</p>`
+    : '';
+  const modal = ui.detailNode
+    ? detailModal(
+        m,
+        ui,
+        h,
+        { ...input.graph, outbound: input.outbound },
+        trace,
+        trace?.start ?? sheet.element.id,
+      )
+    : '';
+  return `<div class="map-trace ln-wrap st-trace${ui.fullscreen ? ' full' : ''}" data-map-trace>${head}${traceBar(m, ui, h, trace)}${canvas}${laneLegend(m, model)}${laneSelection({ ...options, conf: h.conf, evidence: h.evidence, where: h.where })}${details}${bottomTabs(m, ui, h, sheet)}</div>${modal}`;
 }
 
 function conditionsTable(
@@ -442,6 +689,12 @@ export const STRUCTURE_CSS = `
 .st-ctabs{margin-bottom:10px;flex-wrap:wrap}.st-ctabs button{display:inline-flex;gap:6px;align-items:center}.st-ctabs .ico{width:15px;height:15px}
 .st-gtitle h3{display:flex;gap:8px;align-items:center;margin:0;font-size:15px}
 .st-pick{padding:30px;text-align:center}
+.st-tbar{display:flex;flex-direction:column;gap:6px;margin:6px 0 8px}
+.st-dirs,.st-crit{display:flex;flex-wrap:wrap;gap:4px;align-items:center}.st-crit>.mu{margin:0 4px 0 6px}
+.st-dirs .chip,.st-crit .chip{min-height:28px;padding:0 10px;font-size:12px}
+.st-tstats{margin:0}.st-front summary{cursor:pointer}.st-breaks h4{margin:4px 0}
+.st-pickd{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0 0}
+.st-detail{max-width:560px;width:min(560px,100vw);overflow:auto}
 .st-bottom{border:1px solid var(--qa-color-border);border-radius:12px;padding:6px 10px 10px;margin-top:10px}
 .st-btabs,.st-stabs{margin-bottom:6px;flex-wrap:wrap;gap:2px}
 .st-btabs button,.st-stabs button{padding:6px 8px;font-size:12.5px}.st-stabs button{padding:5px 6px;font-size:12px}

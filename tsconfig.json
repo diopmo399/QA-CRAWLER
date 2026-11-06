@@ -34,6 +34,7 @@
     "tests/fixtures/cartography-flow/**",
     "tests/fixtures/cartography-entry/**",
     "tests/fixtures/cartography-contract/**",
-    "tests/fixtures/cartography-config/**"
+    "tests/fixtures/cartography-config/**",
+    "tests/fixtures/cartography-trace/**"
   ]
 }

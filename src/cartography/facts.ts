@@ -265,6 +265,8 @@ export interface UiState {
   call?: string;
   property?: string;
   expression?: string;
+  /** Les méthodes du composant qui écrivent ce membre (`this.x = …`, `this.x.set(…)`, `.update(…)`). */
+  writers?: { method: string; how: 'ASSIGN' | 'SET' | 'UPDATE'; loc: Loc }[];
   loc: Loc;
 }
 
@@ -418,8 +420,24 @@ export interface JavaMethod {
   name: string;
   owner: string;
   role: JavaRole;
-  /** Spring Data : lecture ou écriture d'après le nom (save…, find…). */
+  /** Spring Data : lecture ou écriture d'après le nom (save…, find…), ou d'après sa requête `@Query`. */
   access?: 'READ' | 'WRITE';
+  /** La requête `@Query` d'une méthode de dépôt (JPQL ou SQL natif). */
+  query?: { text: string; native: boolean };
+  loc: Loc;
+}
+
+/** Un accès aux données lu dans le corps d'une méthode (EntityManager, JdbcTemplate). */
+export interface JavaDataAccess {
+  /** La méthode qui accède. */
+  from: string;
+  mechanism: 'JPQL' | 'NATIVE_SQL' | 'JDBC' | 'ENTITY_MANAGER';
+  /** SELECT, INSERT, UPDATE, DELETE ; UNKNOWN quand le texte de la requête n'est pas lisible. */
+  operation: 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'UNKNOWN';
+  /** Entités (JPQL, `find(X.class)`) ou tables (SQL) citées par la requête. */
+  targets: { name: string; kind: 'ENTITY' | 'TABLE' }[];
+  statement?: string;
+  via: string;
   loc: Loc;
 }
 
@@ -493,6 +511,8 @@ export interface JavaFacts {
   decisions?: JavaDecision[];
   implementations?: JavaImplementation[];
   clients?: JavaClientCall[];
+  /** Les accès aux données hors Spring Data (EntityManager, JdbcTemplate), classés par opération. */
+  dataAccess?: JavaDataAccess[];
   /** Les bases d'URL données aux clients générés par un bean (`apiClient.setBasePath(url)`). */
   clientBases?: JavaClientBase[];
   exposure?: JavaExposure[];
@@ -656,6 +676,8 @@ export interface SourceFacts {
   maven?: MavenFacts;
   /** La configuration Spring par entrée et par profil (valeurs secrètes masquées). */
   config?: SpringConfig;
+  /** Les limites atteintes à la lecture de la source (fichiers, durée) : ses faits sont partiels. */
+  partial?: string[];
   /** Les routes de passerelle lues (Spring Cloud Gateway, NGINX, Ingress), avec leur preuve. */
   gateway?: GatewayFacts;
 }

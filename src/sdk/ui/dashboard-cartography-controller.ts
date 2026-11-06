@@ -2,11 +2,12 @@ import type {
   FeatureDetail,
   FieldSheet,
   MapDecisionInput,
+  MapEdgeKind,
   MapLayer,
   MapListQuery,
   MapSource,
 } from '../core/cartography.js';
-import { GIT_PROVIDERS } from '../core/cartography.js';
+import { GIT_PROVIDERS, MAP_EDGE_KINDS, MAP_LAYERS, TRACE_DIRECTIONS } from '../core/cartography.js';
 import type { QaCrawlerClient } from '../core/client.js';
 import { API_TABS, type ApiTab } from './dashboard-cartography-apis.js';
 import { readIds } from './dashboard-cartography-graph.js';
@@ -344,6 +345,33 @@ export class CartographyController {
     if (sheet && this.ui.element === id) this.ui.elementSheet = sheet;
   }
 
+  /** Le parcours de l'élément (ou du point recentré) dans le sens et selon les critères choisis. */
+  private async loadTrace(): Promise<void> {
+    const ui = this.ui;
+    const id = ui.traceFrom ?? ui.element;
+    const direction = ui.traceDir;
+    if (!id || direction === 'SHEET') return;
+    const layers = [...ui.traceLayers];
+    const kinds = [...ui.traceKinds];
+    const trace = await this.fetch('trace', (api, projectId, signal) =>
+      api.cartography.trace(projectId, id, { direction, layers, kinds }, { signal }),
+    );
+    if (trace && (ui.traceFrom ?? ui.element) === id && ui.traceDir === direction) ui.trace = trace;
+  }
+
+  /** Recharger le parcours puis ajuster le graphe à la zone (sens, critères ou point de départ changés). */
+  private reloadTrace(): void {
+    this.ui.trace = undefined;
+    this.ui.graphSel = undefined;
+    this.ui.lnCards = [];
+    this.ui.lnBundles = [];
+    this.ui.autoFit = true;
+    this.host.paint();
+    void this.run(() => this.loadTrace()).then(() => {
+      this.fitSoon();
+    });
+  }
+
   private async loadConditions(): Promise<void> {
     const page = await this.fetch('conditions', (api, id, signal) =>
       api.cartography.conditions(id, this.query(this.ui.condCriteria), { signal }),
@@ -369,13 +397,19 @@ export class CartographyController {
     if (ui.element !== id) {
       ui.element = id;
       ui.elementSheet = undefined;
+      ui.traceFrom = undefined;
+      ui.trace = undefined;
+      ui.detailNode = undefined;
       ui.lnCards = [];
       ui.lnBundles = [];
       this.resetGraph();
     }
     ui.structTab = 'graph';
     ui.autoFit = true;
-    void this.run(() => this.loadElement()).then(() => {
+    void this.run(async () => {
+      await this.loadElement();
+      await this.loadTrace();
+    }).then(() => {
       this.fitSoon();
     });
   }
@@ -405,6 +439,7 @@ export class CartographyController {
       if (ui.structTab === 'conditions' && !ui.conditionsPage) await this.loadConditions();
       if (ui.structTab === 'actions' && !ui.actionsPage) await this.loadActions();
       if (ui.element && ui.elementSheet?.element.id !== ui.element) await this.loadElement();
+      if (ui.traceDir !== 'SHEET' && ui.trace?.start !== (ui.traceFrom ?? ui.element)) await this.loadTrace();
       this.fitSoon();
       return;
     }
@@ -766,6 +801,68 @@ export class CartographyController {
       case 'map-st-el':
         this.selectElement(target.dataset.id ?? '');
         return true;
+      case 'map-st-dir': {
+        const dir = target.dataset.dir ?? '';
+        if (dir !== 'SHEET' && !(TRACE_DIRECTIONS as readonly string[]).includes(dir)) return true;
+        ui.traceDir = dir as typeof ui.traceDir;
+        if (dir === 'SHEET') {
+          ui.traceFrom = undefined;
+          ui.graphSel = undefined;
+          ui.autoFit = true;
+          this.host.paint();
+          this.fitSoon();
+        } else this.reloadTrace();
+        return true;
+      }
+      case 'map-st-tl': {
+        const layer = target.dataset.layer as MapLayer;
+        if (!MAP_LAYERS.includes(layer)) return true;
+        ui.traceLayers = ui.traceLayers.includes(layer)
+          ? ui.traceLayers.filter((l) => l !== layer)
+          : [...ui.traceLayers, layer];
+        this.reloadTrace();
+        return true;
+      }
+      case 'map-st-tk': {
+        const kind = target.dataset.kind as MapEdgeKind;
+        if (!MAP_EDGE_KINDS.includes(kind)) return true;
+        ui.traceKinds = ui.traceKinds.includes(kind)
+          ? ui.traceKinds.filter((k) => k !== kind)
+          : [...ui.traceKinds, kind];
+        this.reloadTrace();
+        return true;
+      }
+      case 'map-st-tclear':
+        ui.traceLayers = [];
+        ui.traceKinds = [];
+        this.reloadTrace();
+        return true;
+      case 'map-st-recenter': {
+        // Le parcours repart de cet élément : la chaîne coupée par la frontière se déplie à partir de lui.
+        const id = target.dataset.id ?? '';
+        if (!id) return true;
+        ui.traceFrom = id === ui.element ? undefined : id;
+        ui.detailNode = undefined;
+        if (ui.traceDir === 'SHEET') ui.traceDir = 'BOTH';
+        this.reloadTrace();
+        return true;
+      }
+      case 'map-st-detail':
+        // Le zoom et la position du graphe restent tels quels : la fenêtre se superpose.
+        ui.detailNode = target.dataset.id ?? undefined;
+        this.host.paint();
+        this.host.root.querySelector<HTMLElement>('[data-st-detail]')?.focus();
+        return true;
+      case 'map-st-detail-close': {
+        const id = ui.detailNode;
+        ui.detailNode = undefined;
+        this.host.paint();
+        if (id)
+          this.host.root
+            .querySelector<HTMLElement>(`[data-action="map-st-detail"][data-id="${CSS.escape(id)}"]`)
+            ?.focus();
+        return true;
+      }
       case 'map-st-open': {
         // Depuis l'impact : l'onglet touché s'ouvre dans Structure & Conditions.
         const id = target.dataset.id ?? '';
@@ -1182,6 +1279,11 @@ export class CartographyController {
   keydown(event: KeyboardEvent): boolean {
     const target = event.target as HTMLElement | null;
     const ui = this.ui;
+    if (event.key === 'Escape' && ui.detailNode) {
+      ui.detailNode = undefined;
+      this.host.paint();
+      return true;
+    }
     if (event.key === 'Escape' && ui.fullscreen) {
       ui.fullscreen = false;
       this.host.paint();

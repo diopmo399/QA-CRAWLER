@@ -15,7 +15,7 @@ import { resolveCalls } from './resolve.js';
  */
 
 export { analyzeFrontendSource } from './frontend.js';
-export { analyzeJavaSource } from './java.js';
+export { analyzeJavaSource, fileConstants, sourceConstants } from './java.js';
 export { readSpringProperties, resolvePlaceholders } from './properties.js';
 export { resolveCalls } from './resolve.js';
 export { matchEndpoint, normalizePath } from './paths.js';
