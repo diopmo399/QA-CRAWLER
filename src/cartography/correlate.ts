@@ -355,10 +355,23 @@ export class ContractIndex {
       const wanted = owner.dependencies.find((d) => d.artifactId === artifact)?.version;
       const found = this.modules.filter((m) => m.module.artifactId === artifact);
       if (found.length === 0) {
-        causes.push({
-          code: 'MAVEN_MODULE_MISSING',
-          message: `le module Maven ${artifact} (contrat ${spec.resource ?? ''}) n’est dans aucune source analysée`,
-        });
+        // Les identifiants Maven connus de la dépendance, et où elle a été cherchée.
+        const dep = owner.dependencies.find((d) => d.artifactId === artifact);
+        const coords = `${dep?.groupId ?? '?'}:${artifact}:${wanted ?? '?'}`;
+        const metadata = this.facts
+          .filter((f) => f.sourceId.startsWith('meta:'))
+          .map((f) => f.sourceId.slice(5));
+        causes.push(
+          metadata.length
+            ? {
+                code: 'DEPENDENCY_UNAVAILABLE',
+                message: `${coords} (contrat ${spec.resource ?? ''}) : absent des sources et des métadonnées locales (${metadata.join(', ')}) ; il faudrait son pom et son jar dans une racine de métadonnées autorisée`,
+              }
+            : {
+                code: 'MAVEN_MODULE_MISSING',
+                message: `${coords} (contrat ${spec.resource ?? ''}) n’est dans aucune source analysée, et aucune racine de métadonnées locale n’est configurée`,
+              },
+        );
         continue;
       }
       const sameVersion = wanted ? found.filter((m) => m.module.version === wanted) : found;
@@ -522,6 +535,28 @@ export class ContractIndex {
         ? { parent: `${m.parent.groupId ?? '?'}:${m.parent.artifactId}:${m.parent.version ?? '?'}` }
         : {}),
       dependencies: m.dependencies.map((d) => `${d.groupId ?? '?'}:${d.artifactId}:${d.version ?? '?'}`),
+      ...((): { indirect?: string[] } => {
+        // Les dépendances indirectes CONNUES : suivies à travers les pom lus (sources, métadonnées locales).
+        const out = new Set<string>();
+        const direct = new Set(m.dependencies.map((d) => d.artifactId));
+        const visit = (deps: MavenModule['dependencies'], depth: number): void => {
+          if (depth > 5) return;
+          for (const d of deps) {
+            const next = this.modules.find(
+              (x) => x.module.artifactId === d.artifactId && (!d.version || x.module.version === d.version),
+            );
+            if (!next) continue;
+            for (const t of next.module.dependencies) {
+              const key = `${t.groupId ?? '?'}:${t.artifactId}:${t.version ?? '?'}`;
+              if (direct.has(t.artifactId) || out.has(key) || t.scope === 'test') continue;
+              out.add(key);
+            }
+            visit(next.module.dependencies, depth + 1);
+          }
+        };
+        visit(m.dependencies, 1);
+        return out.size ? { indirect: [...out].sort() } : {};
+      })(),
       generations: m.generations.map((g) => ({
         plugin: g.plugin,
         ...(g.execution ? { execution: g.execution } : {}),
@@ -555,3 +590,73 @@ export function operationsFor(
 
 /** Le package d'un nom qualifié (`com.ex.api.DemandesApi` → `com.ex.api`). */
 export const packageOf = (qualified: string): string => qualified.split('.').slice(0, -1).join('.');
+
+// ── Préfixe d'une interface générée absente ──────────────────────────────────────────────────────
+
+export interface GeneratedPrefix {
+  /** DETERMINED : une règle de génération démontrée par les options lues ; sinon les possibilités. */
+  status: 'DETERMINED' | 'UNDETERMINED';
+  prefixes: string[];
+  rule: string;
+}
+
+/**
+ * Le préfixe de type d'une interface générée par openapi-generator (Spring) qu'on ne peut pas lire. Il n'est
+ * DÉTERMINÉ que par une preuve : le contrôleur déclare lui-même son `@RequestMapping` de type (il l'emporte),
+ * ou l'option `requestMappingMode` est écrite (`none` : aucun ; `controller` avec `interfaceOnly` : il irait
+ * sur un contrôleur généré, non produit ; `api_interface` : `${openapi.<nom>.base-path:<base du contrat>}`,
+ * lu dans la configuration quand une seule propriété de ce nom existe). Sans cette option, la valeur par
+ * défaut dépend de la version du générateur : les possibilités sont gardées, aucune n'est choisie.
+ */
+export function generatedPrefix(
+  g: MavenGeneration,
+  controllerBase: string | undefined,
+  contractBases: readonly string[],
+  basePathProperties: readonly { key: string; value?: string }[],
+): GeneratedPrefix {
+  const gen = `${g.generator ?? '?'}${g.version ? ` ${g.version}` : ' (version inconnue)'}`;
+  if (controllerBase !== undefined)
+    return {
+      status: 'DETERMINED',
+      prefixes: [controllerBase],
+      rule: `le contrôleur déclare son @RequestMapping de type « ${controllerBase} »`,
+    };
+  const mode = g.options?.requestMappingMode;
+  if (mode === 'none')
+    return {
+      status: 'DETERMINED',
+      prefixes: [''],
+      rule: `requestMappingMode=none (${gen}) : l’interface n’a pas de @RequestMapping de type`,
+    };
+  if (mode === 'controller' && g.interfaceOnly === true)
+    return {
+      status: 'DETERMINED',
+      prefixes: [''],
+      rule: `requestMappingMode=controller avec interfaceOnly=true (${gen}) : le préfixe irait sur un contrôleur généré, qui n’est pas produit`,
+    };
+  if (mode === 'api_interface') {
+    const known = basePathProperties.filter((p) => p.value !== undefined);
+    if (basePathProperties.length === 1 && known[0])
+      return {
+        status: 'DETERMINED',
+        prefixes: [known[0].value ?? ''],
+        rule: `requestMappingMode=api_interface (${gen}) : \${${known[0].key}} = « ${known[0].value ?? ''} »`,
+      };
+    if (basePathProperties.length === 0)
+      return {
+        status: 'DETERMINED',
+        prefixes: [contractBases[0] ?? ''],
+        rule: `requestMappingMode=api_interface (${gen}) : aucune propriété openapi.*.base-path, défaut = base du contrat « ${contractBases[0] ?? ''} »`,
+      };
+    return {
+      status: 'UNDETERMINED',
+      prefixes: [...new Set(known.map((p) => p.value ?? ''))],
+      rule: `requestMappingMode=api_interface (${gen}) : ${String(basePathProperties.length)} propriétés openapi.*.base-path, celle de l’interface n’est pas établie`,
+    };
+  }
+  return {
+    status: 'UNDETERMINED',
+    prefixes: [...new Set(['', ...contractBases])],
+    rule: `requestMappingMode ${mode ? `= ${mode}` : 'non déclaré'} (${gen}) : le préfixe de type dépend de cette option et de son défaut propre à la version`,
+  };
+}

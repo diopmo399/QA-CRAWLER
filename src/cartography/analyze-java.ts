@@ -1,5 +1,6 @@
 import type { CodeIndex } from '../sdk/core/incident-contracts.js';
-import { analyzeJavaSource, readSpringProperties, resolveCalls } from '../incident/code/index.js';
+import { analyzeJavaSource, resolveCalls } from '../incident/code/index.js';
+import { readSpringConfig } from './config.js';
 import {
   parseJava,
   sourceText,
@@ -32,7 +33,6 @@ import type {
  */
 /** Les clés qui préfixent toutes les routes exposées par l'application. */
 const EXPOSURE_KEYS = ['server.servlet.context-path', 'spring.webflux.base-path', 'spring.mvc.servlet.path'];
-const SPRING_CONFIG = /(^|\/)application(-[\w.-]+)?\.(ya?ml|properties)$/i;
 const WRITE_OPERATION = /^(save|delete|remove|update|insert|persist|merge)/;
 const REPOSITORY_BASE =
   /^(JpaRepository|CrudRepository|PagingAndSortingRepository|ListCrudRepository|Repository)$/;
@@ -368,10 +368,12 @@ export function analyzeJava(
   files: readonly ReadFile[],
 ): JavaFacts {
   const warnings: string[] = [];
+  // La variante par défaut seulement (entrées sans profil) : les valeurs d'un profil ne sont jamais
+  // mélangées à celles du défaut ; elles sont lues par variante dans le modèle de configuration.
+  const config = readSpringConfig(files);
   const properties: Record<string, string> = {};
-  for (const file of files.filter((entry) => SPRING_CONFIG.test(entry.path)))
-    for (const [key, value] of Object.entries(readSpringProperties(file.path, file.text)))
-      if (!(key in properties)) properties[key] = value;
+  for (const entry of config.entries)
+    if (!entry.profile && !entry.secret) properties[entry.key] = entry.value;
   let index: CodeIndex = {
     applications: [],
     symbols: [],
@@ -532,14 +534,16 @@ export function analyzeJava(
     (owner, name) => methods.find((m) => m.owner === owner && m.name === name)?.id,
   );
   // Le préfixe d'exposition de l'application (context-path, base-path), lu dans sa configuration.
-  const exposure: JavaExposure[] = [];
-  for (const file of files.filter((entry) => SPRING_CONFIG.test(entry.path)))
-    for (const [key, value] of Object.entries(readSpringProperties(file.path, file.text)))
-      if (EXPOSURE_KEYS.includes(key) && value.trim() && value.trim() !== '/') {
-        const leaf = key.split('.').pop() ?? key;
-        const at = file.text.split(/\r?\n/).findIndex((text) => text.includes(leaf) || text.includes(key));
-        exposure.push({ key, value: value.trim(), file: file.path, line: at < 0 ? 1 : at + 1 });
-      }
+  // Par profil : une valeur d'un profil est une variante, jamais fusionnée avec celle du défaut.
+  const exposure: JavaExposure[] = config.entries
+    .filter((e) => EXPOSURE_KEYS.includes(e.key) && e.value.trim() !== '' && !e.secret)
+    .map((e) => ({
+      key: e.key,
+      value: e.value.trim(),
+      file: e.file,
+      line: e.line,
+      ...(e.profile ? { profile: e.profile } : {}),
+    }));
 
   return {
     classes,

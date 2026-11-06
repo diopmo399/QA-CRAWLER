@@ -1,9 +1,12 @@
+import path from 'node:path';
 import { buildStaticGraph } from '../static-analysis/graph-builder.js';
 import { sourceSetOf } from '../static-analysis/source-set.js';
-import { loadTypeScript } from '../static-analysis/typescript-loader.js';
+import { loadTypeScript, type TypeScriptModule } from '../static-analysis/typescript-loader.js';
 import { analyzeRxjs } from './analyze-rxjs.js';
 import { analyzeTemplates, membersOf } from './analyze-template.js';
+import { DEFAULT_VARIANT } from './config.js';
 import type { ReadFile } from './files.js';
+import { isDynamic, isRewrite, staticExport, type JsValue } from './static-js.js';
 import type { UiCall, UiDiagnostic, UiFacts, UiField, UiState } from './facts.js';
 
 /**
@@ -130,10 +133,19 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
   // Une enveloppe (`ApiClient.post(url, body)`) n'est pas un appel : chacun de ses appelants en est un.
   // Une méthode générique aux appels HTTP distingués par branche : ses appels sont ceux de ses branches.
   const wrappers = new Set([...rx.wrappers, ...rx.branched]);
+  const angular = angularVariants(files);
+  const proxies = proxiesOf(ts, files, angular.proxyOf);
   const corrected = new Map(rx.bases.map((entry) => [entry.id, entry]));
   const calls = [...direct.filter((call) => !wrappers.has(call.id)), ...rx.calls].map((call) => {
     const fix = corrected.get(call.id);
-    return fix && !call.base ? { ...call, path: fix.path, base: fix.base } : call;
+    return fix && !call.base
+      ? {
+          ...call,
+          path: fix.path,
+          ...(fix.base ? { base: fix.base } : {}),
+          ...(fix.baseKey ? { baseKey: fix.baseKey } : {}),
+        }
+      : call;
   });
   // La structure des gabarits (conteneurs, boutons, conditions) et l'origine des états lus.
   const structure = analyzeTemplates(relevant, new Set(calls.map((call) => call.id)));
@@ -224,56 +236,140 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
     symbols: rx.symbols,
     links: rx.links,
     diagnostics: [...rx.diagnostics, ...uiDiagnostics],
-    ...(proxiesOf(files).length ? { proxies: proxiesOf(files) } : {}),
+    ...(proxies.length ? { proxies } : {}),
+    ...(angular.variants.length ? { variants: angular.variants } : {}),
+    ...(rx.environment.length ? { environment: rx.environment } : {}),
     warnings: [...graph.warnings, ...structure.warnings, ...rx.warnings],
   };
 }
 
-/** Les règles des fichiers proxy.conf.json (objet par préfixe, ou tableau de règles `context`). */
-function proxiesOf(files: readonly ReadFile[]): NonNullable<UiFacts['proxies']> {
-  const out: NonNullable<UiFacts['proxies']> = [];
-  for (const file of files.filter((f) => /(^|\/)proxy\.conf(ig)?\.json$/.test(f.path))) {
+/** Les configurations d'angular.json : remplacements des fichiers environment, fichier de proxy. */
+function angularVariants(files: readonly ReadFile[]): {
+  variants: NonNullable<UiFacts['variants']>;
+  proxyOf: Map<string, string[]>;
+} {
+  const variants: NonNullable<UiFacts['variants']> = [];
+  const proxyOf = new Map<string, string[]>();
+  const use = (file: string, variant: string): void => {
+    const key = path.posix.normalize(file).replace(/^\.\//, '');
+    proxyOf.set(key, [...(proxyOf.get(key) ?? []), variant]);
+  };
+  for (const file of files.filter((f) => /(^|\/)angular\.json$/.test(f.path))) {
     let doc: unknown;
     try {
       doc = JSON.parse(file.text);
     } catch {
       continue;
     }
-    const rules: { contexts: string[]; rule: Record<string, unknown> }[] = Array.isArray(doc)
-      ? (doc as unknown[]).flatMap((r) =>
-          r && typeof r === 'object'
-            ? [
-                {
-                  contexts: ([] as unknown[])
-                    .concat((r as Record<string, unknown>).context)
-                    .filter((c): c is string => typeof c === 'string'),
-                  rule: r as Record<string, unknown>,
-                },
-              ]
+    const projects = (doc as { projects?: Record<string, unknown> }).projects ?? {};
+    for (const project of Object.values(projects)) {
+      const architect =
+        (
+          project as {
+            architect?: Record<
+              string,
+              { options?: Record<string, unknown>; configurations?: Record<string, Record<string, unknown>> }
+            >;
+          }
+        ).architect ?? {};
+      const serve = architect.serve;
+      if (typeof serve?.options?.proxyConfig === 'string') use(serve.options.proxyConfig, DEFAULT_VARIANT);
+      const names = new Set([
+        ...Object.keys(architect.build?.configurations ?? {}),
+        ...Object.keys(serve?.configurations ?? {}),
+      ]);
+      for (const name of names) {
+        const build = architect.build?.configurations?.[name] ?? {};
+        const own = serve?.configurations?.[name] ?? {};
+        const replacements = (
+          Array.isArray(build.fileReplacements) ? (build.fileReplacements as unknown[]) : []
+        ).flatMap((r) =>
+          r &&
+          typeof r === 'object' &&
+          typeof (r as { replace?: unknown }).replace === 'string' &&
+          typeof (r as { with?: unknown }).with === 'string'
+            ? [{ replace: (r as { replace: string }).replace, with: (r as { with: string }).with }]
             : [],
-        )
-      : doc && typeof doc === 'object'
-        ? Object.entries(doc as Record<string, unknown>).flatMap(([context, r]) =>
-            r && typeof r === 'object' ? [{ contexts: [context], rule: r as Record<string, unknown> }] : [],
-          )
-        : [];
-    for (const { contexts, rule } of rules)
+        );
+        const proxyConfig = typeof own.proxyConfig === 'string' ? own.proxyConfig : undefined;
+        if (proxyConfig) use(proxyConfig, name);
+        if (replacements.length || proxyConfig)
+          variants.push({ name, replacements, ...(proxyConfig ? { proxyConfig } : {}) });
+      }
+    }
+  }
+  return { variants, proxyOf };
+}
+
+/**
+ * Les règles des proxys de développement : proxy.conf.json, et proxy.conf.js/.cjs/.mjs évalués par leur
+ * arbre syntaxique (jamais exécutés). Objet par préfixe ou tableau de règles `context`. Une cible ou une
+ * réécriture non interprétable reste notée comme dynamique, jamais devinée.
+ */
+function proxiesOf(
+  ts: TypeScriptModule,
+  files: readonly ReadFile[],
+  proxyOf: ReadonlyMap<string, string[]>,
+): NonNullable<UiFacts['proxies']> {
+  const out: NonNullable<UiFacts['proxies']> = [];
+  for (const file of files.filter((f) => /(^|\/)proxy[\w.-]*\.(json|c?js|mjs)$/.test(f.path))) {
+    let doc: JsValue | undefined;
+    if (/\.json$/.test(file.path))
+      try {
+        doc = JSON.parse(file.text) as JsValue;
+      } catch {
+        continue;
+      }
+    else doc = staticExport(ts, file.path, file.text);
+    if (doc === undefined) continue;
+    const variants = proxyOf.get(file.path) ?? [undefined];
+    const rules: { contexts: string[]; rule: Record<string, JsValue>; dynamic?: string }[] = [];
+    if (isDynamic(doc)) rules.push({ contexts: ['/'], rule: {}, dynamic: `configuration ${doc.dynamic}` });
+    else if (Array.isArray(doc)) {
+      for (const r of doc)
+        if (r && typeof r === 'object' && !Array.isArray(r) && !isDynamic(r) && !isRewrite(r)) {
+          const ctx = (r as Record<string, JsValue>).context;
+          rules.push({
+            contexts: (Array.isArray(ctx) ? ctx : [ctx]).filter((c): c is string => typeof c === 'string'),
+            rule: r,
+            ...(isDynamic(ctx) ? { dynamic: `context = ${ctx.dynamic}` } : {}),
+          });
+        }
+    } else if (doc && typeof doc === 'object' && !isRewrite(doc)) {
+      for (const [context, r] of Object.entries(doc))
+        if (r && typeof r === 'object' && !Array.isArray(r) && !isDynamic(r) && !isRewrite(r))
+          rules.push({ contexts: [context], rule: r });
+        else if (isDynamic(r)) rules.push({ contexts: [context], rule: {}, dynamic: `règle ${r.dynamic}` });
+    }
+    for (const { contexts, rule, dynamic } of rules)
       for (const raw of contexts) {
         const context = raw.replace(/\/\*+$/, '') || '/';
-        const rewrites =
-          rule.pathRewrite && typeof rule.pathRewrite === 'object'
-            ? Object.entries(rule.pathRewrite as Record<string, unknown>).filter(
-                (entry): entry is [string, string] => typeof entry[1] === 'string' && entry[0].length <= 200,
-              )
-            : [];
-        const at = file.text.indexOf(JSON.stringify(raw));
-        out.push({
-          context,
-          ...(typeof rule.target === 'string' ? { target: rule.target } : {}),
-          ...(rewrites[0] ? { rewrite: { pattern: rewrites[0][0], replacement: rewrites[0][1] } } : {}),
-          file: file.path,
-          line: at < 0 ? 1 : file.text.slice(0, at).split('\n').length,
-        });
+        const notes: string[] = dynamic ? [dynamic] : [];
+        const target = rule.target;
+        if (isDynamic(target)) notes.push(`target = ${target.dynamic}`);
+        let rewrite: { pattern: string; replacement: string } | undefined;
+        const pr = rule.pathRewrite ?? rule.rewrite;
+        if (isRewrite(pr)) rewrite = pr.rewrite;
+        else if (isDynamic(pr)) notes.push(`réécriture = ${pr.dynamic}`);
+        else if (pr && typeof pr === 'object' && !Array.isArray(pr)) {
+          const first = Object.entries(pr).find(([k, v]) => typeof v === 'string' && k.length <= 200);
+          if (first) rewrite = { pattern: first[0], replacement: first[1] as string };
+          else if (Object.keys(pr).length) notes.push('réécriture non interprétable');
+        }
+        if (isDynamic(rule.bypass)) notes.push(`bypass = ${rule.bypass.dynamic}`);
+        const at = file.text.indexOf(raw);
+        for (const variant of variants)
+          out.push({
+            context,
+            ...(typeof target === 'string' ? { target } : {}),
+            ...(rewrite ? { rewrite } : {}),
+            file: file.path,
+            line: at < 0 ? 1 : file.text.slice(0, at).split('\n').length,
+            ...(variant ? { variant } : {}),
+            ...(notes.length ? { dynamic: notes.join(' ; ') } : {}),
+            ...(typeof rule.secure === 'boolean' ? { secure: rule.secure } : {}),
+            ...(typeof rule.changeOrigin === 'boolean' ? { changeOrigin: rule.changeOrigin } : {}),
+          });
       }
   }
   return out;

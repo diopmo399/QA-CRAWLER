@@ -1,4 +1,5 @@
 import type { MapLayer } from '../sdk/core/cartography.js';
+import type { SpringConfig } from './config.js';
 
 /**
  * LES FAITS D'UNE SOURCE, tels que ses analyseurs les ont lus (sérialisables : un scan incrémental reprend
@@ -56,6 +57,8 @@ export interface UiCall {
    * ce qui la justifie (expression, valeur, fichiers).
    */
   base?: string;
+  /** La clé environment de la base quand ses fichiers ne concordent pas (une valeur par configuration). */
+  baseKey?: string;
   loc: Loc;
 }
 
@@ -300,7 +303,17 @@ export interface UiFacts {
     rewrite?: { pattern: string; replacement: string };
     file: string;
     line: number;
+    /** La configuration Angular (angular.json) qui utilise ce fichier ; absente : la configuration par défaut. */
+    variant?: string;
+    /** Ce qui n'a pas pu être interprété statiquement (process.env, fonction, import…). */
+    dynamic?: string;
+    secure?: boolean;
+    changeOrigin?: boolean;
   }[];
+  /** Les clés des fichiers environment, valeur par fichier (une valeur absente : clé non déclarée là). */
+  environment?: { key: string; values: { file: string; value?: string }[] }[];
+  /** Les configurations Angular (angular.json) : fichiers environment remplacés, fichier de proxy. */
+  variants?: { name: string; replacements: { replace: string; with: string }[]; proxyConfig?: string }[];
   warnings: string[];
 }
 
@@ -382,6 +395,8 @@ export interface JavaExposure {
   value: string;
   file: string;
   line: number;
+  /** Le profil Spring qui la déclare (absent : la variante par défaut). */
+  profile?: string;
 }
 
 export interface JavaMethod {
@@ -577,6 +592,9 @@ export interface MavenGeneration {
   modelPackage?: string;
   interfaceOnly?: boolean;
   useTags?: boolean;
+  /** La version du plugin de génération (résolue), et les options de génération lues telles quelles. */
+  version?: string;
+  options?: Record<string, string>;
   /** Le profil qui la déclare (absente : build par défaut). */
   profile?: string;
   line: number;
@@ -595,6 +613,8 @@ export interface MavenModule {
   dependencies: MavenDependency[];
   managed: MavenDependency[];
   profiles: string[];
+  /** Les profils : activation déclarée (activeByDefault, propriété, jdk, fichier) et propriétés propres. */
+  profileDetails?: { id: string; activation?: string; properties: Record<string, string>; line: number }[];
   generations: MavenGeneration[];
   /** Les dossiers de sources ajoutés (build-helper) : du code généré qui peut être absent de la source. */
   sourceDirs: string[];
@@ -618,4 +638,6 @@ export interface SourceFacts {
   java?: JavaFacts;
   openapi?: OpenApiFacts;
   maven?: MavenFacts;
+  /** La configuration Spring par entrée et par profil (valeurs secrètes masquées). */
+  config?: SpringConfig;
 }

@@ -140,10 +140,13 @@ function templateOf(
   decoratorAt: number,
   byPath: ReadonlyMap<string, ReadFile>,
 ): { html: string; file: string; offsetLine: number } | undefined {
-  const inline = /\btemplate\s*:\s*`([\s\S]*?)`/.exec(decorator);
-  if (inline?.[1] !== undefined) {
-    const at = decoratorAt + inline.index + inline[0].indexOf('`') + 1;
-    return { html: inline[1], file: file.path, offsetLine: lineAt(file.text, at) - 1 };
+  // En ligne : entre accents graves, ou entre guillemets (`template: ''` d'un composant de route vide).
+  const inline =
+    /\btemplate\s*:\s*(`)([\s\S]*?)`/.exec(decorator) ??
+    /\btemplate\s*:\s*(['"])((?:\\.|(?!\1)[^\\\n])*)\1/.exec(decorator);
+  if (inline?.[2] !== undefined) {
+    const at = decoratorAt + inline.index + inline[0].indexOf(inline[1] ?? '`') + 1;
+    return { html: inline[2], file: file.path, offsetLine: lineAt(file.text, at) - 1 };
   }
   const url = /\btemplateUrl\s*:\s*['"]([^'"]+)['"]/.exec(decorator)?.[1];
   if (!url) return undefined;
@@ -828,7 +831,7 @@ export function analyzeTemplates(files: readonly ReadFile[], knownCalls: Readonl
           });
       }
       if (!template && /\btemplate(Url)?\s*:/.test(decorator))
-        warnings.push(`template of ${component} not found: structure not analysed`);
+        warnings.push(`gabarit de ${component} introuvable : structure non analysée`);
     }
   }
   return { elements, children, states, handlers, warnings };

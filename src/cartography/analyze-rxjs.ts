@@ -249,7 +249,9 @@ export interface RxjsFacts {
   /** Les méthodes génériques dont les appels HTTP sont distingués par branche (`Classe#méthode@L12`). */
   branched: string[];
   /** Les chemins corrigés par une base que la configuration démontre (environment, jeton injecté). */
-  bases: { id: string; path: string; base: string }[];
+  bases: { id: string; path: string; base?: string; baseKey?: string }[];
+  /** Les clés des fichiers environment, valeur par fichier. */
+  environment: { key: string; values: { file: string; value?: string }[] }[];
   /** Le flux lu par un membre d'un composant (`canActivate$`, ou `store` + `status$`). */
   streamOf: (component: string, member: string, path: readonly string[]) => string | undefined;
   /**
@@ -298,8 +300,18 @@ export function analyzeRxjs(
       warnings.push(`${file.path}: RxJS analysis failed (${(error as Error).message})`);
     }
   }
+  const environment = [...externals.env.entries()].map(([key, entry]) => ({
+    key,
+    values: entry.files.map((file, i) => {
+      const value = entry.raw[i];
+      return { file, ...(value !== undefined ? { value } : {}) };
+    }),
+  }));
   try {
-    return resolve(ts, classes, knownCalls, warnings, constants, functions);
+    // Pas d'étalement : symbols et links sont des accesseurs lus après coup (entryOf peut en ajouter).
+    const facts = resolve(ts, classes, knownCalls, warnings, constants, functions);
+    facts.environment = environment;
+    return facts;
   } finally {
     externals = undefined;
   }
@@ -1632,6 +1644,8 @@ interface Url {
   expression: string;
   /** Ce qui justifie une base tirée de la configuration (environment, jeton injecté). */
   evidence?: string[];
+  /** Une clé environment dont les fichiers ne concordent pas : la base dépend de la configuration. */
+  baseKey?: string;
 }
 
 /**
@@ -1641,7 +1655,7 @@ interface Url {
  * injecté (`@Inject(BASE_PATH) basePath` → `this.basePath = basePath`).
  */
 interface Externals {
-  env: Map<string, { value?: string; files: string[]; values: string[] }>;
+  env: Map<string, { value?: string; files: string[]; values: string[]; raw: (string | undefined)[] }>;
   tokens: Map<string, { value?: string; how: string }>;
   injected: Map<string, string>;
 }
@@ -1650,7 +1664,10 @@ let externals: Externals | undefined;
 const ENV_FILE = /(^|\/)environments?\/environment[\w.-]*\.ts$/;
 
 function externalsOf(ts: TypeScriptModule, files: readonly ReadFile[]): Externals {
-  const env = new Map<string, { value?: string; files: string[]; values: string[] }>();
+  const env = new Map<
+    string,
+    { value?: string; files: string[]; values: string[]; raw: (string | undefined)[] }
+  >();
   const envFiles = files.filter((f) => ENV_FILE.test(f.path));
   const perFile = new Map<string, Map<string, string>>();
   for (const file of envFiles) {
@@ -1681,6 +1698,7 @@ function externalsOf(ts: TypeScriptModule, files: readonly ReadFile[]): External
       ...(distinct.length === 1 && distinct[0] !== '∅' ? { value: distinct[0] } : {}),
       files: values.map((v) => v.file),
       values: values.map((v) => `${v.file.split('/').pop() ?? v.file} : ${v.value ?? 'absente'}`),
+      raw: values.map((v) => v.value),
     });
   }
   const valueOf = (expr: TS.Expression): string | undefined => {
@@ -1763,14 +1781,19 @@ function urlOf(
   if (!expr) return { expression: '' };
   const text = expr.getText().slice(0, 200);
   const evidence: string[] = [];
+  const baseKeys: string[] = [];
   const part = (node: TS.Expression, first: boolean): { route: string; param?: number } => {
     const inner: Url = depth < 5 ? urlOf(ts, node, info, method, depth + 1) : { expression: '' };
     if (inner.evidence) evidence.push(...inner.evidence);
+    if (inner.baseKey) baseKeys.push(inner.baseKey);
     if (inner.route !== undefined)
       return { route: inner.route, ...(inner.param !== undefined ? { param: inner.param } : {}) };
     return { route: first ? '{base}' : '{param}' };
   };
-  const proven = (): Pick<Url, 'evidence'> => (evidence.length ? { evidence: [...new Set(evidence)] } : {});
+  const proven = (): Pick<Url, 'evidence' | 'baseKey'> => ({
+    ...(evidence.length ? { evidence: [...new Set(evidence)] } : {}),
+    ...(baseKeys[0] ? { baseKey: baseKeys[0] } : {}),
+  });
   // Une clé des fichiers environment, démontrée par tous.
   if (ts.isPropertyAccessExpression(expr) && expr.expression.kind !== ts.SyntaxKind.ThisKeyword) {
     const entry = externals?.env.get(expr.getText());
@@ -1780,6 +1803,8 @@ function urlOf(
         expression: text,
         evidence: [`${expr.getText()} = '${entry.value}' (${entry.files.join(', ')})`],
       };
+    // Des fichiers qui ne concordent pas : la base dépend de la configuration (une valeur par variante).
+    if (entry) return { expression: text, baseKey: expr.getText() };
   }
   // Un champ affecté depuis un jeton injecté : sa valeur est celle du fournisseur du jeton, pas son défaut.
   if (ts.isPropertyAccessExpression(expr) && expr.expression.kind === ts.SyntaxKind.ThisKeyword) {
@@ -1848,7 +1873,7 @@ function resolve(
   const links = new Map<string, UiLink>();
   const diagnostics: UiDiagnostic[] = [];
   const calls = new Map<string, UiCall>();
-  const bases = new Map<string, { path: string; base: string }>();
+  const bases = new Map<string, { path: string; base?: string; baseKey?: string }>();
   const methodId = (c: ClassInfo, m: string): string => `${c.name}#${m}`;
   const streamId = (c: ClassInfo, s: string): string => `${c.name}.${s}`;
   const classOfDep = (c: ClassInfo, via: string): ClassInfo | undefined =>
@@ -2012,6 +2037,7 @@ function resolve(
     param: number;
     /** Ce qui justifie la base que l'enveloppe ajoute (configuration). */
     evidence?: string[];
+    baseKey?: string;
   }
   const wrappers = new Map<string, Wrapper>();
   /**
@@ -2038,6 +2064,7 @@ function resolve(
           owner: c.name,
           method: site.verb,
           ...(url.evidence ? { base: url.evidence.join(' ; ') } : {}),
+          ...(url.baseKey ? { baseKey: url.baseKey } : {}),
           ...(url.route !== undefined
             ? { path: url.route.replace(/\?.*$/, '') }
             : {
@@ -2069,19 +2096,26 @@ function resolve(
             route: url.route,
             param: url.param,
             ...(url.evidence ? { evidence: url.evidence } : {}),
+            ...(url.baseKey ? { baseKey: url.baseKey } : {}),
           });
           continue;
         }
         if (url.route !== undefined) url.route = url.route.replace(/\{url\}/g, '{param}');
         // Une base démontrée par la configuration corrige aussi un appel déjà lu par l'analyse directe.
-        if (url.evidence && url.route !== undefined)
-          bases.set(id, { path: url.route.replace(/\?.*$/, ''), base: url.evidence.join(' ; ') });
+        if ((url.evidence || url.baseKey) && url.route !== undefined)
+          bases.set(id, {
+            path: url.route.replace(/\?.*$/, ''),
+            ...(url.evidence ? { base: url.evidence.join(' ; ') } : {}),
+            ...(url.baseKey ? { baseKey: url.baseKey } : {}),
+            ...(url.baseKey ? { baseKey: url.baseKey } : {}),
+          });
         if (knownCalls.has(id) || calls.has(id) || !h.verb) continue;
         calls.set(id, {
           id,
           owner: c.name,
           method: h.verb,
           ...(url.evidence ? { base: url.evidence.join(' ; ') } : {}),
+          ...(url.baseKey ? { baseKey: url.baseKey } : {}),
           ...(url.route !== undefined
             ? { path: url.route.replace(/\?.*$/, '') }
             : {
@@ -2605,6 +2639,7 @@ function resolve(
           ...(url.evidence || wrapper.evidence
             ? { base: [...(wrapper.evidence ?? []), ...(url.evidence ?? [])].join(' ; ') }
             : {}),
+          ...((url.baseKey ?? wrapper.baseKey) ? { baseKey: url.baseKey ?? wrapper.baseKey } : {}),
           ...(route !== undefined
             ? { path: route.replace(/\?.*$/, '') }
             : {
@@ -3283,6 +3318,7 @@ function resolve(
     diagnostics,
     calls: [...calls.values()],
     bases: [...bases.entries()].map(([id, entry]) => ({ id, ...entry })),
+    environment: [],
     wrappers: [...wrappers.keys()],
     branched: [...branched.keys()],
     streamOf,

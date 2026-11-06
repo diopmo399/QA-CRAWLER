@@ -105,7 +105,9 @@ interface Draft {
 export function analyzeMaven(files: readonly ReadFile[]): MavenFacts {
   const warnings: string[] = [];
   const drafts: Draft[] = [];
-  for (const file of files.filter((f) => path.posix.basename(f.path) === 'pom.xml')) {
+  for (const file of files.filter(
+    (f) => path.posix.basename(f.path) === 'pom.xml' || /\.pom$/.test(f.path),
+  )) {
     const project = parseXml(file.text);
     const artifactId = project ? value(project, 'artifactId') : undefined;
     if (!project || !artifactId) {
@@ -141,6 +143,31 @@ export function analyzeMaven(files: readonly ReadFile[]): MavenFacts {
         dependencies: [],
         managed: [],
         profiles: children(child(project, 'profiles'), 'profile').flatMap((p) => value(p, 'id') ?? []),
+        profileDetails: children(child(project, 'profiles'), 'profile').flatMap((p) => {
+          const id = value(p, 'id');
+          if (!id) return [];
+          const activation = child(p, 'activation');
+          const how = [
+            value(activation, 'activeByDefault') === 'true' ? 'activeByDefault' : '',
+            value(child(activation, 'property'), 'name')
+              ? `propriété ${value(child(activation, 'property'), 'name') ?? ''}${value(child(activation, 'property'), 'value') ? `=${value(child(activation, 'property'), 'value') ?? ''}` : ''}`
+              : '',
+            value(activation, 'jdk') ? `jdk ${value(activation, 'jdk') ?? ''}` : '',
+            value(child(activation, 'file'), 'exists')
+              ? `fichier ${value(child(activation, 'file'), 'exists') ?? ''}`
+              : '',
+          ].filter(Boolean);
+          return [
+            {
+              id,
+              ...(how.length ? { activation: how.join(', ') } : {}),
+              properties: Object.fromEntries(
+                (child(p, 'properties')?.children ?? []).map((e) => [e.name, decode(e.text.trim())]),
+              ),
+              line: p.line,
+            },
+          ];
+        }),
         generations: [],
         sourceDirs: [],
         unresolved: [],
@@ -190,8 +217,11 @@ export function analyzeMaven(files: readonly ReadFile[]): MavenFacts {
     if (version) builtins['project.version'] = version;
     if (group) builtins['project.groupId'] = group;
     if (d.module.parent?.version) builtins['project.parent.version'] = d.module.parent.version;
+    // Les propriétés du profil en cours de lecture : elles ne valent que pour ce que ce profil déclare.
+    let profileProps: Record<string, string> = {};
     const lookup = (name: string): string | undefined => {
       if (name in builtins) return builtins[name];
+      if (name in profileProps) return profileProps[name];
       for (const x of lineage) if (name in x.module.properties) return x.module.properties[name];
       return undefined;
     };
@@ -246,6 +276,11 @@ export function analyzeMaven(files: readonly ReadFile[]): MavenFacts {
       ...profileEls.map((p) => ({ el: p, ...(value(p, 'id') ? { profile: value(p, 'id') } : {}) })),
     ];
     for (const scope of scopes) {
+      profileProps = scope.profile
+        ? Object.fromEntries(
+            (child(scope.el, 'properties')?.children ?? []).map((p) => [p.name, decode(p.text.trim())]),
+          )
+        : {};
       for (const el of children(child(scope.el, 'dependencies'), 'dependency')) {
         const dep = depOf(el);
         if (!dep) continue;
@@ -312,6 +347,16 @@ export function analyzeMaven(files: readonly ReadFile[]): MavenFacts {
               : {}),
             ...(bool(option('useTags')) !== undefined ? { useTags: bool(option('useTags')) } : {}),
             ...(scope.profile ? { profile: scope.profile } : {}),
+            ...(resolve(value(plugin, 'version')) ? { version: resolve(value(plugin, 'version')) } : {}),
+            // Les options de génération écrites (configOptions), lues telles quelles : seules celles-ci
+            // permettent de reconstruire ce que le générateur produit.
+            ...((): { options?: Record<string, string> } => {
+              const entries = [
+                ...(child(pluginConf, 'configOptions')?.children ?? []),
+                ...(child(conf, 'configOptions')?.children ?? []),
+              ].map((e) => [e.name, resolve(e.text.trim()) ?? ''] as const);
+              return entries.length ? { options: Object.fromEntries(entries) } : {};
+            })(),
             line: exec.line,
           };
           if (inputSpec && kind !== 'springdoc')

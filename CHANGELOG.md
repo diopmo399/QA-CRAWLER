@@ -4,6 +4,24 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : configuration par variante (étape 1)
+
+- Version d'analyseur `cartography-6` : un scan incrémental ne reprend pas les faits d'avant.
+- La configuration Spring est lue entrée par entrée avec son profil (`application-{profil}`, documents
+  `on-profile`). Les profils ne sont plus fusionnés : le défaut et chaque profil sont des variantes, une
+  valeur de profil remplace celle du défaut. Les valeurs de clés sensibles sont masquées.
+- Le préfixe d'une interface générée n'est plus deviné : il vient des options de génération
+  (`@RequestMapping` du contrôleur, `interfaceOnly`, `requestMappingMode`, propriété `base-path`), sinon les routes possibles restent
+  listées avec la cause `GENERATION_OPTIONS_INSUFFICIENT`.
+- Métadonnées de dépendances locales (dossier rangé comme un dépôt Maven, sous une racine autorisée) :
+  pom et contrats empaquetés dans les jars, lus sans téléchargement ni exécution. Un artefact absent
+  garde ses identifiants complets (groupe:artefact:version).
+- Proxys de développement : `proxy.conf.json`, et `.js` / `.cjs` / `.mjs` lus par leur arbre syntaxique
+  (jamais exécutés) ; configurations d'`angular.json` (proxy et remplacements de fichiers). Une règle
+  non interprétable reste marquée dynamique.
+- Correctif : un gabarit en ligne entre guillemets (`template: ''`) n'est plus signalé introuvable ;
+  le message d'avertissement est en français.
+
 ### Sécurité
 
 - **zod 4.6.7** (au lieu de 3.25) : corrige GHSA-mrhx-c7xc-m3w5 (épuisement mémoire en validant de très

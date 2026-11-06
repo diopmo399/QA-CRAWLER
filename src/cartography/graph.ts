@@ -22,9 +22,11 @@ import type { CodeEndpoint } from '../sdk/core/incident-contracts.js';
 import { matchEndpoint, normalizePath } from '../incident/code/paths.js';
 import { membersOf } from './analyze-template.js';
 import type { Loc, SourceFacts } from './facts.js';
+import { ConfigResolver, DEFAULT_VARIANT } from './config.js';
 import {
   apiNamesOf,
   ContractIndex,
+  generatedPrefix,
   joinRoute,
   matchCall,
   operationsFor,
@@ -213,7 +215,29 @@ export function buildGraph(input: GraphInput): GraphOutput {
     exposed?: string[];
     why?: string[];
     kind?: 'SERVED' | 'INFERRED';
+    /** Les chemins exposés dans une variante (profil) qui remplacent ceux du défaut pour cette variante. */
+    byVariant?: Record<string, { paths: string[]; why: string[] }>;
   }
+  /** Les chemins exposés d'une route : préfixe du défaut, et préfixe propre à chaque profil qui en déclare un. */
+  const exposurePaths = (
+    exposure:
+      readonly { key: string; value: string; file: string; line: number; profile?: string }[] | undefined,
+    paths: readonly string[],
+    extraWhy: readonly string[] = [],
+  ): Pick<Served, 'exposed' | 'why' | 'byVariant'> => {
+    const why = (e: { key: string; value: string; file: string; line: number; profile?: string }): string =>
+      `préfixe ${e.key} = ${e.value} (${e.file}:${String(e.line)}${e.profile ? `, profil ${e.profile}` : ''})`;
+    const def = exposure?.find((e) => !e.profile);
+    const byVariant: Record<string, { paths: string[]; why: string[] }> = {};
+    for (const e of exposure ?? [])
+      if (e.profile)
+        byVariant[e.profile] = { paths: paths.map((p) => joinRoute(e.value, p)), why: [why(e), ...extraWhy] };
+    return {
+      exposed: paths.map((p) => (def ? joinRoute(def.value, p) : p)),
+      why: [...(def ? [why(def)] : []), ...extraWhy],
+      ...(Object.keys(byVariant).length ? { byVariant } : {}),
+    };
+  };
   const served: Served[] = [];
   const contracts: Served[] = [];
   /** Le nœud de chaque opération de contrat (source|opération). */
@@ -409,7 +433,7 @@ export function buildGraph(input: GraphInput): GraphOutput {
       const java = facts.java;
       const backLayer: MapLayer = layer === 'BFF' ? 'BFF' : 'BACKEND';
       // Le préfixe sous lequel l'application expose ses routes (context-path…), lu dans sa configuration.
-      const exposure = java.exposure?.[0];
+      const exposure = java.exposure?.find((e) => !e.profile);
       for (const cls of java.classes) {
         javaClasses.set(cls.name, [
           ...(javaClasses.get(cls.name) ?? []),
@@ -618,10 +642,7 @@ export function buildGraph(input: GraphInput): GraphOutput {
           ...(endpoint.requestBody ? { requestBody: endpoint.requestBody } : {}),
           layer: backLayer,
           kind: 'SERVED',
-          exposed: [exposure ? joinRoute(exposure.value, endpoint.path) : endpoint.path],
-          why: exposure
-            ? [`préfixe ${exposure.key} = ${exposure.value} (${exposure.file}:${String(exposure.line)})`]
-            : [],
+          ...exposurePaths(java.exposure, [endpoint.path]),
         });
       }
       for (const call of java.calls)
@@ -773,14 +794,32 @@ export function buildGraph(input: GraphInput): GraphOutput {
     const java = facts.java;
     if (!java) continue;
     const layer: MapLayer = (sourceById.get(src)?.layer ?? facts.layer) === 'BFF' ? 'BFF' : 'BACKEND';
-    const exposure = java.exposure?.[0];
+    const exposure = java.exposure?.find((e) => !e.profile);
     for (const impl of java.implementations ?? []) {
       const owner = contractIndex.moduleOf(src, impl.loc.file);
       for (const missing of impl.missing) {
         const pkg = missing.qualified ? packageOf(missing.qualified) : '';
-        const generation = owner?.module.generations.find(
+        // Une génération du build par défaut d'abord ; une génération propre à un profil Maven n'est retenue
+        // que s'il n'y en a pas d'autre, et elle le dit (le profil actif n'est pas connu).
+        const generations = (owner?.module.generations ?? []).filter(
           (g) => g.apiPackage === pkg && sideOf(g) === 'SERVER',
         );
+        const generation = generations.find((g) => !g.profile) ?? generations[0];
+        const profileCause: Cause[] = generation?.profile
+          ? [
+              {
+                code: 'PROFILE_UNKNOWN',
+                message: `la génération ${generation.execution ?? generation.generator ?? ''} n’existe que dans le profil Maven ${generation.profile}${
+                  generations.length > 1
+                    ? ` (aussi dans : ${generations
+                        .slice(1)
+                        .map((g) => g.profile ?? 'défaut')
+                        .join(', ')})`
+                    : ''
+                } : le profil actif n’est pas connu`,
+              },
+            ]
+          : [];
         if (!owner || !generation) {
           for (const m of impl.methods)
             flagHandler(
@@ -822,6 +861,25 @@ export function buildGraph(input: GraphInput): GraphOutput {
           const route = op.route ?? op.path;
           const opNode = opNodeOf(contract.sourceId, op.id);
           usedOps.add(opNode);
+          // Le préfixe de type de l'interface générée : démontré par une option ou le contrôleur, sinon les
+          // possibilités sont gardées (jamais un préfixe inventé).
+          const config = new ConfigResolver(facts.config ?? { entries: [], profiles: [] });
+          const prefix = generatedPrefix(
+            generation,
+            impl.basePath,
+            op.bases ?? [],
+            [
+              ...new Set(
+                (facts.config?.entries ?? [])
+                  .filter((e) => /^openapi\.[^.]+\.base-path$/.test(e.key))
+                  .map((e) => e.key),
+              ),
+            ].map((key) => ({
+              key,
+              ...(config.resolve(key).value !== undefined ? { value: config.resolve(key).value } : {}),
+            })),
+          );
+          const routes = prefix.prefixes.map((p) => joinRoute(p, route));
           const id = node(
             `API:${src}:${op.method} ${route}`,
             'API',
@@ -842,7 +900,11 @@ export function buildGraph(input: GraphInput): GraphOutput {
               inferred: true,
               generatedInterface: missing.qualified ?? missing.name,
               ...(op.request ? { requestBody: op.request } : {}),
-              ...(exposure ? { exposedPath: joinRoute(exposure.value, route) } : {}),
+              ...(exposure ? { exposedPath: joinRoute(exposure.value, routes[0] ?? route) } : {}),
+              routeOrigin: 'RECONSTRUCTED',
+              typePrefix:
+                prefix.status === 'DETERMINED' ? (prefix.prefixes[0] ?? '') || '(aucun)' : 'indéterminé',
+              prefixRule: prefix.rule,
             },
           );
           edge(
@@ -872,13 +934,10 @@ export function buildGraph(input: GraphInput): GraphOutput {
             sourceId: src,
             layer,
             kind: 'INFERRED',
-            exposed: [exposure ? joinRoute(exposure.value, route) : route],
-            why: [
-              ...(exposure
-                ? [`préfixe ${exposure.key} = ${exposure.value} (${exposure.file}:${String(exposure.line)})`]
-                : []),
+            ...exposurePaths(java.exposure, routes, [
               'route tirée du contrat (interface générée absente des sources)',
-            ],
+              `préfixe de l’interface : ${prefix.rule}`,
+            ]),
           });
           derivation.set(id, {
             steps: [
@@ -907,9 +966,18 @@ export function buildGraph(input: GraphInput): GraphOutput {
             causes: [
               {
                 code: 'GENERATED_INTERFACE_ABSENT',
-                message: `l’interface ${missing.name} est générée au build : la route vient du contrat et le préfixe de type de l’interface n’est pas lisible`,
+                message: `l’interface ${missing.name} est générée au build (code absent des sources) : la route est reconstruite depuis le contrat`,
               },
+              ...(prefix.status === 'UNDETERMINED'
+                ? [
+                    {
+                      code: 'GENERATION_OPTIONS_INSUFFICIENT' as const,
+                      message: `${prefix.rule} ; possibilités gardées : ${prefix.prefixes.map((p) => `« ${p || '(aucun)'} »`).join(', ')} ; il faudrait l’option requestMappingMode, un @RequestMapping sur ${impl.controller}, ou le code généré`,
+                    },
+                  ]
+                : []),
               ...resolved.causes,
+              ...profileCause,
             ],
           });
         }
@@ -963,35 +1031,53 @@ export function buildGraph(input: GraphInput): GraphOutput {
         : ['API'];
 
   // Les cibles d'une couche : chaque chemin exposé (préfixes justifiés) d'un endpoint ou d'une opération.
-  const targetCache = new Map<MapLayer, Target[]>();
+  const targetCache = new Map<string, Target[]>();
   const servedByNode = new Map<string, Served>();
-  const targetsOf = (layer: MapLayer): Target[] => {
-    const cached = targetCache.get(layer);
+  const targetsOf = (layer: MapLayer, variant = DEFAULT_VARIANT, only?: ReadonlySet<string>): Target[] => {
+    const key = `${layer}|${variant}|${only ? [...only].join(',') : ''}`;
+    const cached = targetCache.get(key);
     if (cached) return cached;
     const list = (layer === 'API' ? contracts : served)
-      .filter((entry) => entry.layer === layer)
+      .filter((entry) => entry.layer === layer && (!only || only.has(entry.sourceId)))
       .flatMap((entry) => {
         servedByNode.set(entry.endpoint.symbolId, entry);
-        return (entry.exposed ?? [entry.endpoint.path]).map((p): Target => ({
+        const own = variant === DEFAULT_VARIANT ? undefined : entry.byVariant?.[variant];
+        return (own?.paths ?? entry.exposed ?? [entry.endpoint.path]).map((p): Target => ({
           node: entry.endpoint.symbolId,
           layer,
           kind: layer === 'API' ? 'CONTRACT' : (entry.kind ?? 'SERVED'),
           method: entry.endpoint.method,
           path: p,
-          why: entry.why ?? [],
+          why: own?.why ?? entry.why ?? [],
         }));
       });
-    targetCache.set(layer, list);
+    targetCache.set(key, list);
     return list;
   };
   const implementingLayers = (['BFF', 'BACKEND'] as const).filter((l) => layersPresent.has(l));
+  /** Les variantes découvertes (profils Spring des sources) : chacune est évaluée séparément. */
+  const knownVariants = [
+    ...new Set(
+      input.facts.flatMap((f) =>
+        (f.config?.profiles ?? []).filter((p) => p.how !== 'ACTIVE').map((p) => p.name),
+      ),
+    ),
+  ];
   /**
    * La corrélation d'un appel avec les couches en aval, dans l'ordre : la première couche qui en démontre
    * une cible l'emporte ; les causes des autres sont gardées. Le résultat est noté dans `correlations`.
    */
   const correlateCall = (
     from: string,
-    call: { method: string; path: string; baseUnknown: boolean },
+    call: {
+      method: string;
+      path: string;
+      baseUnknown: boolean;
+      /** Le chemin de l'appel dans une variante qui le change (base d'URL propre à un environnement). */
+      variants?: Record<string, string>;
+      /** Les sources où la destination est démontrée (passerelle, base d'un client) : seules cibles admises. */
+      only?: ReadonlySet<string>;
+    },
     layers: readonly MapLayer[],
     steps: CorrelationStep[],
     extra: Cause[] = [],
@@ -1001,7 +1087,7 @@ export function buildGraph(input: GraphInput): GraphOutput {
     const candidates: MapCorrelation['candidates'] = [];
     let chosen: Match | undefined;
     for (const layer of layers) {
-      const match = matchCall(call, targetsOf(layer));
+      const match = matchCall(call, targetsOf(layer, DEFAULT_VARIANT, call.only));
       candidates.push(...match.candidates);
       causes.push(...match.causes);
       if (match.target) {
@@ -1041,12 +1127,70 @@ export function buildGraph(input: GraphInput): GraphOutput {
         : inferredCall && chosen?.status === 'CONFIRMED'
           ? 'PROBABLE'
           : (chosen?.status ?? 'UNDEMONSTRATED');
+    // Les variantes (profils, configurations du frontal) dont l'issue diffère de celle du défaut.
+    const statusOf = (m: Match | undefined): MapCorrelation['status'] =>
+      !m?.target
+        ? 'UNDEMONSTRATED'
+        : m.target.kind === 'CONTRACT' && implementingLayers.length > 0
+          ? 'UNDEMONSTRATED'
+          : inferredCall && m.status === 'CONFIRMED'
+            ? 'PROBABLE'
+            : m.status;
+    const variantResults: NonNullable<MapCorrelation['variants']> = [];
+    for (const v of [...new Set([...knownVariants, ...Object.keys(call.variants ?? {})])]) {
+      const p = call.variants?.[v] ?? call.path;
+      const vc: Cause[] = [];
+      let m: Match | undefined;
+      for (const layer of layers) {
+        const r = matchCall(
+          { ...call, path: p, baseUnknown: p.startsWith('{base}') },
+          targetsOf(layer, v, call.only),
+        );
+        vc.push(...r.causes);
+        if (r.target) {
+          m = r;
+          break;
+        }
+      }
+      const st = statusOf(m);
+      if (
+        m?.target?.node === target?.node &&
+        m?.target?.path === target?.path &&
+        st === status &&
+        p === call.path
+      )
+        continue;
+      variantResults.push({
+        variant: v,
+        path: p,
+        status: st,
+        ...(m?.target ? { target: m.target.node, exposed: m.target.path } : {}),
+        causes: dedupeCauses(
+          vc.length
+            ? vc
+            : m?.target
+              ? []
+              : [
+                  {
+                    code: 'NO_ENDPOINT',
+                    message: `aucun endpoint ne correspond à ${call.method} ${p} dans la variante ${v}`,
+                  },
+                ],
+        ),
+      });
+    }
+    if (variantResults.length > 0)
+      causes.push({
+        code: 'ENVIRONMENT_INCONSISTENT',
+        message: `l’issue change selon la variante (${variantResults.map((r) => `${r.variant} : ${r.status}`).join(', ')}) ; le profil actif n’est pas connu`,
+      });
     correlations.push({
       from,
       method: call.method,
       path: call.path,
       status,
       ...(target ? { target: target.node } : {}),
+      ...(variantResults.length ? { variants: variantResults } : {}),
       candidates: candidates.slice(0, 12),
       causes: dedupeCauses(causes),
       steps: [

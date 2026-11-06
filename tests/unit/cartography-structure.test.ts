@@ -2,7 +2,7 @@ import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { CartographyConfig, MapStructure, StructureItem } from '../../src/sdk/core/cartography.js';
 import { analyzeJava } from '../../src/cartography/analyze-java.js';
-import { membersOf, parseTemplate } from '../../src/cartography/analyze-template.js';
+import { analyzeTemplates, membersOf, parseTemplate } from '../../src/cartography/analyze-template.js';
 import { buildIndex, type CoverageContext, type MapIndex } from '../../src/cartography/explorer.js';
 import { runScan } from '../../src/cartography/scan.js';
 import { actionRows, conditionRows, elementSheet, structureOf } from '../../src/cartography/structure.js';
@@ -311,5 +311,38 @@ describe('scan réel : structure, conditions Backend, actions', () => {
   it('un identifiant inconnu ou d’une autre sorte ne donne pas de fiche', () => {
     expect(elementSheet(index, cov, 'BUTTON:front:nope')).toBeUndefined();
     expect(elementSheet(index, cov, structure.roots[0]?.id ?? '')).toBeUndefined();
+  });
+});
+
+describe('gabarits en ligne entre guillemets', () => {
+  const file = (text: string) => ({ path: 'src/app/vide.component.ts', text, hash: '', bytes: text.length });
+  it('un gabarit vide ou entre guillemets est lu, sans avertissement « introuvable »', () => {
+    for (const quoted of ["''", '""', '\'<section><button (click)="go()">Aller</button></section>\'']) {
+      const facts = analyzeTemplates(
+        [
+          file(
+            `@Component({ selector: 'app-vide', template: ${quoted} })\nexport class VideComponent { go() {} }\n`,
+          ),
+        ],
+        new Set(),
+      );
+      expect(facts.warnings).toEqual([]);
+    }
+    const lu = analyzeTemplates(
+      [
+        file(
+          `@Component({ selector: 'app-vide', template: '<button (click)="go()">Aller</button>' })\nexport class VideComponent { go() {} }\n`,
+        ),
+      ],
+      new Set(),
+    );
+    expect(lu.elements.some((e) => e.kind === 'BUTTON')).toBe(true);
+  });
+  it('un templateUrl absent reste signalé', () => {
+    const facts = analyzeTemplates(
+      [file(`@Component({ selector: 'app-x', templateUrl: './absent.html' })\nexport class XComponent {}\n`)],
+      new Set(),
+    );
+    expect(facts.warnings).toEqual(['gabarit de XComponent introuvable : structure non analysée']);
   });
 });

@@ -63,9 +63,21 @@ export interface MapSource {
   tokenEnv?: string;
 }
 
+/**
+ * Une racine de métadonnées de dépendances, strictement locale (sous une racine autorisée du serveur) :
+ * rangée comme un dépôt Maven (pom, jars de contrats). Jamais de téléchargement.
+ */
+export interface MetadataRoot {
+  id: string;
+  name: string;
+  path: string;
+  enabled: boolean;
+}
+
 export interface CartographyConfig {
   schema: 1;
   sources: MapSource[];
+  metadata?: MetadataRoot[];
   updatedAt?: string;
 }
 
@@ -228,6 +240,14 @@ export interface ScanRecord {
   counts: Partial<Record<MapNodeKind, number>>;
   edges: number;
   errors: string[];
+  /** Les racines de métadonnées lues (locales, autorisées) : état, fichiers lus, éléments ignorés. */
+  metadata?: {
+    id: string;
+    name: string;
+    state: 'READ' | 'DENIED' | 'FAILED' | 'DISABLED';
+    files: number;
+    notes: string[];
+  }[];
 }
 
 /** Un maillon de la chaîne d'une fonctionnalité, couche par couche. */
@@ -320,6 +340,16 @@ export const CORRELATION_CAUSES = [
   'BACKEND_CALL_UNRESOLVED',
   'NO_ENDPOINT',
   'LAYER_MISSING',
+  /** Configuration : options de génération insuffisantes, profil actif inconnu, propriété non résolue… */
+  'GENERATION_OPTIONS_INSUFFICIENT',
+  'PROFILE_UNKNOWN',
+  'PROPERTY_UNRESOLVED',
+  'DEPENDENCY_UNAVAILABLE',
+  'PROXY_DYNAMIC',
+  'GATEWAY_EXTERNAL',
+  'DESTINATION_SYMBOLIC',
+  'MULTIPLE_DESTINATIONS',
+  'ENVIRONMENT_INCONSISTENT',
 ] as const;
 export type CorrelationCause = (typeof CORRELATION_CAUSES)[number];
 
@@ -364,6 +394,18 @@ export interface MapCorrelation {
   candidates: CorrelationCandidate[];
   causes: { code: CorrelationCause; message: string }[];
   steps: CorrelationStep[];
+  /**
+   * Les variantes (profil Spring, configuration du frontal) dont l'issue diffère du défaut : une liaison
+   * peut être confirmée dans l'une et indéterminée dans l'autre ; elles ne sont jamais fusionnées.
+   */
+  variants?: {
+    variant: string;
+    path: string;
+    status: CorrelationStatus;
+    target?: string;
+    exposed?: string;
+    causes: { code: CorrelationCause; message: string }[];
+  }[];
 }
 
 /**
@@ -408,6 +450,8 @@ export interface MapModule {
   packaging?: string;
   parent?: string;
   dependencies: string[];
+  /** Les dépendances indirectes connues par les pom lus (sources, métadonnées locales). */
+  indirect?: string[];
   generations: {
     execution?: string;
     plugin: string;

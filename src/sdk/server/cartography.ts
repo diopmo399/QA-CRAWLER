@@ -77,6 +77,7 @@ import {
   type MapListQuery,
   type MapPage,
   type MapSource,
+  type MetadataRoot,
   type MapSubgraph,
   type MapSummary,
   type ScanRecord,
@@ -216,8 +217,43 @@ export async function saveConfig(
       ...(provider ? { provider } : {}),
     });
   }
+  // Les racines de métadonnées de dépendances : locales, sous une racine autorisée (vérifiée ici et au scan).
+  const rawMeta = input && typeof input === 'object' ? (input as { metadata?: unknown }).metadata : undefined;
+  if (rawMeta !== undefined && !Array.isArray(rawMeta))
+    throw new CartographyInputError(400, 'INVALID_INPUT', 'metadata must be an array');
+  const metadata: MetadataRoot[] = [];
+  for (const [index, entry] of ((rawMeta as unknown[] | undefined) ?? []).entries()) {
+    const item = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+    const where = `metadata[${String(index)}]`;
+    const id = typeof item.id === 'string' && SOURCE_ID.test(item.id) ? item.id : undefined;
+    const name = text(item.name, 80);
+    const folder = text(item.path, 1000);
+    if (!id || !name || !folder || metadata.some((m) => m.id === id))
+      throw new CartographyInputError(
+        400,
+        'INVALID_INPUT',
+        `${where}: id (unique), name and path are required`,
+      );
+    const enabled = item.enabled !== false;
+    if (enabled)
+      try {
+        await allowedPath(folder, allowedRoots);
+      } catch (error) {
+        throw new CartographyInputError(
+          422,
+          'SOURCE_DENIED',
+          `${where}.path: ${error instanceof SourceAccessError ? error.message : String(error)}`,
+        );
+      }
+    metadata.push({ id, name, path: folder, enabled });
+  }
   const before = await readConfig(project.dir);
-  const config: CartographyConfig = { schema: 1, sources, updatedAt: now.toISOString() };
+  const config: CartographyConfig = {
+    schema: 1,
+    sources,
+    ...(metadata.length ? { metadata } : {}),
+    updatedAt: now.toISOString(),
+  };
   await writeConfig(project.dir, config);
   // Les copies de travail des sources GIT retirées (ou devenues locales) sont effacées.
   if (git) {

@@ -10,6 +10,8 @@ import type {
 import { analyzeAngular } from './analyze-angular.js';
 import { analyzeJava } from './analyze-java.js';
 import { analyzeMaven } from './analyze-maven.js';
+import { readSpringConfig } from './config.js';
+import { readMetadata } from './metadata.js';
 import { analyzeOpenApi } from './analyze-openapi.js';
 import { RXJS_ANALYZER } from './analyze-rxjs.js';
 import { detectTechnologies, technologyStatuses } from './detect.js';
@@ -39,7 +41,9 @@ import { buildGraph } from './graph.js';
 // 3 : onglets (groupes, libellés, chargement différé, routes) et composants affichés dans d'autres.
 // 4 : éléments interactifs (liens, input, sorties de composants, ngSubmit) reliés à leur cible et contexte.
 // 5 : contrats ($ref, servers, paramètres), modules Maven et générations, routes héritées, bases d'URL.
-export const ANALYZERS = `cartography-5;${RXJS_ANALYZER}`;
+// 6 : configuration par profil (variantes), préfixe des interfaces générées, métadonnées locales, proxys
+//     (JSON et JS statique, angular.json), gabarits en ligne entre guillemets.
+export const ANALYZERS = `cartography-6;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;
@@ -186,6 +190,9 @@ export async function runScan(
         sourceFacts.maven = analyzeMaven(read.files);
         scan.errors.push(...sourceFacts.maven.warnings.slice(0, 20));
       }
+      // La configuration Spring par profil (modèle commun : contexte d'exposition, ports, clients, passerelles).
+      const config = readSpringConfig(read.files);
+      if (config.entries.length > 0) sourceFacts.config = config;
       if (read.limits.length > 0) scan.state = 'PARTIAL';
       if (found.size === 0) scan.errors.push('aucune technologie reconnue dans cette source');
       facts.push(sourceFacts);
@@ -194,6 +201,32 @@ export async function runScan(
       scan.errors.push((error as Error).message);
     }
     options.onProgress?.({ ...record, sources: [...record.sources] });
+  }
+  // Les métadonnées de dépendances locales (sous une racine autorisée) : pom et contrats empaquetés.
+  for (const meta of options.config.metadata ?? []) {
+    if (options.signal?.aborted) break;
+    const entry: NonNullable<ScanRecord['metadata']>[number] = {
+      id: meta.id,
+      name: meta.name,
+      state: 'READ',
+      files: 0,
+      notes: [],
+    };
+    (record.metadata ??= []).push(entry);
+    if (!meta.enabled) {
+      entry.state = 'DISABLED';
+      continue;
+    }
+    try {
+      const root = await allowedPath(meta.path, options.allowedRoots);
+      const read = await readMetadata(meta.id, root);
+      entry.files = read.files;
+      entry.notes = read.skipped;
+      facts.push({ ...read.facts, analyzer: ANALYZERS });
+    } catch (error) {
+      entry.state = error instanceof SourceAccessError ? 'DENIED' : 'FAILED';
+      entry.notes.push(error instanceof Error ? error.message : String(error));
+    }
   }
   const graph = buildGraph({ sources: options.config.sources, facts });
   const counts: ScanRecord['counts'] = {};

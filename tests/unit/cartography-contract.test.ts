@@ -299,7 +299,11 @@ describe('correlation', () => {
       target: 'API:bff:POST /demandes/{demandeId}/validation',
       contract: 'API:contracts:POST /demandes/{demandeId}/validation',
     });
-    expect(c?.causes.map((x) => x.code)).toEqual(['GENERATED_INTERFACE_ABSENT']);
+    // requestMappingMode n'est pas déclaré : le préfixe de type reste indéterminé (aucun n'est inventé).
+    expect(c?.causes.map((x) => x.code)).toEqual([
+      'GENERATED_INTERFACE_ABSENT',
+      'GENERATION_OPTIONS_INSUFFICIENT',
+    ]);
     expect(c?.steps.map((s) => s.kind)).toEqual([
       'CALL',
       'BASE',
