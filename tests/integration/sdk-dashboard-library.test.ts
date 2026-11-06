@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { chromium, type Browser, type Locator, type Page } from 'playwright';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createQaCrawler, type Project, type QaCrawlerClient } from '../../src/sdk/core/index.js';
 import { flowsDirOf } from '../../src/sdk/server/platform.js';
 import { engineDefaults } from '../../src/sdk/server/project.js';
@@ -428,9 +428,16 @@ describe('Dashboard — scenario library in Chromium', () => {
     await composer.locator('[data-action="jn-pick"][data-block="Bloc création"]').click();
     await composer.locator('.jn-pal-item.picked[data-jn-block="Bloc création"]').waitFor();
     // Déposé sur la connexion Début → Fin : l'insertion est proposée, rien n'est relié d'office.
-    const edge = await composer.locator('.jn-edge .jn-e').first().boundingBox();
-    const box = await canvas.boundingBox();
-    if (!edge || !box) throw new Error('no edge');
+    // Le canevas redessine ses connexions après le choix : la mesure attend qu'elles aient une boîte.
+    const { edge, box } = await vi.waitFor(
+      async () => {
+        const edge = await composer.locator('.jn-edge .jn-e').first().boundingBox();
+        const box = await canvas.boundingBox();
+        if (!edge || !box) throw new Error('no edge');
+        return { edge, box };
+      },
+      { timeout: 5000, interval: 50 },
+    );
     await composer.locator('.jn-pal-item[data-jn-block="Bloc création"]').dragTo(canvas, {
       targetPosition: { x: edge.x + edge.width / 2 - box.x, y: edge.y + edge.height / 2 - box.y },
     });
