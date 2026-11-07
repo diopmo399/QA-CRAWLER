@@ -33,6 +33,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   suit plus le contenu des conteneurs et composants vers l'aval (fini les composants sans rapport dans
   le focus) ; `featureMap` renvoie `trace` (amont, aval, bouts, couches atteintes, statuts) et le noyau
   exporte `traceSteps` et `traceMainPath`.
+- Parcours guidé (maquette) : bandeau « Parcours d'exécution » aux étapes cliquables (Précédent,
+  Suivant, Revenir au début, Focus, Voir le code, Suivre le parcours), étape active et suivante en
+  évidence dans le graphe, modes Parcours principal (par défaut) / Branches alternatives / Graphe
+  complet, mini-carte des couches, onglet « Détails de l'étape » (rôle, preuve, relations entrante et
+  sortante, conditions, confiance) et fiche de l'élément choisi. Le chemin principal est numéroté en
+  premier, sans trou ; l'ordre est dit déduit du code, pas observé en exécution.
 
 ### Cartographie : contrats d'API des dépendances Maven
 

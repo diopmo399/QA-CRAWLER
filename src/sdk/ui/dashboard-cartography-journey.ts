@@ -41,8 +41,11 @@ export const JOURNEY_VIEWS = [
   'evidence',
 ] as const;
 export type JourneyView = (typeof JOURNEY_VIEWS)[number];
-export const JOURNEY_BOTTOMS = ['links', 'rules', 'stores', 'calls', 'data', 'evidence'] as const;
+export const JOURNEY_BOTTOMS = ['step', 'links', 'rules', 'stores', 'calls', 'data', 'evidence'] as const;
 export type JourneyBottom = (typeof JOURNEY_BOTTOMS)[number];
+/** Ce que le graphe montre de l'élément choisi : son chemin principal, toutes ses branches, ou tout. */
+export const JOURNEY_MODES = ['main', 'alt', 'full'] as const;
+export type JourneyMode = (typeof JOURNEY_MODES)[number];
 
 export interface JourneyState {
   jView: JourneyView;
@@ -58,6 +61,12 @@ export interface JourneyState {
   jDetail: boolean;
   /** La fonctionnalité dont les couloirs ont déjà été ajustés à la zone (une fois, à l'ouverture). */
   jFitted?: string;
+  /** L'étape active du parcours (rang dans le chemin principal) ; par défaut, l'élément choisi. */
+  jStep?: number;
+  /** Ce que le graphe montre de l'élément choisi. */
+  jMode: JourneyMode;
+  /** Suivre le parcours : changer d'étape amène son élément au centre du graphe. */
+  jFollow: boolean;
 }
 
 export const emptyJourney = (): JourneyState => ({
@@ -69,6 +78,8 @@ export const emptyJourney = (): JourneyState => ({
   jClosed: [],
   jOpen: [],
   jDetail: false,
+  jMode: 'main',
+  jFollow: true,
 });
 
 /** Ce qu'une vue met au premier plan : l'onglet du bas, la catégorie du tableau, les groupes mis en avant. */
@@ -119,6 +130,7 @@ const FR = {
     evidence: 'Preuves (Code)',
   } satisfies Record<JourneyView, string>,
   bottoms: {
+    step: () => 'Détails de l’étape',
     links: (n: number) => `Détails des liens (${String(n)})`,
     rules: (n: number) => `Conditions & Règles (${String(n)})`,
     stores: (n: number) => `Stores (${String(n)})`,
@@ -250,6 +262,73 @@ const FR = {
   fit: 'Ajuster à l’écran',
   full: 'Plein écran',
   exitFull: 'Quitter le plein écran',
+  guide: {
+    title: (name: string) => `Parcours d’exécution de ${name}`,
+    inferred: 'Ordre déduit des relations prouvées par le code, pas un ordre observé en exécution.',
+    follow: 'Suivre le parcours',
+    first: 'Revenir au début',
+    prev: 'Étape précédente',
+    next: 'Étape suivante',
+    focus: 'Focus sur cette étape',
+    proof: 'Voir la preuve',
+    modes: {
+      main: () => 'Parcours principal',
+      alt: (n: number) => `Branches alternatives (${String(n)})`,
+      full: () => 'Graphe complet',
+    } satisfies Record<JourneyMode, (n: number) => string>,
+    fullWarn: (n: number) =>
+      `Graphe complet : ${String(n)} éléments. Les cartes sont repliées et les liens regroupés par catégorie ; toutes les relations restent dans le tableau.`,
+    minimap: 'Mini-carte des couches',
+    stepOf: (k: number, n: number) => `Étape ${String(k)}/${String(n)}`,
+    role: 'Rôle',
+    layer: 'Couche',
+    proofTitle: 'Preuve (code)',
+    noProof: 'Aucune preuve rattachée à cet élément.',
+    relations: 'Relations de l’étape',
+    from: 'arrive de',
+    to: 'mène à',
+    others: 'Autres relations',
+    display: 'Conditions d’affichage',
+    noCondition: 'Aucune condition d’affichage démontrée pour cette étape.',
+    confidence: 'Niveau de confiance',
+    start: 'Point de départ du parcours.',
+    proved: 'Relation prouvée par le code.',
+    probable: 'Relation probable : déduite, pas démontrée.',
+    unknown: 'Relation non démontrée.',
+    roles: {
+      PAGE: 'Page (route) qui affiche l’écran.',
+      COMPONENT: 'Composant Angular : gabarit et logique de l’écran.',
+      CONTAINER: 'Conteneur de l’interface (section, onglet, cadre).',
+      FIELD: 'Champ de saisie de l’interface.',
+      BUTTON: 'Action de l’utilisateur dans l’interface.',
+      CONDITION: 'Condition d’affichage ou d’activation.',
+      STORE: 'Store TypeScript : état partagé côté SPA.',
+      SPA_SERVICE: 'Service SPA : appel HTTP ou logique côté navigateur.',
+      MODEL: 'Modèle de données côté SPA.',
+      CONTROLLER: 'Contrôleur : reçoit la requête HTTP.',
+      ENDPOINT: 'Endpoint HTTP exposé.',
+      CONTRACT: 'Contrat d’API (OpenAPI, interface).',
+      DTO: 'Objet de transfert échangé entre couches.',
+      SERVICE: 'Service : traitement métier ou orchestration.',
+      RULE: 'Règle métier (décision).',
+      CLIENT: 'Client sortant vers un autre système.',
+      METHOD: 'Méthode appelée sur le parcours.',
+      REPOSITORY: 'Repository : accès à la base de données.',
+      ENTITY: 'Entité JPA et sa table.',
+      EXTERNAL_SERVICE: 'Service tiers, hors du projet.',
+      EXTERNAL_CALL: 'Appel vers un service tiers.',
+    } satisfies Record<FeatureGroup, string>,
+    info: {
+      title: 'Fiche de l’élément',
+      nature: 'Nature',
+      layer: 'Couche',
+      detail: 'Détail',
+      card: 'Carte',
+      links: 'Liens',
+      conditions: 'Conditions',
+      proof: 'Preuve',
+    },
+  },
   selected: 'Élément choisi',
   clear: 'Tout montrer',
   focusNote: (name: string) =>
@@ -329,6 +408,7 @@ const EN: JourneyStrings = {
     evidence: 'Evidence (code)',
   },
   bottoms: {
+    step: () => 'Step details',
     links: (n) => `Link details (${String(n)})`,
     rules: (n) => `Conditions & rules (${String(n)})`,
     stores: (n) => `Stores (${String(n)})`,
@@ -454,6 +534,73 @@ const EN: JourneyStrings = {
   fit: 'Fit to screen',
   full: 'Full screen',
   exitFull: 'Exit full screen',
+  guide: {
+    title: (name) => `Execution path of ${name}`,
+    inferred: 'Order inferred from relations proven by the code, not an order observed at run time.',
+    follow: 'Follow the path',
+    first: 'Back to the start',
+    prev: 'Previous step',
+    next: 'Next step',
+    focus: 'Focus on this step',
+    proof: 'See the evidence',
+    modes: {
+      main: () => 'Main path',
+      alt: (n) => `Alternative branches (${String(n)})`,
+      full: () => 'Complete graph',
+    },
+    fullWarn: (n) =>
+      `Complete graph: ${String(n)} elements. Cards are collapsed and links grouped by category; every relation stays in the table.`,
+    minimap: 'Layer mini-map',
+    stepOf: (k, n) => `Step ${String(k)}/${String(n)}`,
+    role: 'Role',
+    layer: 'Layer',
+    proofTitle: 'Evidence (code)',
+    noProof: 'No evidence attached to this element.',
+    relations: 'Step relations',
+    from: 'comes from',
+    to: 'leads to',
+    others: 'Other relations',
+    display: 'Display conditions',
+    noCondition: 'No display condition demonstrated for this step.',
+    confidence: 'Confidence',
+    start: 'Start of the path.',
+    proved: 'Relation proven by the code.',
+    probable: 'Probable relation: inferred, not demonstrated.',
+    unknown: 'Relation not demonstrated.',
+    roles: {
+      PAGE: 'Page (route) showing the screen.',
+      COMPONENT: 'Angular component: template and screen logic.',
+      CONTAINER: 'Interface container (section, tab, frame).',
+      FIELD: 'Input field of the interface.',
+      BUTTON: 'User action in the interface.',
+      CONDITION: 'Display or enabling condition.',
+      STORE: 'TypeScript store: shared SPA state.',
+      SPA_SERVICE: 'SPA service: HTTP call or browser-side logic.',
+      MODEL: 'SPA data model.',
+      CONTROLLER: 'Controller: receives the HTTP request.',
+      ENDPOINT: 'Exposed HTTP endpoint.',
+      CONTRACT: 'API contract (OpenAPI, interface).',
+      DTO: 'Transfer object exchanged between layers.',
+      SERVICE: 'Service: business processing or orchestration.',
+      RULE: 'Business rule (decision).',
+      CLIENT: 'Outgoing client to another system.',
+      METHOD: 'Method called on the path.',
+      REPOSITORY: 'Repository: database access.',
+      ENTITY: 'JPA entity and its table.',
+      EXTERNAL_SERVICE: 'Third-party service, outside the project.',
+      EXTERNAL_CALL: 'Call to a third-party service.',
+    },
+    info: {
+      title: 'Element sheet',
+      nature: 'Nature',
+      layer: 'Layer',
+      detail: 'Detail',
+      card: 'Card',
+      links: 'Links',
+      conditions: 'Conditions',
+      proof: 'Evidence',
+    },
+  },
   selected: 'Selected element',
   clear: 'Show everything',
   focusNote: (name) =>
@@ -568,13 +715,19 @@ function memberText(item: FeatureMapItem): string {
 }
 
 /** Les éléments voisins de l'élément choisi (d'après la page de relations filtrée sur lui). */
-function neighbourSet(map: FeatureMap, selected: string | undefined): Set<string> | undefined {
+function neighbourSet(
+  map: FeatureMap,
+  selected: string | undefined,
+  ids?: readonly string[],
+): Set<string> | undefined {
   if (!selected) return undefined;
   const set = new Set<string>([selected]);
   const card = map.items.find((i) => i.id === selected)?.card;
   for (const item of map.items) if (item.card === selected || (card && item.id === card)) set.add(item.id);
   // Les voisins donnés par le serveur (toutes les relations) ; sinon, ceux de la page du tableau.
-  for (const id of map.neighbours ?? map.relations.items.flatMap((r) => [r.from, r.to])) set.add(id);
+  // Le chemin demandé ; sinon les voisins donnés par le serveur (toutes les relations) ; sinon ceux de la
+  // page du tableau.
+  for (const id of ids ?? map.neighbours ?? map.relations.items.flatMap((r) => [r.from, r.to])) set.add(id);
   return set;
 }
 
@@ -650,6 +803,8 @@ function laneCards(
 ): string {
   const items = map.items.filter((i) => i.lane === lane);
   const badge = (id: string): string => stepBadge(s, path?.steps.get(id), path?.ends.get(id));
+  // L'étape active du parcours et la suivante, mises en évidence.
+  const stepCls = (id: string): string => (path?.on === id ? ' on' : path?.next === id ? ' next' : '');
   const groupOf = (list: readonly FeatureMapItem[], key: (i: FeatureMapItem) => string) => {
     const out = new Map<string, FeatureMapItem[]>();
     for (const i of list) {
@@ -697,10 +852,10 @@ function laneCards(
       const cardDim = near && !members.some((i) => near.has(i.id));
       const zero = links === 0;
       const member = (i: FeatureMapItem): string =>
-        `<li><button class="jr-m${i.id === st.jSelect ? ' sel' : ''}${i.links === 0 ? ' zero' : ''}${near && !near.has(i.id) ? ' dim' : ''}" data-action="map-j-item" data-item="${esc(i.id)}" title="${esc(i.sub ? `${i.label ?? i.name} — ${i.sub}` : (i.label ?? i.name))}">${badge(i.id)}<span>${esc(memberText(i))}</span>${i.sub ? `<small>${esc(i.sub)}</small>` : ''}${i.links === 0 ? `<em>${esc(s.isolated)}</em>` : ''}</button></li>`;
+        `<li><button class="jr-m${i.id === st.jSelect ? ' sel' : ''}${stepCls(i.id)}${i.links === 0 ? ' zero' : ''}${near && !near.has(i.id) ? ' dim' : ''}" data-action="map-j-item" data-item="${esc(i.id)}" title="${esc(i.sub ? `${i.label ?? i.name} — ${i.sub}` : (i.label ?? i.name))}">${badge(i.id)}<span>${esc(memberText(i))}</span>${i.sub ? `<small>${esc(i.sub)}</small>` : ''}${i.links === 0 ? `<em>${esc(s.isolated)}</em>` : ''}</button></li>`;
       return {
         near: !cardDim,
-        html: `<div class="jr-card${sel ? ' sel' : ''}${cardDim ? ' dim' : ''}${zero ? ' zero' : ''}"><button class="jr-ch" data-action="map-j-item" data-item="${esc(title?.id ?? card)}" title="${esc(title?.cardTitle ?? '')}">${badge(title?.id ?? card)}${icon(GROUP_ICON[group] ?? 'cube')}<span><b>${esc(head ? (head.label ?? head.name) : (title?.cardTitle ?? card))}</b>${head?.sub ? `<small>${esc(head.sub)}</small>` : ''}</span>${count}</button>${shown.length ? `<ul class="jr-ml">${shown.map(member).join('')}</ul>` : ''}${toggle}</div>`,
+        html: `<div class="jr-card${sel ? ' sel' : ''}${cardDim ? ' dim' : ''}${zero ? ' zero' : ''}"><button class="jr-ch${stepCls(title?.id ?? card)}" data-action="map-j-item" data-item="${esc(title?.id ?? card)}" title="${esc(title?.cardTitle ?? '')}">${badge(title?.id ?? card)}${icon(GROUP_ICON[group] ?? 'cube')}<span><b>${esc(head ? (head.label ?? head.name) : (title?.cardTitle ?? card))}</b>${head?.sub ? `<small>${esc(head.sub)}</small>` : ''}</span>${count}</button>${shown.length ? `<ul class="jr-ml">${shown.map(member).join('')}</ul>` : ''}${toggle}</div>`,
       };
     });
     const more = hidden > 0 ? `<p class="jr-hidden">${esc(s.hiddenCards(hidden))}</p>` : '';
@@ -902,20 +1057,52 @@ function overview(s: JourneyStrings, map: FeatureMap, h: JourneyHelpers): string
 }
 
 /** Les numéros d'étape du parcours de l'élément choisi et le bout de chaque branche. */
+/** Le parcours guidé de l'élément choisi : numéros, bouts, chemin principal et étape active. */
 interface PathInfo {
   steps: Map<string, number>;
   ends: Map<string, FeatureTraceEnd>;
+  /** Le chemin principal, de la page jusqu'au bout le plus significatif. */
+  main: FeatureTraceStep[];
+  /** Le rang de l'élément choisi dans le chemin principal (avant lui : l'amont). */
+  upLen: number;
+  /** Le rang de l'étape active. */
+  active: number;
+  /** L'élément de l'étape active et celui de l'étape suivante, mis en évidence dans le graphe. */
+  on?: string;
+  next?: string;
 }
 
-function pathInfo(map: FeatureMap): PathInfo | undefined {
+function pathInfo(map: FeatureMap, st: JourneyState): PathInfo | undefined {
   const t = map.trace;
   if (!t) return undefined;
   const ends = new Map<string, FeatureTraceEnd>();
   for (const x of t.down) if (x.end) ends.set(x.id, x.end);
-  return { steps: traceSteps(t), ends };
+  const main = traceMainPath(t);
+  const upLen = Math.max(
+    0,
+    main.findIndex((x) => x.id === t.item),
+  );
+  const active = Math.min(Math.max(0, st.jStep ?? upLen), Math.max(0, main.length - 1));
+  return {
+    steps: traceSteps(t),
+    ends,
+    main,
+    upLen,
+    active,
+    on: main[active]?.id,
+    next: main[active + 1]?.id,
+  };
 }
 
-/** Le numéro d'une étape (le même dans le fil, le graphe et le tableau), vert au bout, rouge à la rupture. */
+/** La relation qui mène à l'étape `i` du chemin : en amont, portée par l'étape la plus lointaine. */
+function linkInto(p: PathInfo, i: number): FeatureTraceStep['via'] {
+  return i <= p.upLen ? p.main[i - 1]?.via : p.main[i]?.via;
+}
+
+const verbOf = (s: JourneyStrings, via: NonNullable<FeatureTraceStep['via']>): string =>
+  via.kinds.map((k) => s.trace.verbs[k] ?? s.categories[via.category]).join(' + ');
+
+/** Le numéro d'une étape (le même dans le bandeau, le graphe et le tableau), vert au bout, rouge à la rupture. */
 function stepBadge(s: JourneyStrings, n: number | undefined, end?: FeatureTraceEnd): string {
   if (n === undefined) return '';
   const cls = end === 'STOP' ? ' stop' : end === 'TABLE' || end === 'EXTERNAL' ? ' goal' : '';
@@ -923,50 +1110,50 @@ function stepBadge(s: JourneyStrings, n: number | undefined, end?: FeatureTraceE
 }
 
 /**
- * Le fil du parcours, au-dessus du graphe : le chemin principal numéroté, de la page jusqu'à la table ou
- * l'API externe, avec le verbe de chaque relation, ses statuts non confirmés, les passages de couche et le
- * bout atteint ; puis les ruptures avec leur cause. Les autres étapes gardent leur numéro dans le graphe
- * et le tableau.
+ * Le bandeau « Parcours d'exécution », au-dessus du graphe : les étapes du chemin principal numérotées,
+ * de la page jusqu'à la table ou l'API externe, chacune cliquable ; entre deux étapes le verbe de la
+ * relation et son statut s'il n'est pas confirmé, les passages de couche, le bout atteint. Précédent,
+ * Suivant, Revenir au début, Focus, Voir la preuve et Suivre le parcours. L'ordre est déduit du code, pas
+ * observé en exécution, et le bandeau le dit ; les ruptures restent visibles avec leur cause.
  */
-function pathRibbon(
+function guideBar(
   s: JourneyStrings,
   map: FeatureMap,
   st: JourneyState,
   h: JourneyHelpers,
   selected: FeatureMapItem,
+  p: PathInfo | undefined,
 ): string {
   const t = map.trace;
   const clear = `<button class="lnk" data-action="map-j-clear">${esc(s.clear)}</button>`;
-  if (!t)
+  if (!t || !p)
     return `<p class="jr-focus" role="status">${icon('target')}<span>${esc(s.focusNote(selected.label ?? selected.name))}</span>${clear}</p>`;
-  const steps = traceSteps(t);
-  const main = traceMainPath(t);
-  const upLen = Math.max(
-    0,
-    main.findIndex((x) => x.id === t.item),
-  );
+  const g = s.guide;
+  const { main, steps, active } = p;
   const ends = new Map<FeatureTraceEnd, number>();
   for (const x of t.down) if (x.end) ends.set(x.end, (ends.get(x.end) ?? 0) + 1);
-  const verb = (via: NonNullable<FeatureTraceStep['via']>): string =>
-    via.kinds.map((k) => s.trace.verbs[k] ?? s.categories[via.category]).join(' + ');
-  const crumb = (x: FeatureTraceStep): string =>
-    `<li class="jr-cr l-${x.lane.toLowerCase()}"><button class="jr-crb${x.id === st.jSelect ? ' sel' : ''}" data-action="map-j-item" data-item="${esc(x.id)}" title="${esc(`${s.lanes[x.lane][0]} · ${s.groups[x.group]}${x.sub ? ` — ${x.sub}` : ''}`)}">${stepBadge(s, steps.get(x.id), x.end)}${icon(GROUP_ICON[x.group] ?? 'cube')}<span>${esc(x.name)}</span></button></li>`;
-  const link = (via: FeatureTraceStep['via'], to: FeatureTraceStep, from: FeatureTraceStep): string => {
-    const arrow = via
-      ? `<li class="jr-cl c-${via.category.toLowerCase()}${via.status === 'CONFIRMED' ? '' : ' weak'}" title="${esc(via.reason)}"><span>${esc(verb(via))}</span>${via.status === 'CONFIRMED' ? '' : h.conf(via.status)}</li>`
-      : '<li class="jr-cl"><span>→</span></li>';
+  const stepBtn = (x: FeatureTraceStep, i: number): string => {
+    const cls = `${i === active ? ' on' : i === active + 1 ? ' next' : ''}${x.end === 'STOP' ? ' stop' : ''}`;
+    return `<li class="jr-gs l-${x.lane.toLowerCase()}${cls}"><button class="jr-crb" data-action="map-j-step" data-step="${String(i)}" data-item="${esc(x.id)}" aria-current="${i === active ? 'step' : 'false'}" title="${esc(`${s.lanes[x.lane][0]} · ${s.groups[x.group]}${x.sub ? ` — ${x.sub}` : ''}`)}">${stepBadge(s, steps.get(x.id), x.end)}<span class="jr-gk">${icon(GROUP_ICON[x.group] ?? 'cube')}${esc(s.groups[x.group])}</span><span>${esc(x.name)}</span></button></li>`;
+  };
+  const arrow = (i: number): string => {
+    const via = linkInto(p, i);
+    const to = main[i];
+    const from = main[i - 1];
+    const on = i === active + 1 ? ' on' : '';
+    const link = via
+      ? `<li class="jr-cl c-${via.category.toLowerCase()}${via.status === 'CONFIRMED' ? '' : ' weak'}${on}" title="${esc(via.reason)}"><span>${esc(verbOf(s, via))}</span>${via.status === 'CONFIRMED' ? '' : h.conf(via.status)}</li>`
+      : `<li class="jr-cl${on}"><span>→</span></li>`;
     const cross =
-      to.lane !== from.lane
+      to && from && to.lane !== from.lane
         ? `<li class="jr-cx l-${to.lane.toLowerCase()}">${icon(LANE_ICON[to.lane])}<span>${esc(s.lanes[to.lane][0])}</span></li>`
         : '';
-    return `${arrow}${cross}`;
+    return `${link}${cross}`;
   };
   const parts: string[] = [];
   main.forEach((x, i) => {
-    const prev = main[i - 1];
-    // En amont, la relation est portée par l'étape la plus lointaine ; en aval, par l'étape atteinte.
-    if (prev) parts.push(link(i <= upLen ? prev.via : x.via, x, prev));
-    parts.push(crumb(x));
+    if (i > 0) parts.push(arrow(i));
+    parts.push(stepBtn(x, i));
   });
   const last = main[main.length - 1];
   if (last?.end === 'TABLE' || last?.end === 'EXTERNAL' || last?.end === 'STOP')
@@ -984,7 +1171,15 @@ function pathRibbon(
     )
     .join('');
   const others = steps.size - new Set(main.map((x) => x.id)).size;
-  const head = `<div class="jr-ph1">${icon('target')}<b class="jr-pt">${esc(s.trace.title(selected.label ?? selected.name))}</b><span class="mu">${esc(s.trace.steps(steps.size))}</span>${statuses}${endChips}${others > 0 ? `<span class="mu">${esc(s.trace.others(others))}</span>` : ''}${clear}</div>`;
+  // Les commandes : début, précédent, suivant, focus sur l'étape, sa preuve, suivre le parcours.
+  const go = (i: number, label: string, ic: string): string => {
+    const x = main[i];
+    return `<button class="btn small icon-only" data-action="map-j-step" data-step="${String(i)}" data-item="${esc(x?.id ?? '')}" aria-label="${esc(label)}" title="${esc(label)}"${x && i !== active ? '' : ' disabled'}>${icon(ic)}</button>`;
+  };
+  const cur = main[active];
+  const proof = cur ? h.evidence(cur.evidence ?? linkInto(p, active)?.evidence) : '';
+  const controls = `<div class="jr-gctl">${go(0, g.first, 'undo')}${go(active - 1, g.prev, 'back')}${go(active + 1, g.next, 'right')}<button class="btn small" data-action="map-j-item" data-item="${esc(cur?.id ?? '')}"${cur && cur.id !== selected.id ? '' : ' disabled'}>${icon('target')}<span>${esc(g.focus)}</span></button>${proof ? `<span class="jr-gproof" title="${esc(g.proof)}">${proof}</span>` : ''}<button class="jr-tog" data-action="map-j-follow" aria-pressed="${String(st.jFollow)}"><i aria-hidden="true"></i><span>${esc(g.follow)}</span></button>${clear}</div>`;
+  const head = `<div class="jr-ph1">${icon('play')}<b class="jr-pt">${esc(g.title(selected.label ?? selected.name))}</b><span class="mu">${esc(s.trace.steps(steps.size))}</span>${statuses}${endChips}${others > 0 ? `<span class="mu">${esc(s.trace.others(others))}</span>` : ''}${controls}</div>`;
   const stops = t.down.filter((x) => x.end === 'STOP' && x.id !== last?.id);
   const stopLine = stops.length
     ? `<div class="jr-stops"><b>${esc(s.trace.stops)} :</b>${stops
@@ -996,7 +1191,71 @@ function pathRibbon(
         .join('')}${stops.length > 8 ? `<span class="mu">${esc(s.more(stops.length - 8))}</span>` : ''}</div>`
     : '';
   const cut = t.truncated ? `<p class="map-note warn-t">${esc(s.trace.truncated)}</p>` : '';
-  return `<div class="jr-focus jr-path" role="status" data-path>${head}<ol class="jr-crumbs">${parts.join('')}</ol>${stopLine}${cut}</div>`;
+  return `<div class="jr-focus jr-path" role="status" data-path>${head}<ol class="jr-crumbs">${parts.join('')}</ol><p class="jr-pnote">${esc(g.inferred)}</p>${stopLine}${cut}</div>`;
+}
+
+/** Les modes du graphe (chemin principal, branches, tout) et la mini-carte des couches du parcours. */
+function modeBar(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathInfo): string {
+  const g = s.guide;
+  const mainIds = new Set(p.main.map((x) => x.id));
+  const branches = (map.trace?.down ?? []).filter((x) => x.end && !mainIds.has(x.id)).length;
+  const modes = JOURNEY_MODES.map(
+    (m) =>
+      `<button class="jr-mode${st.jMode === m ? ' on' : ''}" data-action="map-j-mode" data-mode="${m}" aria-pressed="${String(st.jMode === m)}">${esc(g.modes[m](branches))}</button>`,
+  ).join('');
+  const activeLane = p.main[p.active]?.lane;
+  const mini = FEATURE_LANES.map((l) => {
+    const n = p.main.filter((x) => x.lane === l).length;
+    return `<button class="jr-mn l-${l.toLowerCase()}${l === activeLane ? ' on' : ''}${n ? '' : ' off'}" data-action="map-j-lane" data-lane="${l}" title="${esc(`${s.lanes[l][0]} : ${s.trace.steps(n)}`)}">${icon(LANE_ICON[l])}<b>${String(n)}</b></button>`;
+  }).join('<span class="jr-mna" aria-hidden="true">→</span>');
+  return `<div class="jr-gbar"><div class="jr-modes" role="group">${modes}</div><div class="jr-mini" role="group" aria-label="${esc(g.minimap)}">${mini}</div></div>`;
+}
+
+/**
+ * « Détails de l'étape » : l'étape active (rôle, couche, preuve), la relation qui y mène et celle qui
+ * en part, ses autres relations, ses conditions d'affichage et le niveau de confiance de la relation.
+ */
+function stepDetail(s: JourneyStrings, map: FeatureMap, h: JourneyHelpers, p: PathInfo): string {
+  const g = s.guide;
+  const x = p.main[p.active];
+  if (!x) return `<p class="mu">${esc(s.noRelations)}</p>`;
+  const n = p.main.length;
+  const into = p.active > 0 ? linkInto(p, p.active) : undefined;
+  const out = p.active < n - 1 ? linkInto(p, p.active + 1) : undefined;
+  const prev = p.main[p.active - 1];
+  const next = p.main[p.active + 1];
+  const rel = (label: string, other: FeatureTraceStep, i: number, via: FeatureTraceStep['via']): string =>
+    `<li><span class="mu">${esc(label)}</span><button class="lnk" data-action="map-j-step" data-step="${String(i)}" data-item="${esc(other.id)}">${stepBadge(s, p.steps.get(other.id), other.end)}${esc(other.name)}</button>${via ? `<span class="jr-ct c-${via.category.toLowerCase()}">${icon(CAT_ICON[via.category])}${esc(verbOf(s, via))}</span>${h.conf(via.status)}${h.evidence(via.evidence)}` : ''}</li>`;
+  const pair = new Set([prev?.id, next?.id].filter((v): v is string => v !== undefined));
+  const others = map.relations.items
+    .filter((r) => (r.from === x.id && !pair.has(r.to)) || (r.to === x.id && !pair.has(r.from)))
+    .slice(0, 6)
+    .map(
+      (r) =>
+        `<li><span class="jr-ct c-${r.category.toLowerCase()}">${icon(CAT_ICON[r.category])}${esc(s.categories[r.category])}</span><span>${esc(r.fromName)} → ${esc(r.toName)}</span>${h.conf(r.status)}</li>`,
+    )
+    .join('');
+  const conds = map.conditions.filter((c) => c.element.id === x.id);
+  const condHtml = conds.length
+    ? `<ul class="jr-rules">${conds.map((c) => `<li><span class="jr-rk">${esc(aspectLabel(s, c))} :</span> <code>${esc(c.expression)}</code>${c.decision ? `<small>→ ${esc(c.decision)}</small>` : ''}${h.conf(c.status)}</li>`).join('')}</ul>`
+    : `<p class="mu small">${esc(g.noCondition)}</p>`;
+  const trust = !into
+    ? `<p>${esc(g.start)}</p>`
+    : `<p>${h.conf(into.status)}</p><p class="small">${esc(into.status === 'CONFIRMED' ? g.proved : into.status === 'PROBABLE' ? g.probable : g.unknown)}</p>`;
+  const end = x.end
+    ? `<p class="jr-pend e-${x.end.toLowerCase()}">${esc(s.trace.ends[x.end])}${x.end === 'STOP' ? ` : ${esc(x.gap ?? s.trace.noOut)}` : ''}</p>`
+    : '';
+  const proof = h.evidence(x.evidence ?? into?.evidence);
+  return `<div class="jr-sd" data-step-detail><section><span class="jr-sdk">${stepBadge(s, p.steps.get(x.id), x.end)}${esc(g.stepOf(p.active + 1, n))}</span><h4>${esc(s.groups[x.group])} : ${esc(x.name)}</h4><dl><dt>${esc(g.role)}</dt><dd>${esc(g.roles[x.group])}</dd><dt>${esc(g.layer)}</dt><dd>${esc(s.lanes[x.lane][0])}</dd>${x.sub ? `<dt>${esc(g.info.detail)}</dt><dd><code>${esc(x.sub)}</code></dd>` : ''}</dl><h5>${esc(g.proofTitle)}</h5>${proof || `<p class="mu small">${esc(g.noProof)}</p>`}</section><section><h5>${esc(g.relations)}</h5><ul class="jr-sdl">${prev ? rel(g.from, prev, p.active - 1, into) : ''}${next ? rel(g.to, next, p.active + 1, out) : ''}</ul>${others ? `<h5>${esc(g.others)}</h5><ul class="jr-sdl">${others}</ul>` : ''}</section><section><h5>${esc(g.display)}</h5>${condHtml}</section><section class="jr-trust"><h5>${esc(g.confidence)}</h5>${trust}${end}</section></div>`;
+}
+
+/** La fiche de l'élément choisi, sous l'arbre : ce que le scan en sait, rien de plus. */
+function infoCard(s: JourneyStrings, map: FeatureMap, h: JourneyHelpers, item: FeatureMapItem): string {
+  const g = s.guide.info;
+  const conds = map.conditions.filter((c) => c.element.id === item.id).length;
+  const row = (label: string, value: string): string => `<dt>${esc(label)}</dt><dd>${value}</dd>`;
+  const proof = h.evidence(item.evidence);
+  return `<section class="jr-info" data-info><h3>${icon(GROUP_ICON[item.group] ?? 'cube')}${esc(g.title)}</h3><p class="jr-in"><b>${esc(item.label ?? item.name)}</b></p><dl>${row(g.nature, esc(s.groups[item.group]))}${row(g.layer, esc(s.lanes[item.lane][0]))}${item.sub ? row(g.detail, `<code>${esc(item.sub)}</code>`) : ''}${item.card !== item.id ? row(g.card, esc(item.cardTitle)) : ''}${row(g.links, String(item.links))}${row(g.conditions, String(conds))}${proof ? row(g.proof, proof) : ''}</dl></section>`;
 }
 
 function bottom(
@@ -1021,6 +1280,7 @@ function bottom(
   );
   const dataCount = map.categories.DATA + map.categories.PERSISTENCE;
   const counts: Record<JourneyBottom, number> = {
+    step: path?.main.length ?? 0,
     links: map.relationCount,
     rules: map.conditions.length,
     stores: new Set(stores.map((i) => i.card)).size,
@@ -1028,15 +1288,25 @@ function bottom(
     data: dataCount,
     evidence: map.relationCount,
   };
-  const tabs = `<div class="tabs jr-btabs" role="tablist">${JOURNEY_BOTTOMS.map((b) => `<button role="tab" data-action="map-j-bottom" data-tab="${b}" aria-selected="${String(st.jBottom === b)}">${esc(s.bottoms[b](counts[b]))}</button>`).join('')}</div>`;
+  // « Détails de l'étape » n'existe qu'avec un parcours ; sans lui, le tableau des liens.
+  const current: JourneyBottom = st.jBottom === 'step' && !path ? 'links' : st.jBottom;
+  const tabs = `<div class="tabs jr-btabs" role="tablist">${JOURNEY_BOTTOMS.filter(
+    (b) => b !== 'step' || path,
+  )
+    .map(
+      (b) =>
+        `<button role="tab" data-action="map-j-bottom" data-tab="${b}" aria-selected="${String(current === b)}">${esc(s.bottoms[b](counts[b]))}</button>`,
+    )
+    .join('')}</div>`;
   let body: string;
-  if (st.jBottom === 'rules') body = conditionsTable(s, map, h);
-  else if (st.jBottom === 'stores')
+  if (current === 'step' && path) body = stepDetail(s, map, h, path);
+  else if (current === 'rules') body = conditionsTable(s, map, h);
+  else if (current === 'stores')
     body = stores.length
       ? itemsTable(s, stores, s.noStores)
       : `<p class="mu">${esc(s.noStores)}</p>${gapsPanel(s, { ...map, gaps: map.gaps.filter((g) => g.code === 'NO_STORE') })}`;
-  else if (st.jBottom === 'calls') body = itemsTable(s, calls, s.noCalls);
-  else if (st.jBottom === 'data')
+  else if (current === 'calls') body = itemsTable(s, calls, s.noCalls);
+  else if (current === 'data')
     body = `${flowChain(s, map)}${bundlesList(
       s,
       map.bundles.filter((b) => b.category === 'DATA' || b.category === 'PERSISTENCE'),
@@ -1056,16 +1326,33 @@ export function journeyTab(st: JourneyState, h: JourneyHelpers): string {
     return `<section class="card jr">${featurePicker(s, undefined, h)}${h.paneError(h.error)}${h.error ? '' : h.spinner()}</section>`;
   const views = `<div class="tabs jr-views" role="tablist" aria-label="${esc(map.feature.name)}">${JOURNEY_VIEWS.map((v) => `<button role="tab" data-action="map-j-view" data-view="${v}" aria-selected="${String(st.jView === v)}">${esc(s.views[v])}</button>`).join('')}</div>`;
   const selected = st.jSelect ? map.items.find((i) => i.id === st.jSelect) : undefined;
-  const near = selected ? neighbourSet(map, selected.id) : undefined;
-  const aside = `<aside class="jr-aside"><section><h3>${esc(s.feature)} : ${esc(map.feature.name)}</h3>${treeView(map.tree, st, map)}</section>${categoryList(s, map, st)}</aside>`;
   // La trace n'est lue que si elle est celle de l'élément choisi (pas celle d'une carte encore en cours).
   const traced = selected && map.trace?.item === selected.id ? map : { ...map, trace: undefined };
-  const path = selected ? pathInfo(traced) : undefined;
-  const focusNote = selected ? pathRibbon(s, traced, st, h, selected) : '';
+  const path = selected ? pathInfo(traced, st) : undefined;
+  // Le graphe : le chemin principal seul (par défaut), toutes les branches, ou tout sans repli.
+  const mode: JourneyMode = path ? st.jMode : 'alt';
+  const near = !selected
+    ? undefined
+    : mode === 'full'
+      ? undefined
+      : mode === 'main' && path
+        ? neighbourSet(
+            map,
+            selected.id,
+            path.main.map((x) => x.id),
+          )
+        : neighbourSet(map, selected.id);
+  const aside = `<aside class="jr-aside"><section><h3>${esc(s.feature)} : ${esc(map.feature.name)}</h3>${treeView(map.tree, st, map)}</section>${selected ? infoCard(s, map, h, selected) : ''}${categoryList(s, map, st)}</aside>`;
+  const guide = selected ? guideBar(s, traced, st, h, selected, path) : '';
+  const bar = path ? modeBar(s, traced, st, path) : '';
+  const fullWarn =
+    path && mode === 'full' && map.itemCount > 150
+      ? `<p class="map-note warn-t">${esc(s.guide.fullWarn(map.itemCount))}</p>`
+      : '';
   const center =
     st.jView === 'overview'
       ? overview(s, map, h)
-      : `<div class="jr-gh"><h3>${icon('play')}${esc(s.journeyTitle)}</h3>${toolbar(s, st)}</div>${focusNote}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`;
+      : `<div class="jr-gh"><h3>${icon('play')}${esc(s.journeyTitle)}</h3>${toolbar(s, st)}</div>${guide}${bar}${fullWarn}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`;
   const loading = h.loading ? `<span class="spin jr-busy" aria-label="${esc(s.loading)}"></span>` : '';
   return `<section class="card jr${st.jFull ? ' full' : ''}" data-jr><div class="jr-head">${featurePicker(s, map, h)}${loading}${kpis(s, map)}</div>${views}${h.paneError(h.error)}<div class="jr-body">${aside}<div class="jr-main">${center}</div></div>${bottom(s, map, st, h, path)}</section>`;
 }
@@ -1158,6 +1445,46 @@ export const JOURNEY_CSS = `
 .jr-m .jr-sn{align-self:center}.jr-ch .jr-sn{margin-top:0}
 .jr-sn2{display:inline-flex;gap:2px;align-items:center;white-space:nowrap}
 .jr-t td:last-child{white-space:nowrap}
+.jr-crumbs{row-gap:14px;padding-top:8px}
+.jr-gs.l-frontend,.jr-gs.l-bff,.jr-gs.l-backend,.jr-gs.l-external{background:none;border:0;display:flex}
+.jr-gs .jr-crb{flex-direction:column;align-items:flex-start;gap:1px;border-radius:10px;padding:8px 11px 5px;max-width:230px;position:relative;font-size:12px}
+.jr-gs .jr-crb>.jr-sn{position:absolute;top:-9px;left:50%;transform:translateX(-50%);box-shadow:0 0 0 2px var(--qa-color-surface)}
+.jr-gs .jr-crb>span{max-width:100%}
+.jr-gk{display:inline-flex;gap:4px;align-items:center;font-size:10px;font-weight:600;color:var(--qa-color-muted);text-transform:uppercase;letter-spacing:.02em}.jr-gk .ico{width:11px;height:11px}
+.jr-gs.l-frontend .jr-crb{background:#f4effc}.jr-gs.l-bff .jr-crb{background:#ecf4fd}.jr-gs.l-backend .jr-crb{background:#ecf8f0}.jr-gs.l-external .jr-crb{background:#fdf3e7}
+.jr-gs.on .jr-crb{outline:2px solid var(--qa-color-primary);box-shadow:0 2px 6px rgba(0,0,0,.12)}
+.jr-gs.next .jr-crb{outline:2px dashed #5aa87a}
+.jr-gs.stop .jr-crb{border-color:#f0a59d}
+.jr-cl.on{color:var(--qa-color-primary);font-weight:700}
+.jr-gctl{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-left:auto}
+.jr-gctl .btn .ico{width:14px;height:14px}.jr-gproof{display:inline-flex;align-items:center;font-size:12px}
+.jr-tog{display:inline-flex;gap:6px;align-items:center;border:0;background:none;font-size:12px;cursor:pointer;padding:2px 4px}
+.jr-tog i{width:26px;height:14px;border-radius:999px;background:#c8ccd2;position:relative;flex:none}
+.jr-tog i::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#fff;transition:left .15s}
+.jr-tog[aria-pressed="true"] i{background:var(--qa-color-primary)}.jr-tog[aria-pressed="true"] i::after{left:14px}
+.jr-pnote{margin:0;font-size:11px;color:var(--qa-color-muted);font-style:italic}
+.jr-gbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
+.jr-modes{display:inline-flex;flex-wrap:wrap;border:1px solid var(--qa-color-border);border-radius:999px;padding:2px;gap:2px}
+.jr-mode{border:0;background:none;border-radius:999px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer}
+.jr-mode.on{background:var(--qa-color-primary);color:#fff}
+.jr-mini{display:inline-flex;gap:3px;align-items:center}
+.jr-mn{display:inline-flex;gap:4px;align-items:center;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer}
+.jr-mn .ico{width:13px;height:13px}.jr-mn.off{opacity:.45}.jr-mn.on{outline:2px solid var(--qa-color-primary)}
+.jr-mna{color:var(--qa-color-muted);font-size:11px}
+.jr-m.on,.jr-ch.on{background:#e3f4e8;box-shadow:inset 0 0 0 2px var(--qa-color-primary)}
+.jr-m.next,.jr-ch.next{outline:2px dashed #5aa87a;outline-offset:-2px}
+.jr-sd{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.jr-sd section{border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);padding:8px;min-width:0}
+.jr-sd h4{margin:6px 0;font-size:13.5px;overflow-wrap:anywhere}
+.jr-sd h5{margin:6px 0 4px;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--qa-color-muted)}
+.jr-sd dl,.jr-info dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;margin:0;font-size:12px}
+.jr-sd dt,.jr-info dt{color:var(--qa-color-muted)}.jr-sd dd,.jr-info dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.jr-sdk{display:inline-flex;gap:5px;align-items:center;font-size:11.5px;font-weight:700;padding:2px 8px 2px 3px;border-radius:999px;background:#e3f4e8}
+.jr-sdl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:12px}
+.jr-sdl li{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center}.jr-sdl .lnk{display:inline-flex;gap:4px;align-items:center}
+.jr-trust p{margin:2px 0}
+.jr-info{border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);padding:8px}
+.jr-info h3 .ico{color:var(--qa-color-primary)}.jr-in{margin:0 0 6px;font-size:12.5px;overflow-wrap:anywhere}
 .jr-fold{display:block;width:100%;border:0;background:none;padding:2px 0;text-align:left;cursor:pointer;border-radius:5px}
 .jr-fold:hover{background:rgba(0,0,0,.04)}.jr-sec.folded{opacity:.55}.jr-sec.folded h4::after{content:"▸";margin-left:4px}
 .jr-folded{font-size:11px;padding:2px 4px;text-align:left}

@@ -341,8 +341,8 @@ function synthetic(n: number): CartographyModel {
   };
 }
 
-describe('volumes synthétiques : 0, 10, 100, 1 000 et 10 000 relations, catégorie « Tout »', () => {
-  for (const n of [0, 10, 100, 1_000, 10_000]) {
+describe('volumes synthétiques : 0, 10, 100, 160, 1 000 et 10 000 relations, catégorie « Tout »', () => {
+  for (const n of [0, 10, 100, 160, 1_000, 10_000]) {
     it(`${String(n)} relations : comptes exacts, faisceaux agrégés, réponse bornée`, () => {
       const index = buildIndex(synthetic(n));
       const started = performance.now();

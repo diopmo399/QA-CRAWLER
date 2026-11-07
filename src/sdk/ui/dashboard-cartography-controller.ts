@@ -39,9 +39,11 @@ import {
 import { mapStrings } from './dashboard-cartography-i18n.js';
 import {
   JOURNEY_BOTTOMS,
+  JOURNEY_MODES,
   JOURNEY_VIEWS,
   VIEW_PRESET,
   type JourneyBottom,
+  type JourneyMode,
   type JourneyView,
 } from './dashboard-cartography-journey.js';
 import {
@@ -637,14 +639,14 @@ export class CartographyController {
     if (auto) this.host.root.querySelector<HTMLElement>('.jr-gh')?.scrollIntoView({ block: 'start' });
   }
 
-  /** Centrer la vue sur l'élément choisi (ou le début des couloirs), sans changer l'échelle. */
-  private centerJourney(): void {
+  /** Centrer la vue sur un élément (par défaut l'élément choisi, sinon le début des couloirs), sans changer l'échelle. */
+  private centerJourney(on?: string): void {
     const canvas = this.host.root.querySelector<HTMLElement>('[data-jr-canvas]');
     if (!canvas) return;
-    const id = this.ui.jSelect;
+    const id = on ?? this.ui.jSelect;
     const target = id
       ? [...canvas.querySelectorAll<HTMLElement>('[data-action="map-j-item"]')].find(
-          (el) => el.dataset.item === id,
+          (el) => el.dataset.item === id && el.offsetParent !== null,
         )
       : undefined;
     if (!target) {
@@ -708,12 +710,52 @@ export class CartographyController {
         ui.jDetail = false;
         ui.jClosed = same ? [] : foldTree(ui.jMap?.tree ?? [], id, ui.jClosed);
         query({ item: same ? undefined : id });
-        ui.jBottom = 'links';
+        // Un élément choisi : son parcours guidé, le chemin principal seul, l'étape de l'élément active.
+        ui.jStep = undefined;
+        ui.jMode = 'main';
+        ui.jBottom = same ? 'links' : 'step';
         this.reloadJourney();
+        return true;
+      }
+      case 'map-j-step': {
+        // Une étape du parcours devient active ; « Suivre le parcours » l'amène au centre du graphe.
+        const step = Number(target.dataset.step);
+        if (!Number.isInteger(step) || step < 0) return true;
+        ui.jStep = step;
+        ui.jBottom = 'step';
+        this.host.paint();
+        const item = target.dataset.item;
+        if (ui.jFollow && item)
+          setTimeout(() => {
+            this.centerJourney(item);
+          }, 0);
+        return true;
+      }
+      case 'map-j-mode': {
+        const mode = target.dataset.mode as JourneyMode;
+        if (JOURNEY_MODES.includes(mode)) ui.jMode = mode;
+        this.host.paint();
+        return true;
+      }
+      case 'map-j-follow':
+        ui.jFollow = !ui.jFollow;
+        this.host.paint();
+        return true;
+      case 'map-j-lane': {
+        // La mini-carte : amener le couloir au début de la zone du graphe.
+        const canvas = this.host.root.querySelector<HTMLElement>('[data-jr-canvas]');
+        const lane = canvas?.querySelector<HTMLElement>(`.jr-lane[data-lane="${target.dataset.lane ?? ''}"]`);
+        if (canvas && lane)
+          canvas.scrollTo({
+            left:
+              canvas.scrollLeft + lane.getBoundingClientRect().left - canvas.getBoundingClientRect().left - 8,
+            top: 0,
+          });
         return true;
       }
       case 'map-j-clear':
         ui.jSelect = undefined;
+        ui.jStep = undefined;
         ui.jOpen = [];
         ui.jClosed = [];
         query({ item: undefined, category: undefined, lane: undefined });
@@ -1400,6 +1442,10 @@ export class CartographyController {
       case 'map-j-tree':
       case 'map-j-card':
       case 'map-j-detail':
+      case 'map-j-step':
+      case 'map-j-mode':
+      case 'map-j-follow':
+      case 'map-j-lane':
         return this.journeyAction(action, target);
       case 'map-tab': {
         const tab = target.dataset.tab as MapTab;

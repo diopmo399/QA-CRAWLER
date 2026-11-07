@@ -1709,15 +1709,17 @@ export interface FeatureTrace {
 }
 
 /**
- * L'ordre de lecture d'une trace, numéroté à partir de 1 : l'amont du plus loin au plus proche (la page,
- * le composant, le conteneur), l'élément choisi, puis l'aval étape par étape. Partagé par le serveur (ordre
- * du tableau) et l'interface (numéros du graphe) pour que les deux numérotations coïncident.
+ * L'ordre de lecture d'une trace, numéroté à partir de 1 : d'abord le chemin principal (de la page jusqu'à
+ * la table), sans trou ; puis les autres étapes, l'amont du plus loin au plus proche et l'aval étape par
+ * étape. Partagé par le serveur (ordre du tableau) et l'interface (numéros du bandeau et du graphe) pour
+ * que les numérotations coïncident.
  */
 export function traceSteps(trace: FeatureTrace): Map<string, number> {
   const order = new Map<string, number>();
   const add = (id: string): void => {
     if (!order.has(id)) order.set(id, order.size + 1);
   };
+  for (const s of traceMainPath(trace)) add(s.id);
   const up = trace.up.filter((s) => s.depth > 0);
   for (const s of [...up].sort((a, b) => b.depth - a.depth)) add(s.id);
   add(trace.item);
