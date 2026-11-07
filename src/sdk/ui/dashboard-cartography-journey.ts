@@ -829,8 +829,15 @@ function laneCards(
       // Repliée par défaut (le graphe tient dans l'écran) : dépliée si demandé, ouverte ou choisie.
       const compact = !st.jDetail && !open && !sel;
       // Repliée, une carte du parcours de l'élément choisi montre quand même ses membres sur ce parcours
-      // (la méthode du contrôleur, du service…).
-      const onPath = compact && near ? rest.filter((i) => near.has(i.id)) : [];
+      // (la méthode du contrôleur, du service…) ; dans le graphe complet (rien de replié), ses membres
+      // numérotés.
+      const onPath = !compact
+        ? []
+        : near
+          ? rest.filter((i) => near.has(i.id))
+          : path
+            ? rest.filter((i) => path.steps.has(i.id))
+            : [];
       const shown = compact ? onPath : open ? rest : rest.slice(0, MEMBERS_SHOWN);
       const links = members.reduce((sum, i) => sum + i.links, 0);
       const title = head ?? members[0];
