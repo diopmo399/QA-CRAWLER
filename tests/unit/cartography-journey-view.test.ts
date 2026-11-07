@@ -183,7 +183,7 @@ describe('onglet Parcours & Graphe', () => {
     const t = traced.trace;
     const html = render({ jMap: traced, jSelect: t?.item ?? '' });
     expect(html).toContain('data-path');
-    expect(html).toContain('<b class="jr-pt">Parcours de Refuse</b>');
+    expect(html).toContain('<b class="jr-pt">Parcours d’exécution de Refuse</b>');
     // Les éléments distincts de la trace, numérotés de 1 à n.
     const steps = new Set([...(t?.up ?? []), ...(t?.down ?? [])].map((x) => x.id)).size;
     expect(html).toContain(`${String(steps)} étapes`);
@@ -216,15 +216,65 @@ describe('onglet Parcours & Graphe', () => {
     expect(ribbon).toContain('1 table atteinte');
     expect(ribbon).toMatch(/\+\d+ autres étapes, numérotées dans le graphe/);
     expect(ribbon).not.toContain('Ruptures');
-    // Le graphe porte les mêmes numéros sur les cartes et les membres du parcours.
-    const graph = html.slice(html.indexOf('data-jr-canvas'), html.indexOf('jr-bottom'));
-    expect(count(graph, 'class="jr-sn')).toBe(steps);
+    // Le graphe porte les mêmes numéros : par défaut le chemin principal seul (les 12 étapes de la page à
+    // la table), avec toutes les branches ou tout le graphe sur demande.
+    const graphOf = (h: string) => h.slice(h.indexOf('data-jr-canvas'), h.indexOf('jr-bottom'));
+    expect(count(graphOf(html), 'class="jr-sn')).toBe(order.length);
+    const alt = render({ jMap: traced, jSelect: t?.item ?? '', jMode: 'alt' });
+    expect(count(graphOf(alt), 'class="jr-sn')).toBe(steps);
+    const full = render({ jMap: traced, jSelect: t?.item ?? '', jMode: 'full' });
+    expect(full).not.toContain('jr-sec dim folded');
+    expect(html).toContain('jr-sec dim folded');
     // Le tableau se lit dans l'ordre des étapes, chaque ligne avec ses deux numéros.
     const table = html.slice(html.indexOf('class="jr-t"'));
     expect(table).toMatch(/<td class="mu"><span class="jr-sn2"[^>]*><i class="jr-sn"[^>]*>1<\/i>/);
     expect(count(table, 'class="jr-sn2"')).toBe(traced.relations.items.length);
     // Sans élément choisi : aucun numéro.
     expect(render()).not.toContain('jr-sn');
+  });
+
+  it('le parcours guidé : étape active, précédente et suivante, détails de l’étape, fiche, modes', () => {
+    const t = traced.trace;
+    const at = (patch: Partial<JourneyState>) =>
+      render({ jMap: traced, jSelect: t?.item ?? '', jBottom: 'step', ...patch });
+    // Par défaut, l'étape active est l'élément choisi (4e du chemin : page, composant, conteneur, bouton).
+    const html = at({});
+    expect(html).toMatch(
+      /<li class="jr-gs l-frontend on"><button class="jr-crb" data-action="map-j-step" data-step="3"[^>]*aria-current="step"/,
+    );
+    expect(html).toMatch(/<li class="jr-gs l-frontend next"><button[^>]*data-step="4"/);
+    // Les commandes : début, précédent, suivant (l'étape visée), suivre le parcours (actif par défaut).
+    expect(html).toMatch(/data-step="0"[^>]*aria-label="Revenir au début"/);
+    expect(html).toMatch(/data-step="2"[^>]*aria-label="Étape précédente"/);
+    expect(html).toMatch(/data-step="4"[^>]*aria-label="Étape suivante"/);
+    expect(html).toContain('data-action="map-j-follow" aria-pressed="true"');
+    expect(html).toContain('Ordre déduit des relations prouvées par le code');
+    // Le graphe met en évidence l'élément de l'étape active et celui de l'étape suivante.
+    expect(html).toMatch(/class="jr-m sel on"|class="jr-ch on"/);
+    expect(html).toContain(' next"');
+    // Détails de l'étape : rang, rôle, couche, relation qui y mène et qui en part, confiance.
+    const detail = html.slice(html.indexOf('data-step-detail'));
+    expect(detail).toContain('Étape 4/12');
+    expect(detail).toContain('Boutons : Refuse');
+    expect(detail).toContain('Action de l’utilisateur dans l’interface.');
+    expect(detail).toMatch(/arrive de[^]*Validation[^]*mène à[^]*RequestService\.refuse/);
+    expect(detail).toContain('Relation prouvée par le code.');
+    // Une étape plus loin : la première étape probable du chemin le dit, la table est le bout.
+    const probable = at({ jStep: 8 });
+    expect(probable.slice(probable.indexOf('data-step-detail'))).toContain(
+      'Relation probable : déduite, pas démontrée.',
+    );
+    const last = at({ jStep: 99 });
+    expect(last.slice(last.indexOf('data-step-detail'))).toMatch(/Étape 12\/12[^]*REQUEST[^]*Table atteinte/);
+    // La fiche de l'élément choisi sous l'arbre ; les modes et la mini-carte des couches.
+    expect(html).toMatch(/data-info>[^]*Refuse[^]*Boutons[^]*Angular \(SPA\)/);
+    expect(html).toMatch(/data-mode="main" aria-pressed="true">Parcours principal/);
+    expect(html).toMatch(/Branches alternatives \(\d+\)/);
+    expect(count(html, 'data-action="map-j-lane"')).toBe(4);
+    // Sans parcours (carte d'une autre sélection) : ni onglet de l'étape ni bandeau d'étapes.
+    const plain = render({ jBottom: 'step' });
+    expect(plain).not.toContain('data-step-detail');
+    expect(plain).not.toContain('Détails de l’étape');
   });
 
   it('le tableau des liens montre la page demandée avec la preuve de chaque relation', () => {

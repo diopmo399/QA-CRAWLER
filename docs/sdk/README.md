@@ -1228,14 +1228,26 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
   Cliquer de nouveau l'élément, ou « Tout montrer », rouvre tout. Une
   catégorie (colonne gauche ou pastille) restreint le tableau à elle ; la sélection est gardée quand la
   catégorie change.
-- **Traçabilité ordonnée.** Au-dessus du graphe, le fil du parcours de l'élément choisi : son chemin
-  principal numéroté, de la page jusqu'à la table (ou l'API externe, ou le couloir le plus loin), avec le
-  verbe de chaque relation (affiche, contient, déclenche, appelle, dépend de, lit + écrit…), les statuts
-  qui ne sont pas confirmés, chaque passage de couche (BFF, Backend) et le bout atteint ; puis le nombre
-  d'étapes, les statuts, les tables et API atteintes, et les ruptures avec la cause donnée par le scan
-  (corrélation non démontrée) ou « aucune relation sortante démontrée ». Chaque étape du fil se choisit
-  à son tour. Les mêmes numéros sont portés dans le graphe (cartes et membres du parcours : vert au
-  bout, rouge à la rupture) et dans le tableau, trié dans l'ordre des étapes (« 9 → 10 »).
+- **Parcours guidé.** Choisir un élément ouvre, au-dessus du graphe, le bandeau « Parcours d'exécution » :
+  les étapes de son chemin principal, numérotées sans trou de la page jusqu'à la table (ou l'API
+  externe, ou le couloir le plus loin), chacune avec sa nature et son nom ; entre deux étapes le verbe de
+  la relation (affiche, contient, déclenche, appelle, dépend de, lit + écrit…), son statut s'il n'est pas
+  confirmé, chaque passage de couche (BFF, Backend) et le bout atteint. Le bandeau rappelle que l'ordre
+  est déduit des relations prouvées par le code, pas observé en exécution, et liste les ruptures avec la
+  cause donnée par le scan (corrélation non démontrée) ou « aucune relation sortante démontrée ».
+  Une étape se clique pour devenir active (Précédent, Suivant, Revenir au début) : elle est mise en
+  évidence dans le graphe, l'étape suivante en pointillé, et « Suivre le parcours » (actif par défaut)
+  l'amène au centre de la zone ; « Focus sur cette étape » en fait l'élément choisi ; « Voir le code »
+  ouvre sa preuve. Le graphe a trois modes : « Parcours principal » (par défaut, le chemin seul, le reste
+  replié), « Branches alternatives » (tout le parcours) et « Graphe complet » (sans repli, avec un
+  avertissement au-delà de 150 éléments) ; la mini-carte compte les étapes par couche et amène le
+  couloir à l'écran. L'onglet « Détails de l'étape » montre l'étape active : rang, nature, rôle, couche,
+  preuve, la relation qui y mène et celle qui en part (verbe, statut, preuve), ses autres relations, ses
+  conditions d'affichage et le niveau de confiance (prouvé par le code, probable, non démontré) ; la
+  fiche de l'élément choisi (nature, couche, détail, carte, liens, conditions, preuve) s'affiche sous
+  l'arbre. Les mêmes numéros sont portés dans le graphe (vert au bout, rouge à la rupture) et dans le
+  tableau des liens, trié dans l'ordre des étapes (« 9 → 10 ») ; les branches hors du chemin principal
+  sont numérotées après lui.
   Règles du parcours (serveur, `trace` de `featureMap`) : en aval, ni le contenu d'un conteneur ou d'un
   composant ni l'intérieur d'un écran atteint ne sont suivis (le focus ne ramasse pas des composants
   sans rapport) ; en amont, l'affichage d'une page compte. Une branche qui rejoint une étape déjà

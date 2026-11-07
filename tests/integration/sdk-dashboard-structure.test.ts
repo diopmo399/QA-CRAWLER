@@ -470,11 +470,11 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     // Le fil du parcours au-dessus du graphe : numéroté de la page jusqu'à la table, passages de couche.
     const ribbon = journey().locator('[data-path]');
     await ribbon.waitFor();
-    expect(await ribbon.locator('.jr-pt').textContent()).toBe('Parcours de Refuse');
+    expect(await ribbon.locator('.jr-pt').textContent()).toBe('Parcours d’exécution de Refuse');
     const crumbs = await ribbon.locator('.jr-crb').allTextContents();
-    expect(crumbs[0]).toBe('1/requests/create');
+    expect(crumbs[0]).toBe('1Pages/requests/create');
     expect(crumbs.join(' > ')).toMatch(
-      /4Refuse.*RequestService\.refuse.*RequestBffController\.refuse.*RequestController\.refuse.*REQUEST/,
+      /4BoutonsRefuse.*RequestService\.refuse.*RequestBffController\.refuse.*RequestController\.refuse.*REQUEST/,
     );
     expect(await ribbon.locator('.jr-cx').allTextContents()).toEqual(['BFF', 'Backend (Java)']);
     expect(await ribbon.locator('.jr-crumbs .jr-pend').textContent()).toBe('Table atteinte');
@@ -482,10 +482,17 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     const controllerStep = crumbs.find((c) => c.endsWith('RequestController.refuse'))?.replace(/\D+$/, '');
     const backendCard = journey().locator('.jr-card', { hasText: 'RequestController' }).first();
     expect(await backendCard.locator('.jr-m .jr-sn').textContent()).toBe(controllerStep);
+    // L'étape active est l'élément choisi : en évidence dans le bandeau et le graphe, détaillée en bas.
+    expect(await ribbon.locator('.jr-gs.on').textContent()).toContain('Refuse');
+    expect(await journey().locator('.jr-canvas .jr-m.on, .jr-canvas .jr-ch.on').count()).toBe(1);
+    expect(await journey().locator('.jr-btabs [aria-selected="true"]').getAttribute('data-tab')).toBe('step');
+    expect(await journey().locator('[data-step-detail]').textContent()).toContain('Étape 4/12');
+    // Suivant : l'étape 5 devient active, le bandeau et les détails suivent.
+    await ribbon.locator('[aria-label="Étape suivante"]').click();
+    await expect.poll(() => ribbon.locator('.jr-gs.on .jr-sn').textContent()).toBe('5');
+    expect(await journey().locator('[data-step-detail]').textContent()).toContain('Étape 5/12');
     // Son parcours jusqu'aux contrôleurs BFF et backend : cartes visibles, méthode montrée, tableau.
-    expect(await journey().locator('.jr-btabs [aria-selected="true"]').getAttribute('data-tab')).toBe(
-      'links',
-    );
+    await journey().locator('.jr-btabs [data-tab="links"]').click();
     await expect.poll(async () => rows().count()).toBeGreaterThan(3);
     // Le tableau se lit dans l'ordre des étapes : la première relation part de la page (1 → 2).
     expect(await rows().first().locator('.jr-sn2').textContent()).toBe('1→2');
@@ -520,13 +527,17 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     await page.keyboard.press('Escape');
     await expect.poll(async () => dashboard().locator('[data-jr].full').count()).toBe(0);
     expect(await journey().locator('.jr-focus').count()).toBe(1);
-    // Une étape du fil se choisit à son tour : son propre parcours, en amont jusqu'à la page.
+    // Une étape du bandeau devient active ; « Focus » en fait l'élément choisi, avec son propre parcours.
     await ribbon.locator('.jr-crb', { hasText: 'RequestController.refuse' }).click();
     await expect
+      .poll(() => journey().locator('[data-step-detail] h4').textContent())
+      .toBe('Contrôleurs : RequestController.refuse');
+    await ribbon.locator('button', { hasText: 'Focus sur cette étape' }).click();
+    await expect
       .poll(() => ribbon.locator('.jr-pt').textContent())
-      .toBe('Parcours de RequestController.refuse');
+      .toBe('Parcours d’exécution de RequestController.refuse');
     const upstream = await ribbon.locator('.jr-crb').allTextContents();
-    expect(upstream[0]).toBe('1/requests/create');
+    expect(upstream[0]).toBe('1Pages/requests/create');
     expect(upstream.join(' > ')).toMatch(
       /RequestService\.refuse.*RequestBffController\.refuse.*RequestController\.refuse.*REQUEST/,
     );
