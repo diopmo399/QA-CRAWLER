@@ -427,6 +427,27 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
       Number.parseInt((await journey().locator('.jr-zoom').textContent()) ?? '0', 10);
     await expect.poll(zoomOf).toBeGreaterThanOrEqual(75);
     expect(await zoomOf()).toBeLessThanOrEqual(100);
+    // Tout le graphe visible sans défiler : amené en haut de l'écran, ni coupé à droite ni en bas.
+    const canvas = journey().locator('[data-jr-canvas]');
+    await expect
+      .poll(() =>
+        canvas.evaluate((el) => {
+          const box = el.getBoundingClientRect();
+          return (
+            box.top >= 0 &&
+            box.bottom <= window.innerHeight &&
+            el.scrollWidth <= el.clientWidth &&
+            el.scrollHeight <= el.clientHeight
+          );
+        }),
+      )
+      .toBe(true);
+    // Les cartes sont repliées ; « Déplier toutes les cartes » montre leurs membres, puis les replie.
+    expect(await journey().locator('.jr-ml').count()).toBe(0);
+    await journey().locator('[data-action="map-j-detail"]').click();
+    await expect.poll(async () => journey().locator('.jr-ml').count()).toBeGreaterThan(3);
+    await journey().locator('[data-action="map-j-detail"]').click();
+    await expect.poll(async () => journey().locator('.jr-ml').count()).toBe(0);
     // « Tout » : des faisceaux comptés entre couloirs, pas une ligne par relation.
     const pills = await journey().locator('.jr-pill').count();
     expect(pills).toBeGreaterThan(0);

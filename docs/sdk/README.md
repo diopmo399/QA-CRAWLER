@@ -1205,8 +1205,11 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
   (Hibernate/JPA)** (repositories, entités et tables). API externe : seulement les services tiers que le
   scan a établis et leurs appels ; un appel sortant non classé est listé dans les lacunes, jamais rangé
   là. Un couloir que la fonctionnalité n'atteint pas reste vide, sans passage inventé.
-- **Cartes.** Une carte par classe, DTO, entité ou store, avec ses membres (« +N autre(s) » les déplie)
-  et son nombre de liens ; un élément sans relation est marqué « non relié ». Par groupe, le serveur
+- **Cartes.** Une carte par classe, DTO, entité ou store, repliée par défaut pour que le graphe tienne
+  dans l'écran : son nom, son nombre de liens et de membres (en orange si des membres ne sont pas
+  reliés). Un clic sur la carte la choisit et la déplie ; « Déplier toutes les cartes » (barre d'outils)
+  montre tous les membres (« +N autre(s) » pour les suivants) ; un élément sans relation est marqué
+  « non relié ». Par groupe, le serveur
   renvoie les 40 cartes les plus reliées (et celle de l'élément choisi) ; les autres restent comptées
   dans l'en-tête du groupe et leurs relations restent dans le tableau.
 - **« Tout » sans fouillis.** Les liens ne sont jamais tracés un par un : entre deux couloirs, une
@@ -1226,9 +1229,10 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
 - **Onglets du bas.** Détails des liens, Conditions & Règles (expression, aspect, décision backend et son
   statut), Stores, Appels & Services, Données, Code & Preuves ; à droite, « Règles principales » et
   « Flux de données » couche par couche.
-- **Zoom.** « Centrer » ramène l'élément choisi au milieu sans changer l'échelle ; « Ajuster » calcule
-  l'échelle qui fait tenir les couloirs (50 à 150 %) ; à l'ouverture, l'ajustement ne descend pas sous
-  75 % pour garder les cartes lisibles (la zone défile alors). Plein écran, quitté par Échap.
+- **Zoom.** À l'ouverture, le graphe est amené en haut de l'écran et occupe toute la hauteur visible ;
+  l'échelle est calculée pour que les quatre couloirs tiennent en largeur et en hauteur, sans descendre
+  sous 75 % (cartes lisibles ; au-delà, la zone défile). « Ajuster » refait ce calcul (50 à 150 %) ;
+  « Centrer » ramène l'élément choisi au milieu sans changer l'échelle. Plein écran, quitté par Échap.
 
 **Lacunes dites, jamais comblées.** Couche sans source configurée ou non atteinte ; aucun store atteint
 (l'analyseur reconnaît une classe à état par ses `Subject`/`BehaviorSubject` : un état tenu par des

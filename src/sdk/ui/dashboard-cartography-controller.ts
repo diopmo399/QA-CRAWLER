@@ -586,19 +586,28 @@ export class CartographyController {
   }
 
   /**
-   * Ajuster les couloirs à la largeur de la zone. `auto` (ouverture) : jamais au-dessus de 100 % ni sous
-   * 75 % (les cartes restent lisibles, la zone défile) ; à la demande : entre 50 et 150 %.
+   * Ajuster les couloirs à la zone visible, en largeur ET en hauteur. `auto` (ouverture) : le graphe est
+   * d'abord amené en haut de l'écran, puis l'échelle reste entre 75 % (les cartes restent lisibles, la zone
+   * défile au-delà) et 100 % ; à la demande : entre 50 et 150 %.
    */
   private fitJourney(auto = false): void {
     const canvas = this.host.root.querySelector<HTMLElement>('[data-jr-canvas]');
     const lanes = canvas?.querySelector<HTMLElement>('.jr-lanes');
     if (!canvas || !lanes) return;
-    // La largeur à 100 % : l'échelle (CSS zoom) réduit la mise en page, on la retire de la mesure.
-    const natural = lanes.scrollWidth / (this.ui.jZoom || 1);
-    if (natural <= 0) return;
-    const ratio = Math.floor(((canvas.clientWidth - 24) / natural) * 100) / 100;
+    // La taille à 100 % : l'échelle (CSS zoom) réduit la mise en page, on la retire de la mesure.
+    const zoom = this.ui.jZoom || 1;
+    const width = lanes.scrollWidth / zoom;
+    const height = lanes.scrollHeight / zoom;
+    if (width <= 0 || height <= 0) return;
+    // La hauteur visible sous le haut de la zone ; à l'ouverture, le titre du graphe sera en haut de l'écran.
+    const head = this.host.root.querySelector<HTMLElement>('.jr-gh');
+    const top = canvas.getBoundingClientRect().top - (auto && head ? head.getBoundingClientRect().top : 0);
+    const room = Math.max(320, window.innerHeight - Math.max(0, top) - 16);
+    const ratio = Math.floor(Math.min((canvas.clientWidth - 24) / width, (room - 24) / height) * 100) / 100;
     this.ui.jZoom = auto ? Math.max(0.75, Math.min(1, ratio)) : Math.max(0.5, Math.min(1.5, ratio));
     this.host.paint();
+    // Après le rendu (qui remplace les éléments) : amener le graphe en haut de l'écran.
+    if (auto) this.host.root.querySelector<HTMLElement>('.jr-gh')?.scrollIntoView({ block: 'start' });
   }
 
   /** Centrer la vue sur l'élément choisi (ou le début des couloirs), sans changer l'échelle. */
@@ -708,6 +717,12 @@ export class CartographyController {
         this.host.paint();
         return true;
       }
+      case 'map-j-detail':
+        // Déplier (ou replier) les membres de toutes les cartes ; l'échelle ne change pas.
+        ui.jDetail = !ui.jDetail;
+        ui.jOpen = [];
+        this.host.paint();
+        return true;
       default:
         return false;
     }
@@ -1346,6 +1361,7 @@ export class CartographyController {
       case 'map-j-full':
       case 'map-j-tree':
       case 'map-j-card':
+      case 'map-j-detail':
         return this.journeyAction(action, target);
       case 'map-tab': {
         const tab = target.dataset.tab as MapTab;

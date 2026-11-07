@@ -17,6 +17,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 - Route `GET /cartography/feature-map` et `client.cartography.featureMap` ; au plus 40 cartes par groupe
   (les plus reliées), le reste compté. Zoom distinct de « Centrer », ajustement lisible à l'ouverture,
   plein écran.
+- Graphe visible sans défiler : cartes repliées par défaut (liens et membres dans l'en-tête, dépliées au
+  choix ou par « Déplier toutes les cartes »), graphe amené en haut de l'écran à l'ouverture, ajustement
+  en largeur et en hauteur, zone à la hauteur de l'écran.
 
 ### Cartographie : contrats d'API des dépendances Maven
 

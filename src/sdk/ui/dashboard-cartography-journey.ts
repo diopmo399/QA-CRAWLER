@@ -52,6 +52,8 @@ export interface JourneyState {
   jFull: boolean;
   jClosed: string[];
   jOpen: string[];
+  /** Les membres de toutes les cartes affichés (sinon : cartes repliées, sauf ouvertes ou choisies). */
+  jDetail: boolean;
   /** La fonctionnalité dont les couloirs ont déjà été ajustés à la zone (une fois, à l'ouverture). */
   jFitted?: string;
 }
@@ -64,6 +66,7 @@ export const emptyJourney = (): JourneyState => ({
   jFull: false,
   jClosed: [],
   jOpen: [],
+  jDetail: false,
 });
 
 /** Ce qu'une vue met au premier plan : l'onglet du bas, la catégorie du tableau, les groupes mis en avant. */
@@ -185,6 +188,10 @@ const FR = {
   hiddenCards: (n: number) =>
     `+${String(n)} carte(s) moins reliée(s) non affichée(s) : toutes leurs relations sont dans le tableau`,
   less: 'Réduire',
+  members: (n: number) => (n === 1 ? '1 membre' : `${String(n)} membres`),
+  isolatedCount: (n: number) => (n === 1 ? '1 non relié' : `${String(n)} non reliés`),
+  showMembers: 'Déplier toutes les cartes',
+  hideMembers: 'Replier les cartes',
   zoomIn: 'Zoom avant',
   zoomOut: 'Zoom arrière',
   center: 'Centrer (garde l’échelle)',
@@ -340,6 +347,10 @@ const EN: JourneyStrings = {
   more: (n) => `+${String(n)} more`,
   hiddenCards: (n) => `+${String(n)} less-linked card(s) not shown: all their links are in the table`,
   less: 'Collapse',
+  members: (n) => (n === 1 ? '1 member' : `${String(n)} members`),
+  isolatedCount: (n) => `${String(n)} not linked`,
+  showMembers: 'Expand all cards',
+  hideMembers: 'Collapse the cards',
   zoomIn: 'Zoom in',
   zoomOut: 'Zoom out',
   center: 'Center (keeps the scale)',
@@ -561,15 +572,32 @@ function laneCards(
       const head = members.find((i) => i.id === card);
       const rest = members.filter((i) => i.id !== card);
       const open = st.jOpen.includes(card);
-      const shown = open ? rest : rest.slice(0, MEMBERS_SHOWN);
+      const sel = members.some((i) => i.id === st.jSelect);
+      // Repliée par défaut (le graphe tient dans l'écran) : dépliée si demandé, ouverte ou choisie.
+      const compact = !st.jDetail && !open && !sel;
+      const shown = compact ? [] : open ? rest : rest.slice(0, MEMBERS_SHOWN);
       const links = members.reduce((sum, i) => sum + i.links, 0);
       const title = head ?? members[0];
-      const sel = members.some((i) => i.id === st.jSelect);
+      const isolated = rest.filter((i) => i.links === 0).length;
+      const toggleBtn = (text: string): string =>
+        `<button class="lnk jr-more" data-action="map-j-card" data-card="${esc(card)}" aria-expanded="${String(!compact)}">${text}</button>`;
+      // Repliée : le nombre de membres tient dans l'en-tête (orange s'il y a des membres non reliés) ;
+      // un clic sur la carte la choisit, ce qui la déplie.
+      const memberNote = `${s.members(rest.length)}${isolated ? ` · ${s.isolatedCount(isolated)}` : ''}`;
+      const count = `<i class="jr-n">${esc(s.links(links))}${compact && rest.length ? `<small${isolated ? ' class="w"' : ''} title="${esc(memberNote)}" aria-label="${esc(memberNote)}">${esc(s.members(rest.length))}</small>` : ''}</i>`;
+      const toggle =
+        rest.length === 0 || compact
+          ? ''
+          : open && (rest.length > MEMBERS_SHOWN || (!st.jDetail && !sel))
+            ? toggleBtn(esc(s.less))
+            : !open && rest.length > MEMBERS_SHOWN
+              ? toggleBtn(esc(s.more(rest.length - MEMBERS_SHOWN)))
+              : '';
       const cardDim = near && !members.some((i) => near.has(i.id));
       const zero = links === 0;
       const member = (i: FeatureMapItem): string =>
         `<li><button class="jr-m${i.id === st.jSelect ? ' sel' : ''}${i.links === 0 ? ' zero' : ''}${near && !near.has(i.id) ? ' dim' : ''}" data-action="map-j-item" data-item="${esc(i.id)}" title="${esc(i.sub ? `${i.label ?? i.name} — ${i.sub}` : (i.label ?? i.name))}"><span>${esc(memberText(i))}</span>${i.sub ? `<small>${esc(i.sub)}</small>` : ''}${i.links === 0 ? `<em>${esc(s.isolated)}</em>` : ''}</button></li>`;
-      return `<div class="jr-card${sel ? ' sel' : ''}${cardDim ? ' dim' : ''}${zero ? ' zero' : ''}"><button class="jr-ch" data-action="map-j-item" data-item="${esc(title?.id ?? card)}" title="${esc(title?.cardTitle ?? '')}">${icon(GROUP_ICON[group] ?? 'cube')}<span><b>${esc(head ? (head.label ?? head.name) : (title?.cardTitle ?? card))}</b>${head?.sub ? `<small>${esc(head.sub)}</small>` : ''}</span><i class="jr-n">${esc(s.links(links))}</i></button>${shown.length ? `<ul class="jr-ml">${shown.map(member).join('')}</ul>` : ''}${rest.length > MEMBERS_SHOWN ? `<button class="lnk jr-more" data-action="map-j-card" data-card="${esc(card)}">${esc(open ? s.less : s.more(rest.length - MEMBERS_SHOWN))}</button>` : ''}</div>`;
+      return `<div class="jr-card${sel ? ' sel' : ''}${cardDim ? ' dim' : ''}${zero ? ' zero' : ''}"><button class="jr-ch" data-action="map-j-item" data-item="${esc(title?.id ?? card)}" title="${esc(title?.cardTitle ?? '')}">${icon(GROUP_ICON[group] ?? 'cube')}<span><b>${esc(head ? (head.label ?? head.name) : (title?.cardTitle ?? card))}</b>${head?.sub ? `<small>${esc(head.sub)}</small>` : ''}</span>${count}</button>${shown.length ? `<ul class="jr-ml">${shown.map(member).join('')}</ul>` : ''}${toggle}</div>`;
     });
     const more = hidden > 0 ? `<p class="jr-hidden">${esc(s.hiddenCards(hidden))}</p>` : '';
     return `<div class="jr-sec${dim ? ' dim' : ''}" data-group="${group}"><h4>${icon(GROUP_ICON[group] ?? 'cube')}<span>${esc(s.groups[group])}</span><i>${String(counts?.count ?? list.length)}</i></h4>${body.join('')}${more}</div>`;
@@ -636,7 +664,7 @@ function lanesGraph(
 function toolbar(s: JourneyStrings, st: JourneyState): string {
   const btn = (action: string, label: string, ic: string, extra = ''): string =>
     `<button class="btn small icon-only" data-action="${action}" aria-label="${esc(label)}" title="${esc(label)}"${extra}>${icon(ic)}</button>`;
-  return `<div class="jr-tools">${btn('map-j-center', s.center, 'target')}${btn('map-j-fit', s.fit, 'fit')}${btn('map-j-full', st.jFull ? s.exitFull : s.full, st.jFull ? 'minimize' : 'maximize', ` aria-pressed="${String(st.jFull)}"`)}${btn('map-j-zoom', s.zoomOut, 'minus', ' data-dir="-1"')}<output class="jr-zoom" aria-live="polite">${String(Math.round(st.jZoom * 100))} %</output>${btn('map-j-zoom', s.zoomIn, 'plus', ' data-dir="1"')}</div>`;
+  return `<div class="jr-tools">${btn('map-j-detail', st.jDetail ? s.hideMembers : s.showMembers, 'text', ` aria-pressed="${String(st.jDetail)}"`)}${btn('map-j-center', s.center, 'target')}${btn('map-j-fit', s.fit, 'fit')}${btn('map-j-full', st.jFull ? s.exitFull : s.full, st.jFull ? 'minimize' : 'maximize', ` aria-pressed="${String(st.jFull)}"`)}${btn('map-j-zoom', s.zoomOut, 'minus', ' data-dir="-1"')}<output class="jr-zoom" aria-live="polite">${String(Math.round(st.jZoom * 100))} %</output>${btn('map-j-zoom', s.zoomIn, 'plus', ' data-dir="1"')}</div>`;
 }
 
 function aspectLabel(s: JourneyStrings, row: ConditionRow): string {
@@ -833,10 +861,10 @@ export const JOURNEY_CSS = `
 .jr-gh h3{display:flex;gap:6px;align-items:center;margin:0;font-size:15px}.jr-gh h3 .ico{color:var(--qa-color-primary)}
 .jr-tools{display:flex;gap:4px;align-items:center}.jr-zoom{min-width:48px;text-align:center;font-size:12.5px}
 .jr-focus{display:flex;gap:6px;align-items:center;margin:0;font-size:12.5px;color:var(--qa-color-muted)}
-.jr-canvas{overflow:auto;border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);padding:10px;max-height:78vh;background:var(--qa-color-surface)}
+.jr-canvas{overflow:auto;border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);padding:10px;max-height:calc(100vh - 60px);background:var(--qa-color-surface)}
 .jr.full .jr-canvas{max-height:none}
-.jr-lanes{display:flex;align-items:stretch;gap:0;width:100%;min-width:min-content}
-.jr-lane{flex:1 1 0;min-width:180px;max-width:290px;border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px;border:1px solid}
+.jr-lanes{display:flex;align-items:stretch;gap:0;width:100%;min-width:954px}
+.jr-lane{flex:1 1 0;min-width:180px;max-width:290px;border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;border:1px solid}
 .jr-lane header{display:flex;gap:8px;align-items:center;justify-content:center;text-align:center}
 .jr-lane header .ico{width:22px;height:22px}
 .jr-lane h3{margin:0;font-size:14.5px}.jr-lane header small{color:var(--qa-color-muted);font-size:11.5px}
@@ -845,22 +873,22 @@ export const JOURNEY_CSS = `
 .l-backend{background:#ecf8f0;border-color:#c6e7d2}.l-backend header .ico{color:#2f7d4f}
 .l-external{background:#fdf3e7;border-color:#f2d6b0}.l-external header .ico{color:#d97a0a}
 .jr-lane.empty{opacity:.75}.jr-absent{margin:auto 0;text-align:center;color:var(--qa-color-muted);font-size:12.5px}
-.jr-sec{display:flex;flex-direction:column;gap:6px;transition:opacity .15s}
+.jr-sec{display:flex;flex-direction:column;gap:4px;transition:opacity .15s}
 .jr-sec h4{display:flex;gap:6px;align-items:center;margin:0;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--qa-color-muted)}
 .jr-sec h4 .ico{width:13px;height:13px}.jr-sec h4 i{font-style:normal;margin-left:auto}
 .jr-sec.dim,.jr-card.dim{opacity:.38}
 .jr-card{background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:9px;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:opacity .15s}
 .jr-card.sel{outline:2px solid var(--qa-color-primary)}.jr-card.zero{border-style:dashed}
-.jr-ch{display:flex;gap:7px;align-items:flex-start;width:100%;border:0;background:none;padding:7px 8px;text-align:left}
+.jr-ch{display:flex;gap:6px;align-items:flex-start;width:100%;border:0;background:none;padding:5px 7px;text-align:left}
 .jr-ch .ico{width:16px;height:16px;flex:none;margin-top:1px;color:var(--qa-color-muted)}
 .jr-ch>span{display:flex;flex-direction:column;min-width:0;flex:1 1 auto}
 .jr-ch b{font-size:12.5px;overflow-wrap:break-word;min-width:0}.jr-ch small{font-size:11px;color:var(--qa-color-muted);overflow-wrap:anywhere}
-.jr-n{font-style:normal;font-size:10.5px;color:var(--qa-color-muted);white-space:nowrap;flex:none}
+.jr-n{font-style:normal;font-size:10.5px;color:var(--qa-color-muted);white-space:nowrap;flex:none;display:flex;flex-direction:column;align-items:flex-end;line-height:1.25}.jr-n small{font-size:10px;color:var(--qa-color-primary)}.jr-n small.w{color:#b0661a}
 .jr-ml{list-style:none;margin:0;padding:0 6px 6px 31px;display:flex;flex-direction:column;gap:1px}
 .jr-m{display:flex;flex-wrap:wrap;gap:0 6px;align-items:baseline;width:100%;border:0;background:none;padding:2px 4px;border-radius:5px;text-align:left;font-size:12px}
 .jr-m small{color:var(--qa-color-muted);font-size:10.5px}.jr-m em{font-style:normal;font-size:10px;color:#9b5b00}
 .jr-m.sel{background:#e3f4e8;font-weight:700}.jr-m.dim{opacity:.4}.jr-m:hover,.jr-ch:hover,.jr-tn:hover{background:rgba(0,0,0,.04)}
-.jr-more{font-size:11.5px;padding:0 8px 6px 31px}
+.jr-more{font-size:11.5px;padding:0 8px 6px 31px;margin-top:-3px}.jr-more em{font-style:normal;color:#9b5b00}
 .jr-hidden{margin:2px 4px 0;font-size:11px;color:var(--qa-color-muted)}
 .jr-persist{border:1px dashed #b0661a;border-radius:9px;padding:6px;display:flex;flex-direction:column;gap:6px;background:rgba(255,255,255,.5)}
 .jr-ph{display:flex;gap:6px;align-items:center;margin:0;font-size:12px;color:#8a4d10}
