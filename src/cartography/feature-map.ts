@@ -10,8 +10,6 @@ import type {
   FeatureMapItem,
   FeatureMapQuery,
   FeatureMapRelation,
-  FeatureTrace,
-  FeatureTraceStep,
   FeatureTreeNode,
   MapConfidence,
   MapEdge,
@@ -24,7 +22,6 @@ import {
   FEATURE_GROUP_CARDS,
   FEATURE_GROUPS,
   FEATURE_LANES,
-  traceSteps,
 } from '../sdk/core/cartography.js';
 import { featureDetail, MAX_PAGE, outboundOf, type CoverageContext, type MapIndex } from './explorer.js';
 import { conditionRow } from './structure.js';
@@ -42,11 +39,6 @@ import { conditionRow } from './structure.js';
 
 /** Au-delà, les relations de la fonctionnalité sont coupées (et la carte le dit). */
 export const MAX_FEATURE_EDGES = 20_000;
-
-/** Le parcours d'un élément (amont + aval) s'arrête au-delà de ce nombre d'éléments par sens. */
-const MAX_PATH = 5_000;
-/** La trace ordonnée renvoyée garde au plus ce nombre d'étapes par sens (le reste est compté tronqué). */
-const MAX_TRACE_STEPS = 400;
 
 const CATEGORY_OF: Partial<Record<MapEdgeKind, FeatureCategory>> = {
   CONTAINS: 'CONTAINS',
@@ -422,34 +414,23 @@ export function featureMap(
   // ── Les lacunes, avec leur cause ──
   const gaps = gapsOf(index, feature, items, sorted, unclassified, detail.truncated, featureId);
 
-  // ── Le parcours de l'élément demandé (voisinage pour le graphe + trace ordonnée) ──
-  const path = query.item ? pathOf(index, items, sorted, unique, query.item) : undefined;
-  const neighbours = path?.neighbours;
-  const onPath = path?.relations;
-  // Sur un parcours, le tableau se lit dans l'ordre des étapes (les mêmes numéros que le graphe).
-  const steps = path ? traceSteps(path.trace) : undefined;
-  const stepKey = (r: FeatureMapRelation): [number, number] => {
-    const a = steps?.get(r.from) ?? Number.MAX_SAFE_INTEGER;
-    const b = steps?.get(r.to) ?? Number.MAX_SAFE_INTEGER;
-    return [Math.min(a, b), Math.max(a, b)];
-  };
-  const byStep = (a: FeatureMapRelation, b: FeatureMapRelation): number => {
-    const [a1, a2] = stepKey(a);
-    const [b1, b2] = stepKey(b);
-    return a1 - b1 || a2 - b2;
-  };
-
-  // ── Le tableau des relations, restreint et paginé ──
+  // ── Le tableau des relations, filtré et paginé ──
   const q = query.q?.trim().toLowerCase() ?? '';
   const filtered = unique
     .filter((r) => !query.category || r.category === query.category)
     .filter((r) => !query.lane || r.fromLane === query.lane || r.toLane === query.lane)
     .filter((r) => !query.status || r.status === query.status)
-    .filter((r) => !onPath || onPath.has(r.id))
+    .filter(
+      (r) =>
+        !query.item ||
+        r.from === query.item ||
+        r.to === query.item ||
+        items.get(r.from)?.card === query.item ||
+        items.get(r.to)?.card === query.item,
+    )
     .filter((r) => !q || `${r.fromName} ${r.toName} ${r.reason} ${r.kind}`.toLowerCase().includes(q))
     .sort(
       (a, b) =>
-        (steps ? byStep(a, b) : 0) ||
         FEATURE_CATEGORIES.indexOf(a.category) - FEATURE_CATEGORIES.indexOf(b.category) ||
         (LANE_RANK.get(a.fromLane) ?? 9) - (LANE_RANK.get(b.fromLane) ?? 9) ||
         a.fromName.localeCompare(b.fromName) ||
@@ -476,8 +457,6 @@ export function featureMap(
     items: shown,
     lanes,
     itemCount: sorted.length,
-    ...(neighbours ? { neighbours } : {}),
-    ...(path ? { trace: path.trace } : {}),
     tree,
     bundles: [...bundles.values()].sort(
       (a, b) =>
@@ -491,180 +470,6 @@ export function featureMap(
     relationCount: unique.length,
     truncated: detail.truncated,
     scanId: index.scanId,
-  };
-}
-
-/** Un écran (page, composant lui-même — pas ses méthodes) : son contenu n'est pas suivi en aval. */
-const isScreen = (item: FeatureMapItem | undefined): boolean =>
-  item?.kind === 'COMPONENT' || item?.kind === 'ROUTE' || item?.kind === 'SCREEN';
-
-/** Les groupes où une chaîne interrompue est une rupture (on attend une suite : appel, endpoint, service). */
-const EXPECTS_NEXT: ReadonlySet<FeatureGroup> = new Set([
-  'BUTTON',
-  'STORE',
-  'SPA_SERVICE',
-  'ENDPOINT',
-  'CONTRACT',
-  'CONTROLLER',
-  'CLIENT',
-]);
-
-/**
- * Le parcours d'un élément, sur toutes les relations de la fonctionnalité.
- * - En aval (sens des relations) : ce qu'il déclenche, sans suivre « contient » (la structure n'est pas
- *   le parcours) ni développer un composant ou une page atteint (son contenu n'est pas ce que l'élément
- *   déclenche).
- * - En amont (sens inverse) : ce qui le contient, l'appelle, le conditionne ou en dépend, sans remonter
- *   les flux de données (un champ partagé ramènerait tous ses écrans).
- * Donne le voisinage (pour replier le graphe), les relations parcourues (pour le tableau) et une trace
- * ordonnée : l'arbre amont et l'arbre aval, chaque étape avec sa relation, son statut, sa preuve, et, au
- * bout de chaque branche, ce qui y est atteint (table, API externe, écran) ou la cause de l'arrêt.
- */
-function pathOf(
-  index: MapIndex,
-  items: ReadonlyMap<string, FeatureMapItem>,
-  sorted: readonly FeatureMapItem[],
-  unique: readonly FeatureMapRelation[],
-  item: string,
-): { neighbours: string[]; relations: Set<string>; trace: FeatureTrace } {
-  // Une carte demandée (une classe, un composant) part de tous ses membres.
-  const seeds = [item, ...sorted.filter((i) => i.card === item && i.id !== item).map((i) => i.id)];
-  const forward = new Map<string, FeatureMapRelation[]>();
-  const backward = new Map<string, FeatureMapRelation[]>();
-  const add = (map: Map<string, FeatureMapRelation[]>, key: string, r: FeatureMapRelation): void => {
-    const list = map.get(key);
-    if (list) list.push(r);
-    else map.set(key, [r]);
-  };
-  for (const r of unique) {
-    if (r.category !== 'CONTAINS') add(forward, r.from, r);
-    // En amont, des flux de données on ne garde que « affiche » (la page qui affiche le composant).
-    if (r.category !== 'DATA' || r.kind === 'DISPLAYS') add(backward, r.to, r);
-  }
-  const rank = (r: FeatureMapRelation, toward: string): number =>
-    (LANE_RANK.get(items.get(toward)?.lane ?? 'EXTERNAL') ?? 9) * 1000 +
-    (GROUP_RANK.get(items.get(toward)?.group ?? 'METHOD') ?? 99);
-  const near = new Set<string>(seeds);
-  const used = new Set<string>();
-  const statuses = emptyStatuses();
-  let truncated = false;
-  const step = (
-    id: string,
-    depth: number,
-    parent?: string,
-    via?: FeatureMapRelation,
-    kinds: string[] = [],
-  ): FeatureTraceStep => {
-    const it = items.get(id);
-    const evidence = it?.evidence;
-    return {
-      id,
-      name: it ? (it.label ?? it.name) : id,
-      ...(it?.sub ? { sub: it.sub } : {}),
-      lane: it?.lane ?? 'BACKEND',
-      group: it?.group ?? 'METHOD',
-      kind: it?.kind ?? '',
-      depth,
-      ...(parent ? { parent } : {}),
-      ...(via
-        ? {
-            via: {
-              kind: via.kind,
-              kinds: kinds.length ? kinds : [via.kind],
-              category: via.category,
-              status: via.status,
-              reason: via.reason,
-              ...(via.evidence ? { evidence: via.evidence } : {}),
-            },
-          }
-        : {}),
-      ...(evidence ? { evidence } : {}),
-    };
-  };
-  const walk = (
-    adjacent: Map<string, FeatureMapRelation[]>,
-    next: (r: FeatureMapRelation) => string,
-    expand: (id: string) => boolean,
-  ): FeatureTraceStep[] => {
-    const steps: FeatureTraceStep[] = seeds.map((s) => step(s, 0));
-    const seen = new Set<string>(seeds);
-    const queue = seeds.map((s) => ({ id: s, depth: 0 }));
-    while (queue.length > 0 && seen.size <= MAX_PATH) {
-      const at = queue.shift() as { id: string; depth: number };
-      if (at.depth > 0 && !expand(at.id)) continue;
-      const out = [...(adjacent.get(at.id) ?? [])].sort((a, b) => rank(a, next(a)) - rank(b, next(b)));
-      for (const r of out) {
-        used.add(r.id);
-        const to = next(r);
-        near.add(to);
-        if (seen.has(to)) continue;
-        seen.add(to);
-        statuses[r.status] += 1;
-        // Toutes les relations entre ces deux étapes (lit et écrit, par exemple), dans l'ordre du scan.
-        const kinds = [...new Set(out.filter((o) => next(o) === to).map((o) => o.kind))];
-        if (steps.length < MAX_TRACE_STEPS) steps.push(step(to, at.depth + 1, at.id, r, kinds));
-        else truncated = true;
-        queue.push({ id: to, depth: at.depth + 1 });
-      }
-    }
-    if (queue.length > 0) truncated = true;
-    return steps;
-  };
-  const down = walk(
-    forward,
-    (r) => r.to,
-    (id) => !isScreen(items.get(id)),
-  );
-  const up = walk(
-    backward,
-    (r) => r.from,
-    () => true,
-  );
-
-  // Le bout de chaque branche aval : ce qui y est atteint, ou pourquoi la chaîne s'arrête.
-  const parents = new Set(down.map((s) => s.parent).filter((p): p is string => p !== undefined));
-  const correlations = index.model.correlations ?? [];
-  // Une branche sœur qui poursuit vers une couche plus loin : l'arrêt de celle-ci n'est pas une rupture
-  // (une enveloppe HTTP générique à côté de l'appel réel, par exemple).
-  const laneOf = new Map(down.map((s) => [s.id, LANE_RANK.get(s.lane) ?? 0]));
-  const deepest = new Map<string, number>();
-  for (const s of [...down].reverse()) {
-    const mine = Math.max(laneOf.get(s.id) ?? 0, deepest.get(s.id) ?? 0);
-    if (s.parent) deepest.set(s.parent, Math.max(deepest.get(s.parent) ?? 0, mine));
-  }
-  const byId = new Map(down.map((s) => [s.id, s]));
-  for (const s of down) {
-    if (parents.has(s.id)) continue;
-    const it = items.get(s.id);
-    const outgoing = forward.get(s.id) ?? [];
-    const parent = s.parent ? byId.get(s.parent) : undefined;
-    const siblingGoesFurther =
-      parent !== undefined && (deepest.get(parent.id) ?? 0) > (LANE_RANK.get(s.lane) ?? 0);
-    if (s.lane === 'EXTERNAL') s.end = 'EXTERNAL';
-    else if (s.group === 'ENTITY') s.end = 'TABLE';
-    else if (s.depth > 0 && isScreen(it)) s.end = 'SCREEN';
-    else if (outgoing.length > 0) {
-      s.end = 'JOIN';
-      const target = byId.get(outgoing[0]?.to ?? '');
-      if (target) s.joins = target.name;
-    } else if (it && EXPECTS_NEXT.has(it.group) && !siblingGoesFurther) {
-      s.end = 'STOP';
-      const broken = correlations.filter(
-        (c) => c.from === s.id && (c.status === 'UNDEMONSTRATED' || c.status === 'BLOCKED'),
-      );
-      // La cause donnée par la corrélation quand le scan en a une ; sinon l'interface dit qu'aucune
-      // relation sortante n'est démontrée.
-      const gap = broken
-        .map((c) => `${c.method} ${c.path} — ${c.causes.map((x) => x.message).join(' ; ') || c.status}`)
-        .join(' | ');
-      if (gap) s.gap = gap;
-    } else s.end = 'END';
-  }
-  const reached = FEATURE_LANES.filter((l) => down.some((s) => s.lane === l) || up.some((s) => s.lane === l));
-  return {
-    neighbours: [...near],
-    relations: used,
-    trace: { item, up, down, reached, statuses, truncated },
   };
 }
 

@@ -17,28 +17,6 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 - Route `GET /cartography/feature-map` et `client.cartography.featureMap` ; au plus 40 cartes par groupe
   (les plus reliées), le reste compté. Zoom distinct de « Centrer », ajustement lisible à l'ouverture,
   plein écran.
-- Graphe visible sans défiler : cartes repliées par défaut (liens et membres dans l'en-tête, dépliées au
-  choix ou par « Déplier toutes les cartes »), graphe amené en haut de l'écran à l'ouverture, ajustement
-  en largeur et en hauteur, zone à la hauteur de l'écran.
-- Choisir un élément replie les autres : branches de l'arbre hors de son chemin, groupes sans lien
-  (réduits à leur titre), cartes sans lien (« +N cartes ») ; une seule carte dépliée à la fois. Ce qui
-  reste visible est tout le parcours de l'élément, en aval jusqu'aux contrôleurs BFF et backend, au
-  repository et à la table, en amont jusqu'à la page (`neighbours`, calculé par le serveur sur toutes les
-  relations) ; le tableau ne garde que les relations de ce parcours, et chaque carte montre sa méthode
-  concernée.
-- Traçabilité ordonnée dans le même rendu : au-dessus du graphe, le fil numéroté du parcours de
-  l'élément choisi (de la page jusqu'à la table), avec le verbe de chaque relation, les statuts non
-  confirmés, les passages de couche, le bout atteint et les ruptures avec leur cause ; les mêmes numéros
-  sur les cartes et membres du graphe et dans le tableau, trié dans l'ordre des étapes. Le parcours ne
-  suit plus le contenu des conteneurs et composants vers l'aval (fini les composants sans rapport dans
-  le focus) ; `featureMap` renvoie `trace` (amont, aval, bouts, couches atteintes, statuts) et le noyau
-  exporte `traceSteps` et `traceMainPath`.
-- Parcours guidé (maquette) : bandeau « Parcours d'exécution » aux étapes cliquables (Précédent,
-  Suivant, Revenir au début, Focus, Voir le code, Suivre le parcours), étape active et suivante en
-  évidence dans le graphe, modes Parcours principal (par défaut) / Branches alternatives / Graphe
-  complet, mini-carte des couches, onglet « Détails de l'étape » (rôle, preuve, relations entrante et
-  sortante, conditions, confiance) et fiche de l'élément choisi. Le chemin principal est numéroté en
-  premier, sans trou ; l'ordre est dit déduit du code, pas observé en exécution.
 
 ### Cartographie : contrats d'API des dépendances Maven
 
