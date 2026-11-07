@@ -1534,3 +1534,176 @@ export interface ApiSheet {
   scanId: string;
   scannedAt?: string;
 }
+
+// ── La carte d'une fonctionnalité (Parcours & Graphe) ────────────────────────────────────────────────
+
+/** Les couloirs, toujours dans cet ordre : interface, BFF, backend (persistance comprise), API externes. */
+export const FEATURE_LANES = ['FRONTEND', 'BFF', 'BACKEND', 'EXTERNAL'] as const;
+export type FeatureLane = (typeof FEATURE_LANES)[number];
+
+/** Les groupes d'un couloir (ordre d'affichage). La persistance est un sous-groupe du backend. */
+export const FEATURE_GROUPS = [
+  'PAGE',
+  'COMPONENT',
+  'CONTAINER',
+  'FIELD',
+  'BUTTON',
+  'CONDITION',
+  'STORE',
+  'SPA_SERVICE',
+  'MODEL',
+  'CONTROLLER',
+  'ENDPOINT',
+  'CONTRACT',
+  'DTO',
+  'SERVICE',
+  'RULE',
+  'CLIENT',
+  'METHOD',
+  'REPOSITORY',
+  'ENTITY',
+  'EXTERNAL_SERVICE',
+  'EXTERNAL_CALL',
+] as const;
+export type FeatureGroup = (typeof FEATURE_GROUPS)[number];
+
+/** Les catégories de relations montrées (dans cet ordre). */
+export const FEATURE_CATEGORIES = [
+  'CONTAINS',
+  'CONDITION',
+  'DEPENDS',
+  'CALLS',
+  'DATA',
+  'PERSISTENCE',
+  'EXTERNAL',
+] as const;
+export type FeatureCategory = (typeof FEATURE_CATEGORIES)[number];
+
+/** Les cartes renvoyées au plus par groupe dans la carte d'une fonctionnalité (les plus reliées d'abord). */
+export const FEATURE_GROUP_CARDS = 40;
+
+/** Un élément de la fonctionnalité, rangé dans un couloir et un groupe ; `card` réunit les membres d'une classe. */
+export interface FeatureMapItem {
+  id: string;
+  lane: FeatureLane;
+  group: FeatureGroup;
+  kind: MapNodeKind | 'EXTERNAL';
+  name: string;
+  label?: string;
+  /** Une précision lisible : méthode et chemin d'un endpoint, type d'un champ, table d'une entité… */
+  sub?: string;
+  /** La carte (classe, DTO, entité, store, service externe) qui réunit cet élément et ses voisins. */
+  card: string;
+  cardTitle: string;
+  /** Nombre de relations de la fonctionnalité qui le touchent. 0 : élément isolé. */
+  links: number;
+  /** Persistance (sous-groupe Hibernate/JPA du backend). */
+  persistence?: boolean;
+  evidence?: Evidence;
+}
+
+export interface FeatureMapRelation {
+  id: string;
+  kind: MapEdgeKind | 'EXTERNAL_CALL';
+  category: FeatureCategory;
+  from: string;
+  to: string;
+  fromName: string;
+  toName: string;
+  fromLane: FeatureLane;
+  toLane: FeatureLane;
+  fromGroup: FeatureGroup;
+  toGroup: FeatureGroup;
+  status: MapConfidence;
+  reason: string;
+  evidence?: Evidence;
+}
+
+/** Un faisceau : les relations d'une même catégorie entre deux groupes, comptées exactement. */
+export interface FeatureMapBundle {
+  key: string;
+  category: FeatureCategory;
+  fromLane: FeatureLane;
+  fromGroup: FeatureGroup;
+  toLane: FeatureLane;
+  toGroup: FeatureGroup;
+  count: number;
+  statuses: Record<MapConfidence, number>;
+}
+
+export interface FeatureTreeNode {
+  id: string;
+  kind: MapNodeKind;
+  name: string;
+  children: FeatureTreeNode[];
+}
+
+export type FeatureMapGapCode =
+  | 'LANE_NO_SOURCE'
+  | 'LANE_NOT_REACHED'
+  | 'NO_STORE'
+  | 'ISOLATED'
+  | 'BROKEN_CORRELATION'
+  | 'UNCLASSIFIED_CALL'
+  | 'DEPENDENCY_UNAVAILABLE'
+  | 'SOURCE_PARTIAL'
+  | 'CHAIN_BREAK'
+  | 'TRUNCATED';
+
+/** Ce que la carte ne démontre pas, avec sa cause (jamais comblé par une supposition). */
+export interface FeatureMapGap {
+  code: FeatureMapGapCode;
+  lane?: FeatureLane;
+  /** Les éléments concernés (identifiants ou textes lisibles), bornés. */
+  items: string[];
+  detail: string;
+}
+
+export interface FeatureMap {
+  feature: {
+    id: string;
+    name: string;
+    status: FeatureStatus;
+    module?: string;
+    coverage?: { status: string; met: number; applicable: number };
+    scenarios: number;
+  };
+  /**
+   * Les éléments affichés, triés par couloir puis groupe : par groupe, les cartes les plus reliées (au plus
+   * `FEATURE_GROUP_CARDS`, plus celle de l'élément demandé) ; les autres restent comptées dans `lanes` et
+   * leurs relations dans le tableau.
+   */
+  items: FeatureMapItem[];
+  lanes: {
+    lane: FeatureLane;
+    present: boolean;
+    /** `count` : éléments du groupe ; `cards` : cartes du groupe ; `shown` : cartes renvoyées dans `items`. */
+    groups: { group: FeatureGroup; count: number; cards: number; shown: number }[];
+  }[];
+  /** Le nombre d'éléments de la fonctionnalité, avant la limite de cartes par groupe. */
+  itemCount: number;
+  tree: FeatureTreeNode[];
+  bundles: FeatureMapBundle[];
+  categories: Record<FeatureCategory, number>;
+  statuses: Record<MapConfidence, number>;
+  conditions: ConditionRow[];
+  gaps: FeatureMapGap[];
+  /** Les relations de la page demandée, selon les critères ; `total` : toutes celles qui y répondent. */
+  relations: MapPage<FeatureMapRelation>;
+  /** Le nombre de relations de la fonctionnalité, tous critères confondus. */
+  relationCount: number;
+  truncated: boolean;
+  scanId: string;
+}
+
+/** Les critères du tableau des relations d'une fonctionnalité. */
+export interface FeatureMapQuery {
+  category?: FeatureCategory;
+  lane?: FeatureLane;
+  status?: MapConfidence;
+  /** Seulement les relations qui touchent cet élément. */
+  item?: string;
+  q?: string;
+  page?: number;
+  size?: number;
+}

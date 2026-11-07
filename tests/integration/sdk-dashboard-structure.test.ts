@@ -137,6 +137,37 @@ describe('cartography structure routes', () => {
     expect((missing as QaCrawlerError).status).toBe(404);
   });
 
+  it('the feature map: four lanes in order, exact counts, filtered pages; bad criteria 400, unknown feature 404', async () => {
+    const features = await client.cartography.features(project.id, { q: 'Request create' });
+    const id = features.items[0]?.id ?? '';
+    const map = await client.cartography.featureMap(project.id, id);
+    expect(map.lanes.map((l) => [l.lane, l.present])).toEqual([
+      ['FRONTEND', true],
+      ['BFF', true],
+      ['BACKEND', true],
+      ['EXTERNAL', true],
+    ]);
+    const total = Object.values(map.categories).reduce((a, b) => a + b, 0);
+    expect(total).toBe(map.relationCount);
+    expect(map.bundles.reduce((a, b) => a + b.count, 0)).toBe(map.relationCount);
+    const conditions = await client.cartography.featureMap(project.id, id, {
+      category: 'CONDITION',
+      size: 5,
+    });
+    expect(conditions.relations.total).toBe(map.categories.CONDITION);
+    expect(conditions.relations.items.every((r) => r.category === 'CONDITION')).toBe(true);
+    const status = async (call: Promise<unknown>): Promise<number | undefined> =>
+      ((await call.catch((e: unknown) => e)) as QaCrawlerError).status;
+    for (const bad of ['category=NOPE', 'lane=DATABASE', 'status=MAYBE']) {
+      const response = await fetch(
+        `${server.url}/api/projects/${project.id}/cartography/feature-map?id=${encodeURIComponent(id)}&${bad}`,
+        { headers: { authorization: `Bearer ${server.token}` } },
+      );
+      expect(response.status).toBe(400);
+    }
+    expect(await status(client.cartography.featureMap(project.id, 'FEATURE:nope'))).toBe(404);
+  });
+
   it('investigations: run, list, read, resume a branch, refuse bad input, go stale after a new scan, run again', async () => {
     const conditions = await client.cartography.conditions(project.id, { q: 'canValidate' });
     const button = conditions.items[0]?.element.id ?? '';
@@ -374,5 +405,77 @@ describe('Dashboard — Structure & Conditions, in Chromium', () => {
     await dashboard().locator('.st-row', { hasText: 'Save' }).click();
     await sheet().locator('h2', { hasText: 'Bouton : Save' }).waitFor();
     expect(await dashboard().locator('.st-center .err[role="alert"]').count()).toBe(0);
+  });
+});
+
+describe('Dashboard — Parcours & Graphe, in Chromium', () => {
+  const journey = (): Locator => dashboard().locator('[data-jr]');
+  const rows = (): Locator => journey().locator('.jr-t tbody tr');
+
+  it('four lanes in order, grouped links, focus, filters, pages, zoom, centre, fullscreen, views', async () => {
+    await dashboard().locator('.map-tabs [data-action="map-tab"][data-tab="journey"]').click();
+    await journey().locator('.jr-lane.l-external').waitFor();
+    expect(calls.some((c) => c.startsWith('GET /cartography/feature-map?'))).toBe(true);
+    // Angular → BFF → Backend → API externe, la persistance dans le backend.
+    const lanes = await journey()
+      .locator('.jr-lane')
+      .evaluateAll((els) => els.map((el) => el.getAttribute('data-lane')));
+    expect(lanes).toEqual(['FRONTEND', 'BFF', 'BACKEND', 'EXTERNAL']);
+    expect(await journey().locator('.l-backend .jr-persist').count()).toBe(1);
+    // L'ajustement à l'ouverture ne rend pas les cartes illisibles.
+    const zoomOf = async (): Promise<number> =>
+      Number.parseInt((await journey().locator('.jr-zoom').textContent()) ?? '0', 10);
+    await expect.poll(zoomOf).toBeGreaterThanOrEqual(75);
+    expect(await zoomOf()).toBeLessThanOrEqual(100);
+    // « Tout » : des faisceaux comptés entre couloirs, pas une ligne par relation.
+    const pills = await journey().locator('.jr-pill').count();
+    expect(pills).toBeGreaterThan(0);
+    expect(pills).toBeLessThan(20);
+    await expect.poll(async () => rows().count()).toBe(25);
+
+    // Une catégorie : le tableau ne garde qu'elle ; « Tout » rend toutes les relations, page par page.
+    await journey().locator('.jr-cat[data-cat="CONDITION"]').click();
+    await expect.poll(async () => rows().count()).toBe(1);
+    expect(calls.some((c) => c.includes('category=CONDITION'))).toBe(true);
+    await journey().locator('.jr-cat[data-cat=""]').click();
+    await expect.poll(async () => rows().count()).toBe(25);
+    await journey().locator('[data-action="map-j-page"]').last().click();
+    await expect.poll(() => calls.some((c) => c.includes('page=2'))).toBe(true);
+    await expect.poll(() => journey().locator('.jr-pager span').textContent()).toContain('2');
+
+    // L'élément choisi : au premier plan, les autres atténués, ses relations seulement.
+    await journey().locator('.jr-tn', { hasText: 'Refuse' }).click();
+    await journey().locator('.jr-focus').waitFor();
+    await expect.poll(async () => rows().count()).toBe(3);
+    expect(await journey().locator('.jr-card.dim').count()).toBeGreaterThan(0);
+    // « Centrer » garde l'échelle ; le zoom change d'un cran ; « Ajuster » recalcule.
+    const before = await zoomOf();
+    await journey().locator('[data-action="map-j-center"]').click();
+    expect(await zoomOf()).toBe(before);
+    await journey().locator('[data-action="map-j-zoom"][data-dir="1"]').click();
+    await expect.poll(zoomOf).toBeGreaterThan(before);
+    await journey().locator('[data-action="map-j-fit"]').click();
+    await expect.poll(zoomOf).toBeLessThanOrEqual(150);
+    // Le plein écran, quitté par Échap ; la sélection est gardée.
+    await journey().locator('[data-action="map-j-full"]').click();
+    await expect.poll(async () => dashboard().locator('[data-jr].full').count()).toBe(1);
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => dashboard().locator('[data-jr].full').count()).toBe(0);
+    expect(await journey().locator('.jr-focus').count()).toBe(1);
+    await journey().locator('[data-action="map-j-clear"]').click();
+    await expect.poll(async () => journey().locator('.jr-focus').count()).toBe(0);
+
+    // La vue « Conditions & Règles » : la condition et la règle backend démontrée.
+    await journey().locator('[data-action="map-j-view"][data-view="rules"]').click();
+    await expect.poll(() => journey().locator('.jr-bottom').textContent()).toContain('!state.canValidate');
+    expect(await journey().locator('.jr-bottom').textContent()).toContain(
+      'ValidationEligibilityService.canValidate',
+    );
+
+    // Aucune régression de navigation : un autre onglet, puis retour.
+    await dashboard().locator('.map-tabs [data-action="map-tab"][data-tab="structure"]').click();
+    await dashboard().locator('.st-tree').waitFor();
+    await dashboard().locator('.map-tabs [data-action="map-tab"][data-tab="journey"]').click();
+    await journey().locator('.jr-lane.l-external').waitFor();
   });
 });

@@ -104,6 +104,8 @@ import type {
   ConceptRow,
   EvidenceExcerpt,
   FeatureDetail,
+  FeatureMap,
+  FeatureMapQuery,
   FeatureRow,
   FieldIssue,
   FieldRow,
@@ -552,6 +554,16 @@ export interface QaCrawlerClient {
       options?: MapRequestOptions,
     ): Promise<MapPage<FeatureRow>>;
     feature(projectId: string, id: string, options?: MapRequestOptions): Promise<FeatureDetail>;
+    /**
+     * La carte d'une fonctionnalité (Parcours & Graphe) : éléments rangés en couloirs, faisceaux comptés,
+     * conditions, lacunes, et une page des relations (filtrée par `query`).
+     */
+    featureMap(
+      projectId: string,
+      id: string,
+      query?: FeatureMapQuery,
+      options?: MapRequestOptions,
+    ): Promise<FeatureMap>;
     /** Une page des champs d'une seule fonctionnalité. */
     featureFields(
       projectId: string,
@@ -1409,6 +1421,13 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request(
           'GET',
           `${project(projectId)}/cartography/feature${queryString({ id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      featureMap: (projectId, id, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/feature-map${queryString({ ...query, id })}`,
           undefined,
           mapOptions.signal,
         ),

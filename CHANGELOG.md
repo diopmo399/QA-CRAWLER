@@ -4,6 +4,20 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : onglet « Parcours & Graphe »
+
+- Une fonctionnalité de bout en bout en quatre couloirs ordonnés (Angular → BFF → Backend → API
+  externe), groupés par nature : stores et services SPA dans Angular, règles métier et persistance
+  Hibernate/JPA dans le backend, seulement les services tiers établis dans le couloir externe.
+- Relations réunies en faisceaux comptés par catégorie (contient, visible si, dépend de, appelle, flux de
+  données, persistance, API externe) ; « Tout » ne trace jamais une ligne par relation. Focus sur un
+  élément, tableau paginé de toutes les relations avec statut et preuve, onglets du haut et du bas.
+- Lacunes dites avec leur cause : couche absente ou non atteinte, aucun store, éléments non reliés,
+  appels non démontrés ou non classés, dépendances non lues, ruptures, coupe à 20 000 relations.
+- Route `GET /cartography/feature-map` et `client.cartography.featureMap` ; au plus 40 cartes par groupe
+  (les plus reliées), le reste compté. Zoom distinct de « Centrer », ajustement lisible à l'ouverture,
+  plein écran.
+
 ### Cartographie : contrats d'API des dépendances Maven
 
 - Un contrôleur qui implémente une interface publiée dans un jar de contrat expose ses endpoints : le jar

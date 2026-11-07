@@ -1,5 +1,8 @@
 import type {
+  FeatureCategory,
   FeatureDetail,
+  FeatureLane,
+  FeatureMap,
   FieldRow,
   FieldSheet,
   MapDecisionInput,
@@ -10,6 +13,8 @@ import type {
   MapSource,
 } from '../core/cartography.js';
 import {
+  FEATURE_CATEGORIES,
+  FEATURE_LANES,
   GIT_PROVIDERS,
   INVESTIGATION_GOALS,
   MAP_EDGE_KINDS,
@@ -32,6 +37,13 @@ import {
 } from './dashboard-cartography-structure.js';
 import { mapStrings } from './dashboard-cartography-i18n.js';
 import {
+  JOURNEY_BOTTOMS,
+  JOURNEY_VIEWS,
+  VIEW_PRESET,
+  type JourneyBottom,
+  type JourneyView,
+} from './dashboard-cartography-journey.js';
+import {
   CENTER_TABS,
   emptyCartographyUi,
   MAP_TABS,
@@ -42,6 +54,17 @@ import {
   type MapTab,
 } from './dashboard-cartography.js';
 import type { DashboardRoute, DashboardState } from './dashboard-view.js';
+
+/** Les critères du tableau des relations, sans les valeurs vides (la clé de cache reste stable). */
+const compactQuery = (q: CartographyUi['jQuery']): CartographyUi['jQuery'] => ({
+  ...(q.category ? { category: q.category } : {}),
+  ...(q.lane ? { lane: q.lane } : {}),
+  ...(q.status ? { status: q.status } : {}),
+  ...(q.item ? { item: q.item } : {}),
+  ...(q.q ? { q: q.q } : {}),
+  ...(q.page ? { page: q.page } : {}),
+  ...(q.size ? { size: q.size } : {}),
+});
 
 /**
  * LE CONTRÔLEUR DE LA CARTOGRAPHIE, EN EXPLORATION PROGRESSIVE. Au premier affichage : le résumé et une
@@ -72,7 +95,7 @@ export class CartographyController {
    * Les fiches et les pages de champs déjà lues, valables pour une version des données (nouveau scan,
    * décision : nouvelle version) : revenir sur une fonctionnalité visitée ne relit rien.
    */
-  private readonly cache = new Map<string, FeatureDetail | FieldSheet | MapPage<FieldRow>>();
+  private readonly cache = new Map<string, FeatureDetail | FieldSheet | MapPage<FieldRow> | FeatureMap>();
   private version = 0;
 
   constructor(private readonly host: CartographyHost) {}
@@ -87,7 +110,10 @@ export class CartographyController {
     return route.view === 'cartography' ? route.projectId : undefined;
   }
 
-  private remember<T extends FeatureDetail | FieldSheet | MapPage<FieldRow>>(key: string, value: T): T {
+  private remember<T extends FeatureDetail | FieldSheet | MapPage<FieldRow> | FeatureMap>(
+    key: string,
+    value: T,
+  ): T {
     this.cache.delete(key);
     if (this.cache.size >= CACHE_MAX) {
       const oldest = this.cache.keys().next().value;
@@ -507,12 +533,183 @@ export class CartographyController {
       if (this.ui.api && this.ui.apiSheet?.api.id !== this.ui.api) await this.loadApiSheet();
       return;
     }
+    if (this.ui.tab === 'features' && this.ui.feature && this.ui.detail?.feature.id !== this.ui.feature) {
+      // La fonctionnalité a pu changer depuis Parcours & Graphe : sa fiche et ses champs sont relus ici.
+      await Promise.all([this.loadDetail(), this.loadFields()]);
+      return;
+    }
+    if (this.ui.tab === 'journey') {
+      if (!this.ui.features) await this.loadFeatures();
+      if (!this.ui.feature && this.ui.features?.items[0]) this.ui.feature = this.ui.features.items[0].id;
+      await this.loadJourney();
+      return;
+    }
     if (this.ui.tab === 'fields') {
       await Promise.all([
         this.ui.concepts ? undefined : this.loadConcepts(),
         this.ui.issues ? undefined : this.loadIssues(),
         this.ui.concept && !this.ui.conceptSheet ? this.loadConceptSheet() : undefined,
       ]);
+    }
+  }
+
+  /** Parcours & Graphe : la carte de la fonctionnalité ouverte (une page de relations selon les critères). */
+  private async loadJourney(): Promise<void> {
+    const ui = this.ui;
+    const feature = ui.feature;
+    if (!feature) return;
+    const query = { ...ui.jQuery };
+    const key = `${String(this.version)}|journey|${feature}|${JSON.stringify(query)}`;
+    const cached = this.cache.get(key) as FeatureMap | undefined;
+    const map =
+      cached ??
+      (await this.fetch('journey', (api, id, signal) =>
+        api.cartography.featureMap(id, feature, query, { signal }),
+      ));
+    if (!map || ui.feature !== feature || JSON.stringify(ui.jQuery) !== JSON.stringify(query)) return;
+    if (!cached) this.remember(key, map);
+    ui.jMap = map;
+    ui.jQuery.page = map.relations.page;
+    // À la première ouverture d'une fonctionnalité, les quatre couloirs sont ajustés à la zone, sans
+    // descendre sous une taille lisible ni agrandir ; ensuite l'échelle ne change que sur demande.
+    if (ui.jFitted !== feature) {
+      ui.jFitted = feature;
+      setTimeout(() => {
+        this.fitJourney(true);
+      }, 0);
+    }
+  }
+
+  /** Relire la carte après un changement de critère (la sélection et la vue sont gardées). */
+  private reloadJourney(): void {
+    void this.run(() => this.loadJourney());
+  }
+
+  /**
+   * Ajuster les couloirs à la largeur de la zone. `auto` (ouverture) : jamais au-dessus de 100 % ni sous
+   * 75 % (les cartes restent lisibles, la zone défile) ; à la demande : entre 50 et 150 %.
+   */
+  private fitJourney(auto = false): void {
+    const canvas = this.host.root.querySelector<HTMLElement>('[data-jr-canvas]');
+    const lanes = canvas?.querySelector<HTMLElement>('.jr-lanes');
+    if (!canvas || !lanes) return;
+    // La largeur à 100 % : l'échelle (CSS zoom) réduit la mise en page, on la retire de la mesure.
+    const natural = lanes.scrollWidth / (this.ui.jZoom || 1);
+    if (natural <= 0) return;
+    const ratio = Math.floor(((canvas.clientWidth - 24) / natural) * 100) / 100;
+    this.ui.jZoom = auto ? Math.max(0.75, Math.min(1, ratio)) : Math.max(0.5, Math.min(1.5, ratio));
+    this.host.paint();
+  }
+
+  /** Centrer la vue sur l'élément choisi (ou le début des couloirs), sans changer l'échelle. */
+  private centerJourney(): void {
+    const canvas = this.host.root.querySelector<HTMLElement>('[data-jr-canvas]');
+    if (!canvas) return;
+    const id = this.ui.jSelect;
+    const target = id
+      ? [...canvas.querySelectorAll<HTMLElement>('[data-action="map-j-item"]')].find(
+          (el) => el.dataset.item === id,
+        )
+      : undefined;
+    if (!target) {
+      canvas.scrollTo({ left: 0, top: 0 });
+      return;
+    }
+    const box = canvas.getBoundingClientRect();
+    const at = target.getBoundingClientRect();
+    canvas.scrollTo({
+      left: canvas.scrollLeft + at.left - box.left - (box.width - at.width) / 2,
+      top: canvas.scrollTop + at.top - box.top - (box.height - at.height) / 2,
+    });
+  }
+
+  /** Une action de Parcours & Graphe (vue, onglet du bas, catégorie, faisceau, élément, page, zoom…). */
+  private journeyAction(action: string, target: HTMLElement): boolean {
+    const ui = this.ui;
+    const query = (patch: Partial<typeof ui.jQuery>): void => {
+      ui.jQuery = compactQuery({ ...ui.jQuery, ...patch, page: patch.page ?? 1 });
+    };
+    switch (action) {
+      case 'map-j-view': {
+        const view = target.dataset.view as JourneyView;
+        if (!JOURNEY_VIEWS.includes(view)) return true;
+        ui.jView = view;
+        const preset = VIEW_PRESET[view];
+        ui.jBottom = preset.bottom;
+        query({ category: preset.category, lane: undefined });
+        this.reloadJourney();
+        return true;
+      }
+      case 'map-j-bottom': {
+        const tab = target.dataset.tab as JourneyBottom;
+        if (JOURNEY_BOTTOMS.includes(tab)) ui.jBottom = tab;
+        this.host.paint();
+        return true;
+      }
+      case 'map-j-cat': {
+        const cat = target.dataset.cat as FeatureCategory | '';
+        query({ category: cat && FEATURE_CATEGORIES.includes(cat) ? cat : undefined, lane: undefined });
+        ui.jBottom = 'links';
+        this.reloadJourney();
+        return true;
+      }
+      case 'map-j-bundle': {
+        const cat = target.dataset.cat as FeatureCategory;
+        const lane = target.dataset.lane as FeatureLane;
+        if (!FEATURE_CATEGORIES.includes(cat)) return true;
+        query({ category: cat, lane: FEATURE_LANES.includes(lane) ? lane : undefined });
+        ui.jBottom = 'links';
+        this.reloadJourney();
+        return true;
+      }
+      case 'map-j-item': {
+        const id = target.dataset.item ?? '';
+        const same = ui.jSelect === id;
+        ui.jSelect = same ? undefined : id;
+        query({ item: same ? undefined : id });
+        ui.jBottom = 'links';
+        this.reloadJourney();
+        return true;
+      }
+      case 'map-j-clear':
+        ui.jSelect = undefined;
+        query({ item: undefined, category: undefined, lane: undefined });
+        this.reloadJourney();
+        return true;
+      case 'map-j-page':
+        ui.jQuery = { ...ui.jQuery, page: Math.max(1, Number(target.dataset.page) || 1) };
+        this.reloadJourney();
+        return true;
+      case 'map-j-zoom': {
+        const dir = Number(target.dataset.dir) || 0;
+        ui.jZoom = Math.max(0.5, Math.min(1.5, Math.round((ui.jZoom + dir * 0.1) * 10) / 10));
+        this.host.paint();
+        return true;
+      }
+      case 'map-j-fit':
+        this.fitJourney();
+        return true;
+      case 'map-j-center':
+        this.centerJourney();
+        return true;
+      case 'map-j-full':
+        ui.jFull = !ui.jFull;
+        this.host.paint();
+        return true;
+      case 'map-j-tree': {
+        const node = target.dataset.node ?? '';
+        ui.jClosed = ui.jClosed.includes(node) ? ui.jClosed.filter((n) => n !== node) : [...ui.jClosed, node];
+        this.host.paint();
+        return true;
+      }
+      case 'map-j-card': {
+        const card = target.dataset.card ?? '';
+        ui.jOpen = ui.jOpen.includes(card) ? ui.jOpen.filter((c) => c !== card) : [...ui.jOpen, card];
+        this.host.paint();
+        return true;
+      }
+      default:
+        return false;
     }
   }
 
@@ -1136,6 +1333,20 @@ export class CartographyController {
         ui.impactOpen = !ui.impactOpen;
         this.host.paint();
         return true;
+      case 'map-j-view':
+      case 'map-j-bottom':
+      case 'map-j-cat':
+      case 'map-j-bundle':
+      case 'map-j-item':
+      case 'map-j-clear':
+      case 'map-j-page':
+      case 'map-j-zoom':
+      case 'map-j-fit':
+      case 'map-j-center':
+      case 'map-j-full':
+      case 'map-j-tree':
+      case 'map-j-card':
+        return this.journeyAction(action, target);
       case 'map-tab': {
         const tab = target.dataset.tab as MapTab;
         if (!MAP_TABS.includes(tab)) return true;
@@ -1447,6 +1658,12 @@ export class CartographyController {
       this.host.paint();
       return true;
     }
+    if (event.key === 'Escape' && ui.jFull && ui.tab === 'journey') {
+      ui.jFull = false;
+      this.host.paint();
+      this.host.root.querySelector<HTMLElement>('[data-action="map-j-full"]')?.focus();
+      return true;
+    }
     if (event.key === 'Escape' && ui.fullscreen) {
       ui.fullscreen = false;
       this.host.paint();
@@ -1721,6 +1938,53 @@ export class CartographyController {
       case 'impact-env':
         ui.impactEnv = value;
         return true;
+      case 'j-feature':
+        if (!value || value === ui.feature) return true;
+        // Une autre fonctionnalité : sa carte seule (sa fiche et ses champs se chargeront dans leur onglet),
+        // sans la sélection ni les critères de la précédente ; la vue reste.
+        ui.feature = value;
+        ui.detail = undefined;
+        ui.fields = undefined;
+        ui.field = undefined;
+        ui.sheet = undefined;
+        ui.fieldCriteria = { ...ui.fieldCriteria, q: '', type: '', layer: '', page: 1 };
+        ui.jSelect = undefined;
+        ui.jOpen = [];
+        ui.jClosed = [];
+        ui.jQuery = {
+          page: 1,
+          size: ui.jQuery.size ?? 25,
+          ...(VIEW_PRESET[ui.jView].category ? { category: VIEW_PRESET[ui.jView].category } : {}),
+        };
+        this.reloadJourney();
+        return true;
+      case 'j-cat':
+      case 'j-lane':
+      case 'j-status': {
+        const key = name === 'j-cat' ? 'category' : name === 'j-lane' ? 'lane' : 'status';
+        const allowed: readonly string[] =
+          key === 'category'
+            ? FEATURE_CATEGORIES
+            : key === 'lane'
+              ? FEATURE_LANES
+              : ['CONFIRMED', 'PROBABLE', 'UNKNOWN'];
+        // Une valeur hors liste efface le critère (jamais transmise au serveur).
+        ui.jQuery = compactQuery({
+          ...ui.jQuery,
+          page: 1,
+          [key]: allowed.includes(value) ? value : undefined,
+        });
+        this.reloadJourney();
+        return true;
+      }
+      case 'j-q': {
+        const next = { ...ui.jQuery, page: 1 };
+        if (value.trim()) next.q = value.trim();
+        else delete next.q;
+        ui.jQuery = next;
+        this.searchLater(() => this.loadJourney());
+        return true;
+      }
       case 'group-parallel':
         ui.grouped = checked;
         this.host.paint();

@@ -46,6 +46,7 @@ import {
   type StructTab,
 } from './dashboard-cartography-structure.js';
 import { impactView, SCAN_CSS, scanView, type ScanViewHelpers } from './dashboard-cartography-scan.js';
+import { emptyJourney, JOURNEY_CSS, journeyTab, type JourneyState } from './dashboard-cartography-journey.js';
 import { header, icon } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
@@ -61,6 +62,7 @@ export const MAP_TABS = [
   'overview',
   'scan',
   'features',
+  'journey',
   'structure',
   'fields',
   'apis',
@@ -114,9 +116,11 @@ export type MapPane =
   | 'trace'
   | 'investigation'
   | 'conditions'
-  | 'actions';
+  | 'actions'
+  | 'journey';
 
-export interface CartographyUi {
+/** Parcours & Graphe (JourneyState) : la carte de la fonctionnalité ouverte, sa vue, ses critères, l'élément choisi. */
+export interface CartographyUi extends JourneyState {
   tab: MapTab;
   summary?: MapSummary;
   loading: Partial<Record<MapPane, boolean>>;
@@ -264,6 +268,7 @@ export interface CartographyUi {
 }
 
 export const emptyCartographyUi = (): CartographyUi => ({
+  ...emptyJourney(),
   tab: 'overview',
   loading: {},
   errors: {},
@@ -428,6 +433,7 @@ const TAB_ICON: Record<MapTab, string> = {
   overview: 'overview',
   scan: 'search',
   features: 'cube',
+  journey: 'swap',
   fields: 'merge',
   coverage: 'scenarios',
   trace: 'traceability',
@@ -499,6 +505,18 @@ export function cartographyView(input: DashboardState): string {
   else if (!summary.scan) content = `<section class="card msg"><p class="mu">${esc(m.noScan)}</p></section>`;
   else if (ui.tab === 'overview') content = overviewTab(m, state, summary);
   else if (ui.tab === 'features') content = explorerTab(m, state);
+  else if (ui.tab === 'journey')
+    content = journeyTab(ui, {
+      locale: state.t.locale === 'en' ? 'en' : 'fr',
+      conf: (value) => conf(m, value),
+      evidence: (e) => evidenceButton(m, e, state),
+      spinner: () => spinner(m),
+      paneError,
+      features: ui.features?.items ?? [],
+      ...(ui.feature ? { feature: ui.feature } : {}),
+      loading: ui.loading.journey === true,
+      ...(ui.errors.journey ? { error: ui.errors.journey } : {}),
+    });
   else if (ui.tab === 'fields') content = fieldsTab(m, state);
   else if (ui.tab === 'coverage') content = coverageTab(m, state, summary);
   else if (ui.tab === 'trace') content = traceTab(m, state);
@@ -1406,7 +1424,7 @@ function evidencePanel(m: MapStrings, ui: CartographyUi): string {
   return `<aside class="map-ev" role="dialog" aria-label="${esc(e ? m.evidenceTitle(e.file, e.line) : m.evidence)}"><div class="card-h"><h2 class="mono">${esc(e ? `${e.source} · ${m.evidenceTitle(e.file, e.line)}` : m.evidence)}</h2><button class="btn small ghost icon-only" data-action="map-evidence-close" aria-label="${esc(m.closeEvidence)}">${icon('close')}</button></div>${code}</aside>`;
 }
 
-export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}${SCAN_CSS}${INVESTIGATION_CSS}
+export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}${SCAN_CSS}${INVESTIGATION_CSS}${JOURNEY_CSS}
 .sd-note{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sd-note span{flex:1 1 auto}
 .map{display:flex;flex-direction:column;gap:14px}
 .map-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}

@@ -9,6 +9,7 @@ import {
   type ScenarioInput,
 } from '../../cartography/coverage.js';
 import { applyDecisions } from '../../cartography/decisions.js';
+import { featureMap } from '../../cartography/feature-map.js';
 import { allowedPath, isReadableFile, SourceAccessError } from '../../cartography/files.js';
 import {
   gitFileUrl,
@@ -58,6 +59,8 @@ import {
 } from '../../cartography/store.js';
 import {
   DECISION_KINDS,
+  FEATURE_CATEGORIES,
+  FEATURE_LANES,
   GIT_PROVIDERS,
   INVESTIGATION_GOALS,
   MAP_EDGE_KINDS,
@@ -85,6 +88,8 @@ import {
   type DecisionKind,
   type EvidenceExcerpt,
   type FeatureDetail,
+  type FeatureMap,
+  type FeatureMapQuery,
   type FeatureRow,
   type FieldIssue,
   type FieldRow,
@@ -906,6 +911,45 @@ export function listQuery(params: URLSearchParams): MapListQuery {
     ...(page !== undefined ? { page } : {}),
     ...(size !== undefined ? { size } : {}),
   };
+}
+
+/** Les critères du tableau des relations d'une fonctionnalité ; une valeur inconnue est refusée (400). */
+export function featureMapQuery(params: URLSearchParams): FeatureMapQuery {
+  const pick = <T extends string>(key: string, allowed: readonly T[]): T | undefined => {
+    const value = params.get(key);
+    if (value === null || value === '') return undefined;
+    if (!(allowed as readonly string[]).includes(value))
+      throw new CartographyInputError(400, 'BAD_QUERY', `unknown ${key}: ${value.slice(0, 40)}`);
+    return value as T;
+  };
+  const category = pick('category', FEATURE_CATEGORIES);
+  const lane = pick('lane', FEATURE_LANES);
+  const status = pick('status', ['CONFIRMED', 'PROBABLE', 'UNKNOWN'] as const);
+  const item = params.get('item');
+  const q = params.get('q');
+  const page = number(params.get('page'));
+  const size = number(params.get('size'));
+  return {
+    ...(category ? { category } : {}),
+    ...(lane ? { lane } : {}),
+    ...(status ? { status } : {}),
+    ...(item && item.length <= 500 ? { item } : {}),
+    ...(q && q.length <= 200 ? { q } : {}),
+    ...(page !== undefined ? { page } : {}),
+    ...(size !== undefined ? { size } : {}),
+  };
+}
+
+/** La carte d'une fonctionnalité (Parcours & Graphe) : couloirs, faisceaux comptés, lacunes, une page de relations. */
+export async function mapFeatureMap(
+  project: CartographyProject,
+  id: string,
+  query: FeatureMapQuery,
+): Promise<FeatureMap> {
+  const state = await required(project);
+  const result = featureMap(state.index, state.cov, id, query);
+  if (!result) throw new CartographyInputError(404, 'NOT_FOUND', 'unknown feature');
+  return result;
 }
 
 /** Le résumé du premier affichage : aucun graphe, seulement des comptes et des listes courtes. */

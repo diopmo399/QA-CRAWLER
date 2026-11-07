@@ -432,31 +432,36 @@ const owning = (index: MapIndex, id: string): string | undefined => {
   return typeof node?.detail.component === 'string' ? node.detail.component : undefined;
 };
 
+/** Une condition d'affichage ou d'activation, avec sa décision résolue (ou la cause). */
+export function conditionRow(index: MapIndex, node: MapNode): ConditionRow {
+  const elementId = typeof node.detail.element === 'string' ? node.detail.element : '';
+  const element = index.nodes.get(elementId);
+  const resolved = resolveCondition(index, node);
+  return {
+    id: node.id,
+    element: {
+      id: elementId,
+      name: element?.label ?? element?.name ?? elementId,
+      kind: element?.kind ?? '',
+    },
+    ...(owning(index, elementId) ? { component: owning(index, elementId) } : {}),
+    aspect: resolved.aspect,
+    expression: resolved.expression,
+    whenTrue: resolved.whenTrue,
+    sources: resolved.sources.map((s) => ({ member: s.member, kind: s.kind })),
+    ...(resolved.decision ? { decision: resolved.decision.method.name } : {}),
+    status: resolved.status,
+    ...(resolved.undetermined ? { undetermined: resolved.undetermined } : {}),
+  };
+}
+
 /** Toutes les conditions du projet, avec leur décision résolue (ou la cause), filtrables par texte. */
 export function conditionRows(index: MapIndex, query: MapListQuery): MapPage<ConditionRow> {
   const q = query.q?.trim().toLowerCase() ?? '';
   const rows: ConditionRow[] = [];
   for (const node of index.nodes.values()) {
     if (node.kind !== 'CONDITION') continue;
-    const elementId = typeof node.detail.element === 'string' ? node.detail.element : '';
-    const element = index.nodes.get(elementId);
-    const resolved = resolveCondition(index, node);
-    const row: ConditionRow = {
-      id: node.id,
-      element: {
-        id: elementId,
-        name: element?.label ?? element?.name ?? elementId,
-        kind: element?.kind ?? '',
-      },
-      ...(owning(index, elementId) ? { component: owning(index, elementId) } : {}),
-      aspect: resolved.aspect,
-      expression: resolved.expression,
-      whenTrue: resolved.whenTrue,
-      sources: resolved.sources.map((s) => ({ member: s.member, kind: s.kind })),
-      ...(resolved.decision ? { decision: resolved.decision.method.name } : {}),
-      status: resolved.status,
-      ...(resolved.undetermined ? { undetermined: resolved.undetermined } : {}),
-    };
+    const row = conditionRow(index, node);
     if (
       q &&
       ![row.element.name, row.expression, row.decision ?? '', row.component ?? '']
