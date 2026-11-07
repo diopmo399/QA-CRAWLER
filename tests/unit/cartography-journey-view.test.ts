@@ -224,6 +224,8 @@ describe('onglet Parcours & Graphe', () => {
     expect(count(graphOf(alt), 'class="jr-sn')).toBe(steps);
     const full = render({ jMap: traced, jSelect: t?.item ?? '', jMode: 'full' });
     expect(full).not.toContain('jr-sec dim folded');
+    // Rien de replié, mais chaque carte repliée montre ses membres numérotés du parcours.
+    expect(count(graphOf(full), 'class="jr-sn')).toBe(steps);
     expect(html).toContain('jr-sec dim folded');
     // Le tableau se lit dans l'ordre des étapes, chaque ligne avec ses deux numéros.
     const table = html.slice(html.indexOf('class="jr-t"'));
