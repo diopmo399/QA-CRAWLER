@@ -468,7 +468,17 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     await journey().locator('.jr-tn', { hasText: 'Refuse' }).click();
     await journey().locator('.jr-focus').waitFor();
     await expect.poll(async () => rows().count()).toBe(3);
-    expect(await journey().locator('.jr-card.dim').count()).toBeGreaterThan(0);
+    // Les autres sont repliés : groupes sans lien à leur titre, autres boutons en une ligne.
+    const folded = journey().locator('.jr-sec.folded');
+    await expect.poll(async () => folded.count()).toBeGreaterThan(5);
+    const others = journey().locator('[data-group="BUTTON"] .jr-folded');
+    expect(await others.textContent()).toContain('+2 cartes');
+    expect(await journey().locator('[data-group="BUTTON"] .jr-card').count()).toBe(1);
+    // Un groupe replié se déplie sur demande, sans perdre la sélection.
+    const foldedBefore = await folded.count();
+    await folded.first().locator('.jr-fold').click();
+    await expect.poll(async () => folded.count()).toBe(foldedBefore - 1);
+    expect(await journey().locator('.jr-focus').count()).toBe(1);
     // « Centrer » garde l'échelle ; le zoom change d'un cran ; « Ajuster » recalcule.
     const before = await zoomOf();
     await journey().locator('[data-action="map-j-center"]').click();

@@ -20,6 +20,9 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 - Graphe visible sans défiler : cartes repliées par défaut (liens et membres dans l'en-tête, dépliées au
   choix ou par « Déplier toutes les cartes »), graphe amené en haut de l'écran à l'ouverture, ajustement
   en largeur et en hauteur, zone à la hauteur de l'écran.
+- Choisir un élément replie les autres : branches de l'arbre hors de son chemin, groupes sans lien
+  (réduits à leur titre), cartes sans lien (« +N cartes ») ; une seule carte dépliée à la fois. Le
+  serveur renvoie les voisins de l'élément sur toutes ses relations (`neighbours`).
 
 ### Cartographie : contrats d'API des dépendances Maven
 

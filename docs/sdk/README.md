@@ -1217,7 +1217,11 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
   externe) porte le compte exact ; en pointillé si une partie n'est que probable ou non démontrée. Les
   compteurs de la colonne gauche et des pastilles portent toujours sur toutes les relations.
 - **Exploration progressive.** Un clic sur un élément (arbre, carte ou tableau) le met au premier plan
-  et atténue le reste ; le tableau ne garde que ses relations. « Tout montrer » rétablit la vue. Une
+  et replie le reste : les branches de l'arbre hors de son chemin, les groupes qui ne le touchent pas
+  (réduits à leur titre, un clic les déplie) et, dans ses groupes, les cartes sans lien avec lui (« +N
+  cartes sans lien avec l'élément choisi »). Ses voisins viennent de toutes ses relations, pas seulement
+  de la page du tableau. Une seule carte est dépliée à la fois. Le tableau ne garde que ses relations.
+  Cliquer de nouveau l'élément, ou « Tout montrer », rouvre tout. Une
   catégorie (colonne gauche ou pastille) restreint le tableau à elle ; la sélection est gardée quand la
   catégorie change.
 - **Tableau des liens.** Type, source, cible, statut (confirmé, probable, non démontré) et preuve
