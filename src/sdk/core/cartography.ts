@@ -1683,8 +1683,10 @@ export interface FeatureMap {
   /** Le nombre d'éléments de la fonctionnalité, avant la limite de cartes par groupe. */
   itemCount: number;
   /**
-   * Avec `query.item` : l'élément (ou la carte) demandé et tous ses voisins directs, d'après toutes ses
-   * relations (pas seulement la page du tableau) ; le reste peut être replié.
+   * Avec `query.item` : le parcours de l'élément (ou de la carte) demandé, sur toutes les relations de la
+   * fonctionnalité : ce qu'il déclenche en aval et ce qui le contient ou l'appelle en amont, de proche en
+   * proche (bouton → méthode → service → endpoint BFF → contrôleur → … → table). Le tableau ne garde alors
+   * que les relations de ce parcours ; le reste peut être replié.
    */
   neighbours?: string[];
   tree: FeatureTreeNode[];

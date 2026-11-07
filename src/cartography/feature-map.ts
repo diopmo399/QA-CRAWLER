@@ -40,6 +40,9 @@ import { conditionRow } from './structure.js';
 /** Au-delà, les relations de la fonctionnalité sont coupées (et la carte le dit). */
 export const MAX_FEATURE_EDGES = 20_000;
 
+/** Le parcours d'un élément (amont + aval) s'arrête au-delà de ce nombre d'éléments par sens. */
+const MAX_PATH = 5_000;
+
 const CATEGORY_OF: Partial<Record<MapEdgeKind, FeatureCategory>> = {
   CONTAINS: 'CONTAINS',
   VISIBLE_WHEN: 'CONDITION',
@@ -414,19 +417,47 @@ export function featureMap(
   // ── Les lacunes, avec leur cause ──
   const gaps = gapsOf(index, feature, items, sorted, unclassified, detail.truncated, featureId);
 
-  // ── L'élément demandé et ses voisins directs (sur toutes ses relations) ──
-  const touches = (r: FeatureMapRelation, id: string): boolean =>
-    r.from === id || r.to === id || items.get(r.from)?.card === id || items.get(r.to)?.card === id;
+  // ── Le parcours de l'élément demandé : tout ce qu'il déclenche (aval, dans le sens des relations) et
+  // tout ce qui le contient ou l'appelle (amont), sur toutes les relations de la fonctionnalité ──
   let neighbours: string[] | undefined;
+  let onPath: Set<string> | undefined;
   if (query.item) {
     const item = query.item;
-    const near = new Set<string>([item]);
-    for (const r of unique)
-      if (touches(r, item)) {
-        near.add(r.from);
-        near.add(r.to);
+    // Une carte demandée (une classe, un composant) part de tous ses membres.
+    const seeds = [item, ...sorted.filter((i) => i.card === item && i.id !== item).map((i) => i.id)];
+    const forward = new Map<string, FeatureMapRelation[]>();
+    const backward = new Map<string, FeatureMapRelation[]>();
+    const add = (map: Map<string, FeatureMapRelation[]>, key: string, r: FeatureMapRelation): void => {
+      const list = map.get(key);
+      if (list) list.push(r);
+      else map.set(key, [r]);
+    };
+    for (const r of unique) {
+      add(forward, r.from, r);
+      add(backward, r.to, r);
+    }
+    const near = new Set<string>(seeds);
+    const used = new Set<string>();
+    const walk = (adjacent: Map<string, FeatureMapRelation[]>, next: (r: FeatureMapRelation) => string) => {
+      const seen = new Set<string>(seeds);
+      const queue = [...seeds];
+      while (queue.length > 0 && seen.size <= MAX_PATH) {
+        const at = queue.shift() as string;
+        for (const r of adjacent.get(at) ?? []) {
+          used.add(r.id);
+          const to = next(r);
+          near.add(to);
+          if (!seen.has(to)) {
+            seen.add(to);
+            queue.push(to);
+          }
+        }
       }
+    };
+    walk(forward, (r) => r.to);
+    walk(backward, (r) => r.from);
     neighbours = [...near];
+    onPath = used;
   }
 
   // ── Le tableau des relations, restreint et paginé ──
@@ -435,7 +466,7 @@ export function featureMap(
     .filter((r) => !query.category || r.category === query.category)
     .filter((r) => !query.lane || r.fromLane === query.lane || r.toLane === query.lane)
     .filter((r) => !query.status || r.status === query.status)
-    .filter((r) => !query.item || touches(r, query.item))
+    .filter((r) => !onPath || onPath.has(r.id))
     .filter((r) => !q || `${r.fromName} ${r.toName} ${r.reason} ${r.kind}`.toLowerCase().includes(q))
     .sort(
       (a, b) =>
