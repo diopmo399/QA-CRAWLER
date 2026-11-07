@@ -86,6 +86,20 @@ describe('onglet Parcours & Graphe', () => {
     expect(html).toMatch(/jr-m sel|jr-card sel|jr-tn[^"]* sel/);
   });
 
+  it('cartes repliées par défaut (nombre de membres dans l’en-tête), dépliées sur demande ou choisies', () => {
+    const compact = render();
+    expect(compact).not.toContain('class="jr-ml"');
+    expect(compact).toMatch(/<i class="jr-n">\d+ liens<small[^>]*>\d+ membres<\/small><\/i>/);
+    expect(compact).toContain('data-action="map-j-detail" aria-label="Déplier toutes les cartes"');
+    const detailed = render({ jDetail: true });
+    expect(count(detailed, 'class="jr-ml"')).toBeGreaterThan(3);
+    // La carte de l'élément choisi se déplie seule.
+    const method = map.items.find((i) => i.kind === 'METHOD' && i.card !== i.id);
+    const chosen = render({ jSelect: method?.id ?? '' });
+    expect(count(chosen, 'class="jr-ml"')).toBe(1);
+    expect(chosen).toContain('jr-m sel');
+  });
+
   it('chaque vue ouvre son onglet du bas, sans erreur de rendu', () => {
     for (const view of JOURNEY_VIEWS) {
       const html = render({ jView: view, jBottom: VIEW_PRESET[view].bottom });
