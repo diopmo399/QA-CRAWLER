@@ -28,6 +28,8 @@ const cov: CoverageContext = {
 const ROOT = path.resolve('tests/fixtures/cartography-conditions');
 
 let map: FeatureMap;
+/** La carte avec l'élément « Refuse » choisi : son parcours et sa traçabilité. */
+let traced: FeatureMap;
 beforeAll(async () => {
   const config: CartographyConfig = {
     schema: 1,
@@ -43,6 +45,8 @@ beforeAll(async () => {
   const index = buildIndex(model);
   const feature = model.features.find((f) => f.name === 'Request create');
   map = featureMap(index, cov, feature?.id ?? '') as FeatureMap;
+  const refuse = map.items.find((i) => i.kind === 'BUTTON' && i.name === 'Refuse');
+  traced = featureMap(index, cov, feature?.id ?? '', { item: refuse?.id ?? '' }) as FeatureMap;
 }, 120_000);
 
 const helpers = (feature: string): JourneyHelpers => ({
@@ -173,6 +177,54 @@ describe('onglet Parcours & Graphe', () => {
     expect(rules).toContain('ValidationEligibilityService.canValidate');
     const overview = render({ jView: 'overview' });
     expect(overview).toContain('jr-gaps');
+  });
+
+  it('le fil du parcours numérote les étapes, les mêmes dans le graphe et le tableau', () => {
+    const t = traced.trace;
+    const html = render({ jMap: traced, jSelect: t?.item ?? '' });
+    expect(html).toContain('data-path');
+    expect(html).toContain('<b class="jr-pt">Parcours de Refuse</b>');
+    // Les éléments distincts de la trace, numérotés de 1 à n.
+    const steps = new Set([...(t?.up ?? []), ...(t?.down ?? [])].map((x) => x.id)).size;
+    expect(html).toContain(`${String(steps)} étapes`);
+    // Le chemin principal, dans l'ordre : de la page au bouton, puis jusqu'à la table.
+    const ribbon = html.slice(html.indexOf('data-path'), html.indexOf('data-jr-canvas'));
+    const order = [
+      '/requests/create',
+      'RequestCreateComponent',
+      'Validation',
+      'Refuse',
+      'RequestService.refuse',
+      'POST /api/requests/refuse',
+      'RequestBffController.refuse',
+      'RequestBffService.refuse',
+      'POST /requests/refuse',
+      'RequestController.refuse',
+      'RequestValidationService.refuse',
+      'REQUEST',
+    ].map((n) => ribbon.indexOf(`<span>${n}</span></button>`));
+    expect(order.every((i) => i > 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(ribbon).toMatch(/<i class="jr-sn"[^>]*>1<\/i>.*?<span>\/requests\/create<\/span>/);
+    expect(ribbon).toMatch(/<i class="jr-sn goal"[^>]*>\d+<\/i>.*?<span>REQUEST<\/span>/);
+    // Le verbe des relations, les passages de couche, le bout atteint, les autres étapes.
+    expect(ribbon).toContain('<span>affiche</span>');
+    expect(ribbon).toContain('<span>contient</span>');
+    expect(ribbon).toContain('<span>déclenche</span>');
+    expect(count(ribbon, 'class="jr-cx')).toBe(2);
+    expect(ribbon).toContain('>Table atteinte</li>');
+    expect(ribbon).toContain('1 table atteinte');
+    expect(ribbon).toMatch(/\+\d+ autres étapes, numérotées dans le graphe/);
+    expect(ribbon).not.toContain('Ruptures');
+    // Le graphe porte les mêmes numéros sur les cartes et les membres du parcours.
+    const graph = html.slice(html.indexOf('data-jr-canvas'), html.indexOf('jr-bottom'));
+    expect(count(graph, 'class="jr-sn')).toBe(steps);
+    // Le tableau se lit dans l'ordre des étapes, chaque ligne avec ses deux numéros.
+    const table = html.slice(html.indexOf('class="jr-t"'));
+    expect(table).toMatch(/<td class="mu"><span class="jr-sn2"[^>]*><i class="jr-sn"[^>]*>1<\/i>/);
+    expect(count(table, 'class="jr-sn2"')).toBe(traced.relations.items.length);
+    // Sans élément choisi : aucun numéro.
+    expect(render()).not.toContain('jr-sn');
   });
 
   it('le tableau des liens montre la page demandée avec la preuve de chaque relation', () => {

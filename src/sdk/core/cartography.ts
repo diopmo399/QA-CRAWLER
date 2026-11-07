@@ -1659,6 +1659,105 @@ export interface FeatureMapGap {
   detail: string;
 }
 
+/**
+ * Au bout d'une branche de la trace : une table (persistance démontrée), une API externe, un écran (le
+ * contenu d'un composant atteint n'est pas suivi), une jonction avec une autre branche déjà tracée, une fin
+ * normale (rien d'autre n'est attendu), ou un arrêt là où une suite était attendue (avec sa cause).
+ */
+export type FeatureTraceEnd = 'TABLE' | 'EXTERNAL' | 'SCREEN' | 'JOIN' | 'END' | 'STOP';
+
+export interface FeatureTraceStep {
+  id: string;
+  name: string;
+  sub?: string;
+  lane: FeatureLane;
+  group: FeatureGroup;
+  kind: string;
+  /** 0 : l'élément choisi ; 1, 2… : ses étapes, en s'éloignant de lui. */
+  depth: number;
+  /** L'étape d'où l'on vient (plus proche de l'élément choisi). */
+  parent?: string;
+  /** La relation qui mène à cette étape, avec son statut et sa preuve. */
+  via?: {
+    kind: string;
+    /** Toutes les sortes de relations entre l'étape d'où l'on vient et celle-ci (ex. lit + écrit). */
+    kinds: string[];
+    category: FeatureCategory;
+    status: MapConfidence;
+    reason: string;
+    evidence?: Evidence;
+  };
+  /** Avec `end: 'JOIN'` : l'étape déjà tracée que cette branche rejoint. */
+  joins?: string;
+  /** La preuve de l'élément lui-même (sa déclaration). */
+  evidence?: Evidence;
+  end?: FeatureTraceEnd;
+  /** Avec `end: 'STOP'` : la cause que le scan donne de l'arrêt (corrélation non démontrée…), absente sinon. */
+  gap?: string;
+}
+
+/** La trace ordonnée d'un élément : l'arbre amont (ce qui le contient ou l'appelle) et l'arbre aval. */
+export interface FeatureTrace {
+  item: string;
+  up: FeatureTraceStep[];
+  down: FeatureTraceStep[];
+  /** Les couloirs atteints, dans l'ordre Angular → BFF → Backend → API externe. */
+  reached: FeatureLane[];
+  /** Les statuts des relations de la trace. */
+  statuses: Record<MapConfidence, number>;
+  truncated: boolean;
+}
+
+/**
+ * L'ordre de lecture d'une trace, numéroté à partir de 1 : l'amont du plus loin au plus proche (la page,
+ * le composant, le conteneur), l'élément choisi, puis l'aval étape par étape. Partagé par le serveur (ordre
+ * du tableau) et l'interface (numéros du graphe) pour que les deux numérotations coïncident.
+ */
+export function traceSteps(trace: FeatureTrace): Map<string, number> {
+  const order = new Map<string, number>();
+  const add = (id: string): void => {
+    if (!order.has(id)) order.set(id, order.size + 1);
+  };
+  const up = trace.up.filter((s) => s.depth > 0);
+  for (const s of [...up].sort((a, b) => b.depth - a.depth)) add(s.id);
+  add(trace.item);
+  for (const s of trace.down) add(s.id);
+  return order;
+}
+
+/**
+ * Le chemin principal d'une trace : de l'amont le plus loin jusqu'au bout aval le plus significatif
+ * (une table, puis une API externe, puis le couloir le plus loin, puis l'étape la plus profonde).
+ */
+export function traceMainPath(trace: FeatureTrace): FeatureTraceStep[] {
+  const byId = new Map(trace.down.map((s) => [s.id, s]));
+  const rank = (s: FeatureTraceStep): number[] => [
+    s.end === 'TABLE' ? 1 : 0,
+    s.end === 'EXTERNAL' ? 1 : 0,
+    FEATURE_LANES.indexOf(s.lane),
+    s.depth,
+  ];
+  let best: FeatureTraceStep | undefined;
+  for (const s of trace.down) {
+    if (!best) {
+      best = s;
+      continue;
+    }
+    const a = rank(s);
+    const b = rank(best);
+    const i = a.findIndex((v, k) => v !== b[k]);
+    if (i >= 0 && (a[i] ?? 0) > (b[i] ?? 0)) best = s;
+  }
+  const down: FeatureTraceStep[] = [];
+  for (let s = best; s; s = s.parent ? byId.get(s.parent) : undefined) down.unshift(s);
+  // L'amont : la chaîne des parents depuis l'étape la plus lointaine.
+  const upById = new Map(trace.up.map((s) => [s.id, s]));
+  const far = [...trace.up].sort((a, b) => b.depth - a.depth)[0];
+  const up: FeatureTraceStep[] = [];
+  for (let s = far; s && s.id !== trace.item; s = s.parent ? upById.get(s.parent) : undefined) up.push(s);
+  return [...up, ...down];
+}
+
 export interface FeatureMap {
   feature: {
     id: string;
@@ -1689,6 +1788,8 @@ export interface FeatureMap {
    * que les relations de ce parcours ; le reste peut être replié.
    */
   neighbours?: string[];
+  /** Avec `query.item` : la trace ordonnée de l'élément (amont et aval, étape par étape). */
+  trace?: FeatureTrace;
   tree: FeatureTreeNode[];
   bundles: FeatureMapBundle[];
   categories: Record<FeatureCategory, number>;

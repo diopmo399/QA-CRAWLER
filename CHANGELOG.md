@@ -26,6 +26,13 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   repository et à la table, en amont jusqu'à la page (`neighbours`, calculé par le serveur sur toutes les
   relations) ; le tableau ne garde que les relations de ce parcours, et chaque carte montre sa méthode
   concernée.
+- Traçabilité ordonnée dans le même rendu : au-dessus du graphe, le fil numéroté du parcours de
+  l'élément choisi (de la page jusqu'à la table), avec le verbe de chaque relation, les statuts non
+  confirmés, les passages de couche, le bout atteint et les ruptures avec leur cause ; les mêmes numéros
+  sur les cartes et membres du graphe et dans le tableau, trié dans l'ordre des étapes. Le parcours ne
+  suit plus le contenu des conteneurs et composants vers l'aval (fini les composants sans rapport dans
+  le focus) ; `featureMap` renvoie `trace` (amont, aval, bouts, couches atteintes, statuts) et le noyau
+  exporte `traceSteps` et `traceMainPath`.
 
 ### Cartographie : contrats d'API des dépendances Maven
 

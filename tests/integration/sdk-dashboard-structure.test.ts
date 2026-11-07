@@ -467,8 +467,28 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     // L'élément choisi : au premier plan, les autres atténués, ses relations seulement.
     await journey().locator('.jr-tn', { hasText: 'Refuse' }).click();
     await journey().locator('.jr-focus').waitFor();
+    // Le fil du parcours au-dessus du graphe : numéroté de la page jusqu'à la table, passages de couche.
+    const ribbon = journey().locator('[data-path]');
+    await ribbon.waitFor();
+    expect(await ribbon.locator('.jr-pt').textContent()).toBe('Parcours de Refuse');
+    const crumbs = await ribbon.locator('.jr-crb').allTextContents();
+    expect(crumbs[0]).toBe('1/requests/create');
+    expect(crumbs.join(' > ')).toMatch(
+      /4Refuse.*RequestService\.refuse.*RequestBffController\.refuse.*RequestController\.refuse.*REQUEST/,
+    );
+    expect(await ribbon.locator('.jr-cx').allTextContents()).toEqual(['BFF', 'Backend (Java)']);
+    expect(await ribbon.locator('.jr-crumbs .jr-pend').textContent()).toBe('Table atteinte');
+    // Les mêmes numéros dans le graphe : la méthode du contrôleur backend porte celui du fil.
+    const controllerStep = crumbs.find((c) => c.endsWith('RequestController.refuse'))?.replace(/\D+$/, '');
+    const backendCard = journey().locator('.jr-card', { hasText: 'RequestController' }).first();
+    expect(await backendCard.locator('.jr-m .jr-sn').textContent()).toBe(controllerStep);
     // Son parcours jusqu'aux contrôleurs BFF et backend : cartes visibles, méthode montrée, tableau.
+    expect(await journey().locator('.jr-btabs [aria-selected="true"]').getAttribute('data-tab')).toBe(
+      'links',
+    );
     await expect.poll(async () => rows().count()).toBeGreaterThan(3);
+    // Le tableau se lit dans l'ordre des étapes : la première relation part de la page (1 → 2).
+    expect(await rows().first().locator('.jr-sn2').textContent()).toBe('1→2');
     for (const controller of ['RequestBffController', 'RequestController']) {
       const card = journey().locator('.jr-card', { hasText: controller }).first();
       expect(await card.count()).toBe(1);
@@ -500,6 +520,16 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     await page.keyboard.press('Escape');
     await expect.poll(async () => dashboard().locator('[data-jr].full').count()).toBe(0);
     expect(await journey().locator('.jr-focus').count()).toBe(1);
+    // Une étape du fil se choisit à son tour : son propre parcours, en amont jusqu'à la page.
+    await ribbon.locator('.jr-crb', { hasText: 'RequestController.refuse' }).click();
+    await expect
+      .poll(() => ribbon.locator('.jr-pt').textContent())
+      .toBe('Parcours de RequestController.refuse');
+    const upstream = await ribbon.locator('.jr-crb').allTextContents();
+    expect(upstream[0]).toBe('1/requests/create');
+    expect(upstream.join(' > ')).toMatch(
+      /RequestService\.refuse.*RequestBffController\.refuse.*RequestController\.refuse.*REQUEST/,
+    );
     await journey().locator('[data-action="map-j-clear"]').click();
     await expect.poll(async () => journey().locator('.jr-focus').count()).toBe(0);
 

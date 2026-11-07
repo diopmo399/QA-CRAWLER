@@ -1219,8 +1219,8 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
 - **Exploration progressive.** Un clic sur un élément (arbre, carte ou tableau) le met au premier plan
   et replie le reste : les branches de l'arbre hors de son chemin, les groupes qui ne le touchent pas
   (réduits à leur titre, un clic les déplie) et, dans ses groupes, les cartes sans lien avec lui (« +N
-  cartes sans lien avec l'élément choisi »). Ce qui reste visible est tout son parcours, de proche en
-  proche sur toutes les relations de la fonctionnalité : en aval ce qu'il déclenche (bouton → méthode du
+  cartes sans lien avec l'élément choisi »). Ce qui reste visible est tout son parcours : en aval ce
+  qu'il déclenche (bouton → méthode du
   composant → service SPA → endpoint BFF → contrôleur BFF → service → endpoint backend → contrôleur →
   service → repository → table), en amont ce qui le contient ou l'appelle (conteneur, composant, page).
   Chaque carte du parcours montre sa méthode concernée (par exemple `refuse()`). Une seule carte est
@@ -1228,6 +1228,21 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
   Cliquer de nouveau l'élément, ou « Tout montrer », rouvre tout. Une
   catégorie (colonne gauche ou pastille) restreint le tableau à elle ; la sélection est gardée quand la
   catégorie change.
+- **Traçabilité ordonnée.** Au-dessus du graphe, le fil du parcours de l'élément choisi : son chemin
+  principal numéroté, de la page jusqu'à la table (ou l'API externe, ou le couloir le plus loin), avec le
+  verbe de chaque relation (affiche, contient, déclenche, appelle, dépend de, lit + écrit…), les statuts
+  qui ne sont pas confirmés, chaque passage de couche (BFF, Backend) et le bout atteint ; puis le nombre
+  d'étapes, les statuts, les tables et API atteintes, et les ruptures avec la cause donnée par le scan
+  (corrélation non démontrée) ou « aucune relation sortante démontrée ». Chaque étape du fil se choisit
+  à son tour. Les mêmes numéros sont portés dans le graphe (cartes et membres du parcours : vert au
+  bout, rouge à la rupture) et dans le tableau, trié dans l'ordre des étapes (« 9 → 10 »).
+  Règles du parcours (serveur, `trace` de `featureMap`) : en aval, ni le contenu d'un conteneur ou d'un
+  composant ni l'intérieur d'un écran atteint ne sont suivis (le focus ne ramasse pas des composants
+  sans rapport) ; en amont, l'affichage d'une page compte. Une branche qui rejoint une étape déjà
+  tracée le dit au lieu de la répéter ; une branche s'arrête à une table, à une API externe ou à un
+  écran ; un bouton, un store, un service SPA, un endpoint, un contrat, un contrôleur ou un client sans
+  suite est une rupture, sauf si une branche voisine va plus loin. Au plus 5 000 éléments par sens et
+  400 étapes, avec un avertissement si la trace est coupée.
 - **Tableau des liens.** Type, source, cible, statut (confirmé, probable, non démontré) et preuve
   (« Voir le code »), par pages de 25 ; listes de catégorie, de couche, de statut et recherche. Aucune
   relation n'est perdue : tout ce que le graphe agrège est ici, page par page.
