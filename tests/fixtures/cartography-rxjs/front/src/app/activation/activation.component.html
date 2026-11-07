@@ -1,0 +1,11 @@
+<section class="activation">
+  <h1>Activation</h1>
+  <button type="button" *ngIf="canActivate$ | async" (click)="activate()">Activer</button>
+  <p *ngIf="context.allowed$ | async">Activation autorisée</p>
+  <app-confirm (confirmed)="onConfirm()"></app-confirm>
+  <button type="button" (click)="fireOrphan()">Orphelin</button>
+  <button type="button" (click)="forget()">Oublier</button>
+  <button type="button" (click)="loop()">Boucle</button>
+  <button type="button" (click)="old()">Ancien</button>
+  <button type="button" (click)="listItems()">Éléments</button>
+</section>

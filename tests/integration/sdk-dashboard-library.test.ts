@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { chromium, type Browser, type Locator, type Page } from 'playwright';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createQaCrawler, type Project, type QaCrawlerClient } from '../../src/sdk/core/index.js';
 import { flowsDirOf } from '../../src/sdk/server/platform.js';
 import { engineDefaults } from '../../src/sdk/server/project.js';
@@ -71,6 +71,28 @@ afterAll(async () => {
 async function tab(name: 'catalog' | 'composer' | 'diagnostics'): Promise<void> {
   const button = dashboard().locator(`[data-action="jn-tab"][data-tab="${name}"]`);
   if ((await button.getAttribute('aria-selected')) !== 'true') await button.click();
+}
+
+/**
+ * Attend que des éléments affichés ne soient plus remplacés par un redessin : chacun est marqué, puis la marque
+ * doit survivre à deux intervalles consécutifs (10 s au plus).
+ */
+async function steady(locators: Locator[]): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  let calm = 0;
+  while (calm < 2) {
+    if (Date.now() > deadline) throw new Error('le compositeur est redessiné sans fin');
+    const token = String(Math.random());
+    for (const locator of locators)
+      await locator.first().evaluate((element, value) => {
+        element.setAttribute('data-steady', value);
+      }, token);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    let kept = true;
+    for (const locator of locators)
+      if ((await locator.first().getAttribute('data-steady')) !== token) kept = false;
+    calm = kept ? calm + 1 : 0;
+  }
 }
 
 describe('Dashboard — scenario library in Chromium', () => {
@@ -427,10 +449,20 @@ describe('Dashboard — scenario library in Chromium', () => {
     // Choisir dans le catalogue : la carte est surlignée.
     await composer.locator('[data-action="jn-pick"][data-block="Bloc création"]').click();
     await composer.locator('.jn-pal-item.picked[data-jn-block="Bloc création"]').waitFor();
+    // Les relectures en arrière-plan (liste des parcours, vérification) redessinent le compositeur : glisser
+    // pendant un redessin perdrait le geste (l'élément saisi est remplacé). Le glisser attend qu'il soit stable.
+    await steady([composer.locator('.jn-pal-item[data-jn-block="Bloc création"]'), canvas]);
     // Déposé sur la connexion Début → Fin : l'insertion est proposée, rien n'est relié d'office.
-    const edge = await composer.locator('.jn-edge .jn-e').first().boundingBox();
-    const box = await canvas.boundingBox();
-    if (!edge || !box) throw new Error('no edge');
+    // Le canevas redessine ses connexions après le choix : la mesure attend qu'elles aient une boîte.
+    const { edge, box } = await vi.waitFor(
+      async () => {
+        const edge = await composer.locator('.jn-edge .jn-e').first().boundingBox();
+        const box = await canvas.boundingBox();
+        if (!edge || !box) throw new Error('no edge');
+        return { edge, box };
+      },
+      { timeout: 5000, interval: 50 },
+    );
     await composer.locator('.jn-pal-item[data-jn-block="Bloc création"]').dragTo(canvas, {
       targetPosition: { x: edge.x + edge.width / 2 - box.x, y: edge.y + edge.height / 2 - box.y },
     });

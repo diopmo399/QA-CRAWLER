@@ -25,6 +25,17 @@
   "exclude": [
     "tests/fixtures/static-apps/**",
     "tests/fixtures/packaging/*-app/**",
-    "tests/fixtures/angular-app/**"
+    "tests/fixtures/angular-app/**",
+    "tests/fixtures/cartography/**",
+    "tests/fixtures/cartography-graph/**",
+    "tests/fixtures/cartography-conditions/**",
+    "tests/fixtures/cartography-rxjs/**",
+    "tests/fixtures/cartography-tabs/**",
+    "tests/fixtures/cartography-flow/**",
+    "tests/fixtures/cartography-entry/**",
+    "tests/fixtures/cartography-contract/**",
+    "tests/fixtures/cartography-config/**",
+    "tests/fixtures/cartography-trace/**",
+    "tests/fixtures/maven-contracts/**"
   ]
 }

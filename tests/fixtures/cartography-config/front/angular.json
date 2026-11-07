@@ -1,0 +1,32 @@
+{
+  "projects": {
+    "dossiers": {
+      "architect": {
+        "build": {
+          "configurations": {
+            "production": {
+              "fileReplacements": [
+                {
+                  "replace": "src/environments/environment.ts",
+                  "with": "src/environments/environment.prod.ts"
+                }
+              ]
+            },
+            "recette": {
+              "fileReplacements": [
+                {
+                  "replace": "src/environments/environment.ts",
+                  "with": "src/environments/environment.recette.ts"
+                }
+              ]
+            }
+          }
+        },
+        "serve": {
+          "options": { "proxyConfig": "proxy.conf.js" },
+          "configurations": { "recette": { "proxyConfig": "proxy.recette.json" } }
+        }
+      }
+    }
+  }
+}

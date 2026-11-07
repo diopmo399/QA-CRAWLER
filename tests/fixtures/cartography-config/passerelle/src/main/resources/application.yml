@@ -1,0 +1,26 @@
+server:
+  port: 8090
+spring:
+  application:
+    name: passerelle
+  cloud:
+    gateway:
+      routes:
+        - id: dossiers-lecture
+          uri: http://localhost:8081
+          predicates:
+            - Path=/dossiers/**
+            - Method=GET
+          filters:
+            - PrefixPath=/bff
+        - id: rapports
+          uri: ${RAPPORTS_URL}
+          predicates:
+            - Path=/rapports/**
+        - id: bff-defaut
+          uri: lb://bff
+          order: 10
+          predicates:
+            - Path=/**
+          filters:
+            - RewritePath=/(?<segment>.*), /bff/$\{segment}

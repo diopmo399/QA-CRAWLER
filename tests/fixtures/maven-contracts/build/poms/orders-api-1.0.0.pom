@@ -1,0 +1,9 @@
+<project><modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>acme-parent</artifactId><version>1.0.0</version></parent>
+  <artifactId>orders-api</artifactId><version>1.0.0</version>
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>common-api</artifactId><version>${common.version}</version></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>test-kit</artifactId><version>1.0.0</version><scope>test</scope></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>optional-extras</artifactId><version>1.0.0</version><optional>true</optional></dependency>
+  </dependencies>
+</project>

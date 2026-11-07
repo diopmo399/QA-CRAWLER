@@ -1,0 +1,4 @@
+server:
+  port: 8081
+backend:
+  url: http://backend.internal:8080

@@ -1,0 +1,2 @@
+<project><modelVersion>4.0.0</modelVersion><groupId>test</groupId><artifactId>tabs-bff</artifactId><version>1</version>
+<dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency></dependencies></project>

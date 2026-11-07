@@ -1,0 +1,6 @@
+<h1>Edit request</h1>
+<form [formGroup]="form" (ngSubmit)="save()">
+  <label for="editCompanyName">Company name</label>
+  <input id="editCompanyName" type="text" formControlName="companyName" />
+  <button type="submit">Save</button>
+</form>

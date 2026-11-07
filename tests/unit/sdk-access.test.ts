@@ -256,6 +256,14 @@ describe('access — rights per route', () => {
     expect(actionOf(['api', 'projects', 'prj_abcd', 'recordings', 'demo', 'pause']).action).toBe(
       'projects.recordings.pause',
     );
+    // La cartographie : configurer les sources, lancer un scan, décider, comparer, lire le code d'une preuve.
+    expect(right('GET', '/api/projects/prj_abcd/cartography')).toBe('VIEW');
+    expect(right('POST', '/api/projects/prj_abcd/cartography/config')).toBe('MANAGE_PROJECTS');
+    expect(right('POST', '/api/projects/prj_abcd/cartography/scans')).toBe('RUN');
+    expect(right('POST', '/api/projects/prj_abcd/cartography/scans/current/cancel')).toBe('RUN');
+    expect(right('POST', '/api/projects/prj_abcd/cartography/decisions')).toBe('DECIDE');
+    expect(right('POST', '/api/projects/prj_abcd/cartography/impact')).toBe('VIEW');
+    expect(right('GET', '/api/projects/prj_abcd/cartography/evidence')).toBe('RUN');
     expect(right('POST', '/api/explorations/exp_1/report-links')).toBe('VIEW');
     expect(right('POST', '/api/something-new')).toBe('MANAGE_ACCESS');
     expect(right('POST', '/api/projects/prj_abcd/something-new')).toBe('MANAGE_ACCESS');

@@ -98,6 +98,40 @@ import type {
   RequirementsView,
   TrendsView,
 } from './contracts.js';
+import type {
+  CartographyConfig,
+  CartographyView,
+  ConceptRow,
+  EvidenceExcerpt,
+  FeatureDetail,
+  FeatureRow,
+  FieldIssue,
+  FieldRow,
+  FieldSheet,
+  ActionRow,
+  ApiCatalog,
+  ApiSheet,
+  ConditionRow,
+  ElementSheet,
+  MapStructure,
+  ImpactReport,
+  MapListQuery,
+  MapPage,
+  MapSubgraph,
+  MapTrace,
+  Investigation,
+  InvestigationBudget,
+  InvestigationRequest,
+  InvestigationSummary,
+  MapEdgeKind,
+  MapLayer,
+  TraceDirection,
+  MapSummary,
+  MapDecision,
+  MapDecisionInput,
+  MapSource,
+  ScanRecord,
+} from './cartography.js';
 import type { Journey, JourneyCheck, JourneySummary } from './journey.js';
 import type { JourneyPreview } from './journey-loop.js';
 import type { JourneyTraceability } from './journey-trace.js';
@@ -157,6 +191,11 @@ export interface ClientOptions {
   token?: string;
   /** Remplace le fetch global (tests, intercepteurs de l'hôte). */
   fetch?: typeof fetch;
+}
+
+/** Une requête de la cartographie : annulable quand la sélection change. */
+export interface MapRequestOptions {
+  signal?: AbortSignal;
 }
 
 export class QaCrawlerError extends Error {
@@ -481,6 +520,121 @@ export interface QaCrawlerClient {
       action: 'CONFIRM' | 'REJECT',
       options?: { note?: string },
     ): Promise<TraceabilityLink>;
+  };
+  /**
+   * La cartographie fonctionnelle d'un projet : les sources (sous les racines autorisées par le serveur),
+   * les scans, les fonctionnalités et champs découverts avec leurs preuves, la couverture par les
+   * scénarios, l'impact entre deux scans. Rien n'est confirmé sans décision d'une personne.
+   */
+  cartography: {
+    get(projectId: string, options?: { scan?: string }): Promise<CartographyView>;
+    /** Remplace la liste des sources ; chaque dossier est vérifié par le serveur. */
+    saveConfig(projectId: string, input: { sources: MapSource[] }): Promise<CartographyConfig>;
+    /** Lance un scan en arrière-plan (incrémental par défaut) ; un seul à la fois par projet. */
+    scan(projectId: string, options?: { incremental?: boolean }): Promise<ScanRecord>;
+    /** L'état du scan en cours, ou du dernier terminé depuis le démarrage du serveur. */
+    currentScan(projectId: string): Promise<ScanRecord>;
+    cancelScan(projectId: string): Promise<ScanRecord>;
+    decide(projectId: string, input: MapDecisionInput): Promise<MapDecision[]>;
+    /** Sans `from`/`to` : l'avant-dernier scan et le dernier. */
+    impact(projectId: string, input?: { from?: string; to?: string }): Promise<ImpactReport>;
+    /** Quelques lignes du fichier d'une preuve (jamais un fichier de secrets) ; `stale` si le fichier a changé depuis le scan. */
+    evidence(
+      projectId: string,
+      input: { source: string; file: string; line?: number; revision?: string; scan?: string },
+    ): Promise<EvidenceExcerpt>;
+    /** Exploration progressive : le résumé du premier affichage (aucun graphe). */
+    summary(projectId: string, options?: MapRequestOptions): Promise<MapSummary>;
+    /** Une page de fonctionnalités (recherche, critères, tri côté serveur). */
+    features(
+      projectId: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<FeatureRow>>;
+    feature(projectId: string, id: string, options?: MapRequestOptions): Promise<FeatureDetail>;
+    /** Une page des champs d'une seule fonctionnalité. */
+    featureFields(
+      projectId: string,
+      id: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<FieldRow>>;
+    /** La fiche d'un champ : son sous-graphe borné, sa séquence, ses réutilisations, ses scénarios, son impact. */
+    field(
+      projectId: string,
+      id: string,
+      query?: { feature?: string; depth?: number; limit?: number },
+      options?: MapRequestOptions,
+    ): Promise<FieldSheet>;
+    /** Les voisins d'un nœud, pour étendre un graphe affiché. */
+    neighbors(
+      projectId: string,
+      id: string,
+      query?: { depth?: number; limit?: number },
+      options?: MapRequestOptions,
+    ): Promise<MapSubgraph>;
+    concepts(
+      projectId: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<ConceptRow>>;
+    issues(
+      projectId: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<FieldIssue>>;
+    /** Le catalogue des API et services (recherche, périmètre, tri, pagination côté serveur). */
+    apis(projectId: string, query?: MapListQuery, options?: MapRequestOptions): Promise<ApiCatalog>;
+    /** La fiche d'une API : fonctionnalités, scénarios, parcours démontré, impact, criticité. */
+    api(projectId: string, id: string, options?: MapRequestOptions): Promise<ApiSheet>;
+    /** La structure d'une fonctionnalité (ou du projet) : écrans, conteneurs, champs, boutons, conditions, comptes. */
+    structure(projectId: string, feature?: string, options?: MapRequestOptions): Promise<MapStructure>;
+    /** La fiche d'un élément (conteneur, bouton, champ) : conditions, décision Backend, actions, sous-graphe. */
+    element(projectId: string, id: string, options?: MapRequestOptions): Promise<ElementSheet>;
+    /** Le parcours d'un élément vers l'amont, l'aval ou les deux, borné, avec frontière et ruptures. */
+    trace(
+      projectId: string,
+      id: string,
+      query?: {
+        direction?: TraceDirection;
+        depth?: number;
+        limit?: number;
+        layers?: readonly MapLayer[];
+        kinds?: readonly MapEdgeKind[];
+      },
+      options?: MapRequestOptions,
+    ): Promise<MapTrace>;
+    /** Lancer une investigation depuis un élément (objectif, sens, mode, budget). */
+    investigate(
+      projectId: string,
+      request: InvestigationRequest,
+      options?: MapRequestOptions,
+    ): Promise<Investigation>;
+    /** Les investigations enregistrées (STALE : le scan a changé depuis). */
+    investigations(projectId: string, options?: MapRequestOptions): Promise<InvestigationSummary[]>;
+    investigation(projectId: string, id: string, options?: MapRequestOptions): Promise<Investigation>;
+    /** « Explorer cette branche » : reprise ciblée depuis un nœud de la frontière. */
+    expandInvestigation(
+      projectId: string,
+      id: string,
+      node: string,
+      budget?: Partial<InvestigationBudget>,
+      options?: MapRequestOptions,
+    ): Promise<Investigation>;
+    /** Relancer sur le dernier scan (nouvelle investigation reliée à la précédente). */
+    rerunInvestigation(projectId: string, id: string, options?: MapRequestOptions): Promise<Investigation>;
+    /** Les conditions d'affichage et d'activation du projet, avec leur décision (ou la cause). */
+    conditions(
+      projectId: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<ConditionRow>>;
+    /** Les actions (boutons) : gestionnaire, appels, endpoints, API externes, tables. */
+    actions(
+      projectId: string,
+      query?: MapListQuery,
+      options?: MapRequestOptions,
+    ): Promise<MapPage<ActionRow>>;
   };
   /**
    * Les accès : qui appelle et ses droits ; les membres (jetons nominatifs, rôles par projet) et le
@@ -885,10 +1039,20 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
     ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
   });
 
-  async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  /** Les critères d'une requête, en paramètres d'adresse (les valeurs vides sont omises). */
+  const queryString = (query: Record<string, string | number | undefined>): string => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query))
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    const text = params.toString();
+    return text ? `?${text}` : '';
+  };
+
+  async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const text = await send(method, path, {
       headers: headers(body !== undefined),
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(signal ? { signal } : {}),
     });
     try {
       return (text ? JSON.parse(text) : undefined) as T;
@@ -904,6 +1068,9 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
     try {
       response = await doFetch(`${endpoint}${path}`, { method, ...init });
     } catch (error) {
+      // Une requête annulée par l'appelant (sélection changée) n'est pas une panne du serveur.
+      if (init.signal?.aborted)
+        throw new QaCrawlerError({ error: 'request aborted', status: 0, code: 'ABORTED' });
       throw new QaCrawlerError({
         error: `QA-CRAWLER server unreachable: ${error instanceof Error ? error.message : String(error)}`,
         status: 0,
@@ -1215,6 +1382,163 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           action,
           ...linkOptions,
         }),
+    },
+    cartography: {
+      get: (projectId, cartographyOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography${cartographyOptions.scan ? `?scan=${encodeURIComponent(cartographyOptions.scan)}` : ''}`,
+        ),
+      saveConfig: (projectId, input) => request('POST', `${project(projectId)}/cartography/config`, input),
+      scan: (projectId, scanOptions = {}) =>
+        request('POST', `${project(projectId)}/cartography/scans`, scanOptions),
+      currentScan: (projectId) => request('GET', `${project(projectId)}/cartography/scans/current`),
+      cancelScan: (projectId) => request('POST', `${project(projectId)}/cartography/scans/current/cancel`),
+      decide: (projectId, input) => request('POST', `${project(projectId)}/cartography/decisions`, input),
+      impact: (projectId, input = {}) => request('POST', `${project(projectId)}/cartography/impact`, input),
+      summary: (projectId, mapOptions = {}) =>
+        request('GET', `${project(projectId)}/cartography/summary`, undefined, mapOptions.signal),
+      features: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/features${queryString({ ...query })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      feature: (projectId, id, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/feature${queryString({ id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      featureFields: (projectId, id, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/feature-fields${queryString({ ...query, id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      field: (projectId, id, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/field${queryString({ ...query, id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      neighbors: (projectId, id, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/neighbors${queryString({ ...query, id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      concepts: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/concepts${queryString({ ...query })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      issues: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/issues${queryString({ ...query })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      apis: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/apis${queryString({ ...query })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      api: (projectId, id, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/api${queryString({ id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      structure: (projectId, feature, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/structure${queryString(feature ? { feature } : {})}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      element: (projectId, id, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/element${queryString({ id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      investigate: (projectId, body, mapOptions = {}) =>
+        request('POST', `${project(projectId)}/cartography/investigations`, body, mapOptions.signal),
+      investigations: (projectId, mapOptions = {}) =>
+        request('GET', `${project(projectId)}/cartography/investigations`, undefined, mapOptions.signal),
+      investigation: (projectId, id, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/investigations/${encodeURIComponent(id)}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      expandInvestigation: (projectId, id, node, budget, mapOptions = {}) =>
+        request(
+          'POST',
+          `${project(projectId)}/cartography/investigations/${encodeURIComponent(id)}/expand`,
+          { node, ...(budget ? { budget } : {}) },
+          mapOptions.signal,
+        ),
+      rerunInvestigation: (projectId, id, mapOptions = {}) =>
+        request(
+          'POST',
+          `${project(projectId)}/cartography/investigations/${encodeURIComponent(id)}/rerun`,
+          {},
+          mapOptions.signal,
+        ),
+      trace: (projectId, id, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/trace${queryString({
+            id,
+            direction: query.direction,
+            depth: query.depth,
+            limit: query.limit,
+            layers: query.layers?.join(','),
+            kinds: query.kinds?.join(','),
+          })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      conditions: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/conditions${queryString({ ...query })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      actions: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/actions${queryString({ ...query })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      evidence: (projectId, input) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/evidence?${new URLSearchParams({
+            source: input.source,
+            file: input.file,
+            ...(input.line !== undefined ? { line: String(input.line) } : {}),
+            ...(input.revision ? { revision: input.revision } : {}),
+            ...(input.scan ? { scan: input.scan } : {}),
+          }).toString()}`,
+        ),
     },
     access: {
       me: (meOptions = {}) =>

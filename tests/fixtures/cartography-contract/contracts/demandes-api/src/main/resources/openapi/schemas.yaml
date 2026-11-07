@@ -1,0 +1,11 @@
+components:
+  schemas:
+    Decision:
+      type: object
+      required: [motif]
+      properties:
+        motif:
+          type: string
+          maxLength: 200
+        accepte:
+          type: boolean

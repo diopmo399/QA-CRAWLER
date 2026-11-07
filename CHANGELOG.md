@@ -4,6 +4,129 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : contrats d'API des dépendances Maven
+
+- Un contrôleur qui implémente une interface publiée dans un jar de contrat expose ses endpoints : le jar
+  de sources, sinon les classes compilées (bytecode lu, jamais chargé), avec les routes héritées et les
+  surcharges ; la preuve pointe le fichier du jar.
+- Dépendances résolues par application : parents, propriétés, BOM importés, `dependencyManagement`,
+  scopes, exclusions, la plus proche l'emporte (conflits notés) ; état par artefact dans
+  `scan.sources[].dependencies` et types introuvables dans `unresolvedTypes`.
+- Dépôts locaux (lecture seule), cache, dépôts distants autorisés (https, identifiants par nom de variable,
+  empreinte SHA-1 vérifiée), mode hors ligne, limites de taille, de nombre et de durée. Désactivé par
+  défaut : `--maven-repo`, `--maven-remote`, `--maven-auth`, `--maven-cache`, `--maven-offline`
+  (`mavenContracts` dans `startSdkServer`).
+- Clients `@HttpExchange` et `@FeignClient` lus dans un jar : appel sortant reconstruit ; sans adresse lue,
+  la corrélation BFF → Backend reste `PROBABLE`.
+- Version d'analyseur `cartography-10`.
+
+### Cartographie : fiabilisation de la résolution
+
+- Appels Java sur interface ou classe abstraite : implémentation par une classe abstraite intermédiaire,
+  méthode héritée d'un type parent, surcharges distinguées par l'arité ; plusieurs implémentations : `@Primary`,
+  bean nommé comme le champ, sinon toutes gardées `UNKNOWN` avec leurs candidates. Une classe abstraite
+  n'est plus présentée comme l'implémentation exécutée.
+- Appels dont la cible est une classe (méthode héritée d'une bibliothèque) : reliés à la classe au lieu
+  d'être perdus ; relations non raccordables comptées dans `scan.unattached`.
+- Imports Java à la demande pris en compte pour départager les homonymes ; classes homonymes de paquets
+  différents : deux nœuds `SERVICE` (nom qualifié) au lieu d'un seul ; champs typés par nom qualifié résolus.
+- Fragments de dépôt Spring Data suivis jusqu'à leur implémentation ; plus de lecture déduite du nom pour
+  une méthode écrite à la main.
+- Frontal : une constante exportée d'un autre fichier forme l'URL d'un appel HTTP (avec sa provenance).
+- Lecture sous limite : manifestes et code avant les données ; fichiers non lus nommés.
+- Version d'analyseur `cartography-9`.
+
+### Cartographie : premier chargement
+
+- Le scan est écrit en JSON compact, et son relevé dans un fichier léger à côté (`<id>.record.json`) :
+  lister les scans ne relit plus chaque scan complet (482 ms → 1 ms sur 5 scans de 6 240 nœuds). Un scan
+  plus ancien reçoit son relevé à la première lecture ; l'élagage retire les deux fichiers.
+- Le serveur ne relit le scan complet que pour construire l'index : un index en cache en dispense (résumé
+  chaud 1 055 ms → 4 ms, page de fonctionnalités 617 ms → 4 ms), et le résumé ne liste plus les scans deux
+  fois. Une lecture en échec n'est pas gardée en cache.
+- L'écran Cartographie se montre dès que le projet et le résumé sont arrivés (premier contenu à froid
+  3 592 ms → 389 ms) ; la liste, la fonctionnalité et ses champs suivent dans leur panneau.
+- Les pages de champs d'une fonctionnalité sont gardées par version des données et par requête : rouvrir
+  une fonctionnalité visitée ne lance plus aucune requête (715 ms → 86 ms, 0 requête).
+
+### Cartographie : moteur d'investigation
+
+- Moteur d'investigation déterministe au-dessus du graphe (`src/cartography/investigate.ts`) : objectif,
+  sens, mode ciblé ou exhaustif, budget (nœuds, branche, nature, profondeur, voisins non causaux, temps),
+  exploration meilleur d'abord, natures de relation (cause, donnée, condition, contrat, composition) et sens
+  du flux, règles causales (composition, appartenance, lien non démontré), stratégies aux ruptures avec
+  tentatives mémorisées, hypothèses (candidates, étayées, contradictoires), cycles par composantes fortement
+  connexes avec leurs sorties, chemins démontrables par branche, mesures et limites.
+- Reprise ciblée d'une branche (« Explorer cette branche ») sans refaire ce qui est validé ; investigation
+  périmée après un nouveau scan, relance reliée à la précédente.
+- Routes `…/cartography/investigations` (lancer, lister, lire, reprendre, relancer) et client ; persistance
+  des 50 dernières investigations par projet.
+- Ruptures typées de l'analyseur du frontal conservées sur les méthodes (`detail.breaks`).
+- Fenêtre « Investigation » dans Structure & Conditions.
+- Extension facultative de pistes (`applyAdvice`) : désactivée, vérifiée par le graphe, jamais une preuve.
+
+### Cartographie : traçabilité de bout en bout
+
+- Version d'analyseur `cartography-8`.
+- Constantes Java lues entre fichiers (imports statiques, `Classe.CHAMP`, même paquetage) : les routes
+  écrites avec des constantes d'une autre classe sont résolues.
+- Accès aux données hors Spring Data : `EntityManager` (JPQL, SQL natif, `find`, `persist`, `merge`,
+  `remove`) et JDBC (`JdbcTemplate`, `NamedParameterJdbcTemplate`, `JdbcClient`), classés en lecture,
+  insertion, mise à jour, suppression ou indéterminé ; `@Query` classée ; opération et requête portées par
+  le lien (`MapEdge.detail.operation`, `statement`). Table non déclarée par une entité : nœud propre, lien
+  probable.
+- Écritures des états du gabarit (signal `set`/`update`, affectation) reliées aux conditions : le parcours
+  local d'un écran est démontré ; producteurs des conditions classés (démontré, origine locale, candidat,
+  inconnu).
+- Plus de « méthode introuvable » sur la lecture d'un signal (`signal`, `computed`, `input`, `model`,
+  `toSignal`, `linkedSignal`).
+- Un bouton qui appelle un service dont l'`Observable` n'est jamais souscrit n'est plus confirmé par le
+  raccourci bouton → méthode.
+- `MapCorrelation.diagnostic` (départ, dernier élément démontré, relation recherchée, sources examinées et
+  manquantes, limites, pistes) ; cause `SOURCE_PARTIAL` quand une source n'a été lue qu'en partie.
+- Route `GET …/cartography/trace` et `client.cartography.trace()` : parcours amont, aval ou complet, borné,
+  avec frontière, ruptures et appels sortants.
+- Structure & Conditions : vues Fiche / Amont / Aval / Complet, critères par couche et par relation,
+  bilan, frontière (« Recentrer ici »), ruptures, fenêtre de détail d'un élément qui garde le zoom et la
+  position.
+
+### Cartographie : passerelles, destinations et graphe de configuration (étape 2)
+
+- Version d'analyseur `cartography-7`.
+- Passerelles lues par adaptateur dans un modèle commun (route, prédicats, transformations, destination) :
+  Spring Cloud Gateway, NGINX et Ingress. Une passerelle n'est suivie que si la destination d'un appel la
+  désigne.
+- Destination d'un appel : la cible du proxy, la base d'URL ou la base d'un client mène à une source par son
+  port (`server.port`) ou son nom (`spring.application.name`, `lb://nom`) ; seule cette source est alors
+  candidate. Causes : `DESTINATION_SYMBOLIC`, `PROPERTY_UNRESOLVED`, `GATEWAY_EXTERNAL`,
+  `MULTIPLE_DESTINATIONS`, `PROXY_DYNAMIC`.
+- Frontal : base de l'environnement et proxy propres à chaque configuration d'`angular.json`.
+- Clients Java : base d'URL résolue par profil ; client généré réglé par un bean (`setBasePath`).
+- `MapCorrelation.variants` : l'issue de chaque variante qui diffère (chemin, chaîne, statut, cible) ;
+  `ENVIRONMENT_INCONSISTENT` quand elle change. L'arbre de parcours les affiche.
+- `model.configGraph` : dix relations typées (`DECLARES`, `REFERENCES`, `OVERRIDES`, `ACTIVATES`,
+  `GENERATES`, `IMPLEMENTS`, `CONFIGURES`, `ROUTES_TO`, `REWRITES_TO`, `DEPENDS_ON`) avec provenance,
+  variante et niveau de preuve ; valeurs sensibles masquées.
+- La ligne d'un élément de liste YAML est la sienne (et non celle du premier élément).
+
+### Cartographie : configuration par variante (étape 1)
+
+- Version d'analyseur `cartography-6` : un scan incrémental ne reprend pas les faits d'avant.
+- La configuration Spring est lue entrée par entrée avec son profil (`application-{profil}`, documents
+  `on-profile`). Les profils ne sont plus fusionnés : le défaut et chaque profil sont des variantes, une
+  valeur de profil remplace celle du défaut. Les valeurs de clés sensibles sont masquées.
+- Le préfixe d'une interface générée n'est plus deviné : il vient des options de génération
+  (`@RequestMapping` du contrôleur, `interfaceOnly`, `requestMappingMode`, propriété `base-path`), sinon les routes possibles restent
+  listées avec la cause `GENERATION_OPTIONS_INSUFFICIENT`.
+- Métadonnées de dépendances locales (dossier rangé comme un dépôt Maven, sous une racine autorisée) :
+  pom et contrats empaquetés dans les jars, lus sans téléchargement ni exécution. Un artefact absent
+  garde ses identifiants complets (groupe:artefact:version).
+- Proxys de développement : `proxy.conf.json`, et `.js` / `.cjs` / `.mjs` lus par leur arbre syntaxique
+  (jamais exécutés) ; configurations d'`angular.json` (proxy et remplacements de fichiers). Une règle
+  non interprétable reste marquée dynamique.
+- Correctif : un gabarit en ligne entre guillemets (`template: ''`) n'est plus signalé introuvable ;
+  le message d'avertissement est en français.
+
 ### Sécurité
 
 - **zod 4.6.7** (au lieu de 3.25) : corrige GHSA-mrhx-c7xc-m3w5 (épuisement mémoire en validant de très
@@ -31,6 +154,110 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   `overrides` majeur n'est forcé sans test qui le couvre.
 
 ### Ajouté
+
+- **Cartographie : corrélation Angular → OpenAPI → BFF → Backend.** Contrats à références suivies (dans la
+  source seulement), paramètres, bases des `servers` ; modules Maven (propriétés, dépendances gérées,
+  générations openapi-generator et leur contrat d'entrée, y compris depuis un artefact d'une autre source) ;
+  routes héritées d'une interface ou d'une classe de base, placeholders et context-path ; endpoints déduits
+  d'une interface générée absente (probables) ; bases d'URL du frontal démontrées par `environment` ou un
+  jeton injecté (`BASE_PATH`) ; réécriture du proxy ; appels du BFF par un client Java généré ; versions de
+  contrat comparées. Chaque appel a une corrélation (confirmée, probable, non démontrée, bloquée) avec ses
+  candidats, ses causes précises et sa chaîne prouvée, visible dans l'arbre de parcours. Version des
+  analyseurs : `cartography-5`.
+- **Cartographie : alias, fabriques d'actions, branches HTTP et points d'entrée.** Le contexte d'appel suit
+  les alias locaux (chaînes, réaffectations, déstructuration, retours de méthode, paramètres typés), évalue
+  les fabriques d'actions quel que soit leur nom (imbriquées, génériques, fléchées) et sépare les appels
+  HTTP d'une méthode générique par branche : deux boutons sur la même méthode atteignent chacun leur
+  endpoint. Chaque lien dit sa dépendance temporelle (après résultat, sur erreur, à la complétion,
+  annulable, concurrente, non démontrée) et `filter(…)` devient une condition. Les boutons, liens, `input
+submit`, `(ngSubmit)` et sorties de composants enfants sont des points d'entrée reliés à la version
+  contextuelle de leur méthode ; l'arbre de parcours les range sous leur onglet avec leurs conditions
+  d'activation. Nouveaux diagnostics : `ALIAS_AMBIGUOUS`, `ACTION_FACTORY_UNRESOLVED`,
+  `ASYNC_NOT_DEMONSTRATED`, `UI_DYNAMIC`. Versions : `rxjs-3`, `cartography-4` (faits relus au scan suivant).
+- **Cartographie : parcours reconstruits par contexte d'appel.** Une méthode générique (`dispatch(action)`)
+  n'est suivie que dans les branches choisies par la valeur transmise (littéral, enum, constante, objet,
+  instance) ; une valeur indéterminée garde les branches comme possibles et le dit. Chaque lien porte ses
+  conditions (if, switch, retour anticipé, catch, boucle), ce qu'il attend (await, subscribe, then, erreur,
+  opérateur, avec annulation par switchMap ou takeUntil) et la provenance de ses données. Nouvel arbre de
+  parcours dépliable (fiche et Traçabilité) ; l'impact liste les actions touchées et leur chemin de
+  propagation. `forkJoin([...])` compte comme souscrit. Version d'analyseur : `rxjs-2`.
+- **Cartographie : onglets Angular.** Les groupes et onglets Angular Material, ng-bootstrap, PrimeNG et
+  maison (y compris générés par `*ngFor`/`@for`, imbriqués, routés) sont lus dans les gabarits, avec leurs
+  libellés, conditions d'affichage et d'activation, la sélection pilotée par un store, et leur chargement à
+  la demande. Les composants affichés sont reliés à leur onglet (réutilisations signalées), les appels
+  déclenchés depuis un onglet sont listés, une dépendance entre onglets par un store partagé est présentée
+  comme probable, et la fiche d'un onglet donne les préconditions démontrées pour l'atteindre. L'analyse
+  d'impact cite les onglets touchés (sûr ou potentiel). Version des analyseurs : `cartography-3`.
+- **Cartographie : stores et flux RxJS maison.** Le frontal est suivi à travers les stores détectés par
+  leur comportement (Subject, BehaviorSubject…), les émissions, les flux calculés et leurs traitements
+  (switchMap…), les façades, les classes de base et les clients HTTP maison, jusqu'au BFF. La souscription
+  est vérifiée (un Observable non souscrit n'est pas présenté comme exécuté). Les conditions des gabarits
+  sont reliées aux flux qu'elles lisent jusqu'à la réponse du serveur. Chaque rupture de chaîne est dite à
+  l'étape exacte ; une correspondance HTTP ambiguë n'est plus choisie au hasard. Les faits portent la
+  version des analyseurs : un scan incrémental relit une source analysée par une autre version.
+- **Cartographie : écrans Scan & Découverte et Analyse d'impact revus.** Sources en cartes dépliables
+  (champs obligatoires, validations avant envoi, jeton Git absent signalé), dernier scan par étapes,
+  résumé par source, éléments découverts, scans récents, couverture. L'impact se choisit avec permutation,
+  compare les sources, compte les changements (anneau), et détaille chaque changement (source, couche,
+  fonctionnalités atteintes, preuve) dans un tableau filtrable. Une source non lue n'est jamais présentée
+  comme « sans changement ». Les fichiers lock des dépendances ne sont plus lus ; les fichiers
+  trop gros pour être lus sont nommés, et les limites de lecture sont dites en clair.
+- **Cartographie : URL d'appel HTTP relues.** Une URL rangée dans une constante locale
+  (`const url = …; this.http.post(url, …)`), une constante du module ou une propriété de la classe est
+  maintenant relue : l'appel du Front est relié à l'endpoint du BFF au lieu d'être perdu. Une propriété
+  qui reçoit plusieurs valeurs, ou un paramètre, n'est jamais deviné.
+- **Cartographie : sources Git distantes.** Une source peut être un dépôt Git (`kind: 'GIT'`, `repoUrl`,
+  `branch`, `commit`, `tokenEnv`) que le serveur prépare lui-même. Les hôtes sont autorisés par
+  `--git-host`, en https seulement, et les adresses internes sont refusées. Git est lancé sans shell,
+  sans hooks, sans sous-modules, sans liens symboliques, sans redirection, avec délais et limites ; sous
+  Windows, les chemins de plus de 260 caractères sont acceptés. Le
+  jeton est désigné par le nom d'une variable d'environnement, jamais stocké ni renvoyé. Chaque scan
+  enregistre le commit réellement analysé.
+- La révision des sources locales est lue de façon fiable (worktree, sous-module, sous-dossier d'un
+  dépôt) ou dite indéterminée. « Voir le code » relit une source distante à la révision exacte et ajoute
+  « Voir sur Git » (GitHub, GitLab, Bitbucket, Azure DevOps). L'impact compare les sources des deux
+  scans.
+- **Cartographie : Structure & Conditions.** Le scan lit les gabarits Angular (conteneurs, boutons,
+  `@if`, `*ngIf`, `[hidden]`, `@else`, `[disabled]`, gestionnaires `(click)` et `(ngSubmit)`) et, côté
+  Java, les méthodes de décision booléennes (boucles, prédicats, données lues) et les champs calculés
+  par un appel de méthode. Le graphe gagne les nœuds `CONTAINER`, `BUTTON`, `CONDITION` et les liens
+  `CONTAINS`, `VISIBLE_WHEN`, `ENABLED_WHEN`, `CONTROLLED_BY`, `TRIGGERS`. Nouvelles routes `structure`,
+  `element`, `conditions`, `actions` (client `cartography`) et onglet « Structure & Conditions » :
+  arbre, graphe en couloirs de l'élément, fiche (condition, décision Backend, appels, preuves,
+  scénarios). Une condition dont la décision n'est pas démontrée est dite « non déterminée », avec sa
+  cause.
+- **Cartographie fonctionnelle** (écran « Cartographie » du Dashboard, routes
+  `/api/projects/:id/cartography/…`, client `cartography`) : scan statique des sources d'un projet
+  (Angular, Spring, JPA, OpenAPI ; les autres technologies sont signalées « connecteur manquant »),
+  graphe typé avec preuves et confiance, fonctionnalités candidates et décisions (confirmer, renommer,
+  fusionner, rejeter, hors périmètre), champs et réutilisations suivis de l'écran à la colonne,
+  anomalies (champ non utilisé, doublon, types incohérents, validations divergentes, sans test),
+  couverture par les scénarios mesurée sur les exécutions réelles, impact entre deux scans et rejeu
+  des scénarios choisis. Voir [docs/sdk](docs/sdk/README.md#cartographie-fonctionnelle).
+  L'exploration est **progressive** : un résumé et une page de fonctionnalités au premier affichage,
+  puis les champs d'une fonctionnalité, puis la fiche d'un champ (sous-graphe borné, séquence,
+  réutilisations, scénarios associés / exécutés / vérifiés, impact démontré et potentiel), servis par
+  un index construit une fois par version et un cache invalidé par un scan ou une décision (routes
+  `summary`, `features`, `feature`, `feature-fields`, `field`, `neighbors`, `concepts`, `issues`).
+  La traçabilité d'un champ se lit en **parcours principal** (une carte par couche démontrée, compteurs
+  « N liens » vers les relations exactes) ou en **graphe complet** (colonnes ordonnées, sélection,
+  extension à la demande), avec zoom, ajustement, déplacement, plein écran, légende comptée,
+  regroupement des liens parallèles et tableau « Relations détectées » avec « Voir le code ».
+  L'onglet **API & Services** dresse le catalogue des API internes (par contrôleur servi), externes
+  (par hôte lu dans le code ou la configuration) et « à classifier » (cible non établie), avec
+  endpoints, appelants, champs échangés, contrat OpenAPI, parcours d'intégration démontré,
+  fonctionnalités et scénarios liés, impact, criticité justifiée ; renommage métier (`RENAME_API`) et
+  classement manuel (`CLASSIFY_API`) ; routes `apis` et `api`.
+  Sa **Traçabilité (graphe)** s'ouvre sur le graphe complet de l'API, en couloirs (Frontend, BFF,
+  Backend, puis API externe, contrats et base de données empilés) : les nœuds d'un même conteneur forment
+  une carte (classe et méthodes, composant et champs, DTO et propriétés, table et colonnes) ; les
+  relations entre deux couloirs forment un faisceau orthogonal avec son compteur « N liens », vert pour un
+  flux interne, violet pour un appel externe, bleu pour la base, le statut étant montré à part (tirets,
+  icône). Un clic liste les relations du faisceau avec leurs preuves, un second les déplie. Le survol
+  d'une carte fait ressortir son voisinage. Vues Architecture et Données (flux de champs, champs envoyés
+  et reçus par l'API), critères d'affichage par couche, nature, statut et profondeur. La liste exhaustive des
+  relations reste accessible. La fiche d'API renvoie désormais tout l'amont démontré, l'aval de ses
+  endpoints, ce qui y est rattaché et ses appels sortants (`outbound`), dans une limite de 300 nœuds.
 
 - **Catalogue de blocs et fiche détaillée** :
   - **Catalogue** : cartes avec le statut réel du contrat, le nombre d'étapes, d'entrées et de sorties,

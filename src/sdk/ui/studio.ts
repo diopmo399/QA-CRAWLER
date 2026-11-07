@@ -283,6 +283,8 @@ export class QaCrawlerFlowStudio extends Base {
   // ———————————————————————————————————————————— rendu
 
   private paint(): void {
+    // Une commande en cours (relue ensuite) se lit sur l'élément : technologies d'assistance et tests.
+    this.setAttribute('aria-busy', String(this.state.busy));
     const active = this.root.activeElement as HTMLElement | null;
     const focusKey = active ? focusKeyOf(active) : undefined;
     const caret =
@@ -302,6 +304,7 @@ export class QaCrawlerFlowStudio extends Base {
 
   /** Le graphe, le panneau et les compteurs, sans toucher au champ de recherche (frappe en cours). */
   private paintParts(): void {
+    this.setAttribute('aria-busy', String(this.state.busy));
     const active = this.root.activeElement as HTMLElement | null;
     const focusKey = active ? focusKeyOf(active) : undefined;
     const group = this.root.querySelector('.vp');

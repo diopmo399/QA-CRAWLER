@@ -220,6 +220,42 @@ import {
   summaryOf,
   type FileConnectorKind,
 } from './requirements.js';
+import {
+  addDecision,
+  cancelScan,
+  cartographyError,
+  cartographyView,
+  evidenceExcerpt,
+  impactOf,
+  lastScanState,
+  listQuery,
+  mapConcepts,
+  mapFeature,
+  mapFeatureFields,
+  mapFeatures,
+  mapField,
+  mapIssues,
+  mapApis,
+  mapApi,
+  mapActions,
+  mapConditions,
+  mapElement,
+  mapTrace,
+  startInvestigation,
+  mapInvestigations,
+  mapInvestigation,
+  expandInvestigationOf,
+  rerunInvestigation,
+  traceOptions,
+  mapStructure,
+  mapNeighbours,
+  mapSummary,
+  queryNumber,
+  saveConfig,
+  startScan,
+} from './cartography.js';
+import type { GitPolicy } from '../../cartography/git-source.js';
+import type { MavenLimits, MavenOptions, MavenRemote } from '../../cartography/maven-resolve.js';
 import { AccessError, AccessStore, actionOf, can, rightFor, roleIn, type Identity } from './access.js';
 import { handleIncidentRoutes } from './incidents.js';
 import { IncidentService, type HostReplay, type IncidentHost } from '../../incident/service.js';
@@ -271,6 +307,34 @@ export interface SdkServerOptions {
   allowedSourceRoots?: string[];
   /** Les noms de variables d'environnement que le serveur accepte de consulter (défaut : QA_*). */
   envNames?: RegExp;
+  /**
+   * Les sources Git distantes de la cartographie : désactivées si absentes. Seuls les hôtes listés sont
+   * joints (https), jamais une adresse interne sauf `allowPrivateAddresses` ; les copies de travail vont
+   * sous `workRoot` (défaut : `<workspace>/.git-sources`). `protocols` http et file servent aux tests.
+   */
+  gitSources?: {
+    allowedHosts: string[];
+    workRoot?: string;
+    allowPrivateAddresses?: boolean;
+    protocols?: ('https' | 'http' | 'file')[];
+    timeoutMs?: number;
+    maxRepoBytes?: number;
+  };
+  /**
+   * Les contrats d'API des dépendances Maven (jars de sources ou classes compilées, lus sans être exécutés) :
+   * désactivés si absents. `localRepositories` : dépôts locaux lus (jamais écrits) ; `remotes` : dépôts
+   * distants autorisés (https), identifiants lus dans des variables d'environnement dont le nom suit
+   * `envNames` ; les téléchargements vont sous `cacheDir` (défaut : `<workspace>/.maven-cache`).
+   */
+  mavenContracts?: {
+    localRepositories: string[];
+    remotes?: MavenRemote[];
+    cacheDir?: string;
+    offline?: boolean;
+    limits?: Partial<MavenLimits>;
+    /** Dépôt de test en http sur l'adresse de boucle (tests seulement). */
+    allowLoopbackHttp?: boolean;
+  };
   env?: NodeJS.ProcessEnv;
   /** Langue de la page autonome et des rapports du moteur. */
   language?: 'fr' | 'en';
@@ -385,10 +449,26 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
   const sseClients = new Set<ServerResponse>();
   const ai = await incidentAiRuntime(options, env);
 
+  const git: GitPolicy | undefined = options.gitSources
+    ? {
+        allowedHosts: options.gitSources.allowedHosts,
+        workRoot: path.resolve(options.gitSources.workRoot ?? path.join(workspace, '.git-sources')),
+        fileRoots: rules.allowedSourceRoots,
+        env,
+        envNames,
+        ...(options.gitSources.protocols ? { protocols: options.gitSources.protocols } : {}),
+        ...(options.gitSources.allowPrivateAddresses ? { allowPrivateAddresses: true } : {}),
+        ...(options.gitSources.timeoutMs ? { timeoutMs: options.gitSources.timeoutMs } : {}),
+        ...(options.gitSources.maxRepoBytes ? { maxRepoBytes: options.gitSources.maxRepoBytes } : {}),
+      }
+    : undefined;
+  const maven = mavenPolicy(options.mavenContracts, workspace, env, envNames);
   const context: Context = {
     token,
     env,
     envNames,
+    ...(git ? { git } : {}),
+    ...(maven ? { maven } : {}),
     allowedOrigins,
     rules,
     workspace,
@@ -461,6 +541,10 @@ interface Context {
   token: string;
   env: NodeJS.ProcessEnv;
   envNames: RegExp;
+  /** La préparation des sources Git distantes (absente : refusées). */
+  git?: GitPolicy;
+  /** La résolution des contrats Maven (absente : désactivée). */
+  maven?: MavenOptions;
   allowedOrigins: Set<string>;
   rules: ProjectRules;
   workspace: string;
@@ -651,6 +735,10 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
       url,
       response,
     );
+    return;
+  }
+  if (resource === 'projects' && id && sub === 'cartography') {
+    await handleCartography(ctx, await projectOf(ctx, id), segments.slice(4), method, request, url, json);
     return;
   }
   if (resource === 'trends' && id === undefined && method === 'GET') {
@@ -3822,6 +3910,43 @@ function incidentService(ctx: Context, project: StoredProject): IncidentService 
 }
 
 /**
+ * La résolution des contrats Maven, validée au démarrage : dépôts distants en https (ou boucle de test),
+ * sans identifiants dans l'adresse, et variables d'identifiants dont le nom suit `envNames` (jamais une
+ * variable quelconque de l'environnement). Absente : désactivée.
+ */
+function mavenPolicy(
+  config: SdkServerOptions['mavenContracts'],
+  workspace: string,
+  env: NodeJS.ProcessEnv,
+  envNames: RegExp,
+): MavenOptions | undefined {
+  if (!config) return undefined;
+  const ids = new Set<string>();
+  for (const remote of config.remotes ?? []) {
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(remote.id) || ids.has(remote.id))
+      throw new Error(`maven repository id "${remote.id}" is invalid or repeated`);
+    ids.add(remote.id);
+    const url = URL.canParse(remote.url) ? new URL(remote.url) : undefined;
+    if (!url || (url.protocol !== 'https:' && !(config.allowLoopbackHttp && url.protocol === 'http:')))
+      throw new Error(`maven repository ${remote.id} must use https`);
+    if (url.username || url.password)
+      throw new Error(`maven repository ${remote.id}: credentials must come from environment variables`);
+    for (const name of [remote.usernameEnv, remote.passwordEnv, remote.tokenEnv])
+      if (name !== undefined && !envNames.test(name))
+        throw new Error(`maven repository ${remote.id}: variable ${name} does not match the allowed names`);
+  }
+  return {
+    local: config.localRepositories.map((dir) => path.resolve(dir)),
+    remote: config.remotes ?? [],
+    cacheDir: path.resolve(config.cacheDir ?? path.join(workspace, '.maven-cache')),
+    ...(config.offline ? { offline: true } : {}),
+    ...(config.allowLoopbackHttp ? { allowLoopbackHttp: true } : {}),
+    ...(config.limits ? { limits: config.limits } : {}),
+    env,
+  };
+}
+
+/**
  * Le runtime IA des incidents : un runtime fourni (tests) ; sinon, assemblé d'après `ai.incidents` seulement quand le
  * mode configuré n'est pas DETERMINISTIC — le module src/incident/ai n'est pas chargé autrement, et aucun
  * fournisseur n'est créé.
@@ -4287,6 +4412,173 @@ const PIPELINE_STATUS: Record<PipelineError['code'], number> = {
 };
 
 /** Une erreur du pipeline ou une entrée refusée devient une réponse dite, jamais une erreur interne. */
+/**
+ * LA CARTOGRAPHIE D'UN PROJET (`/api/projects/:id/cartography/…`) : vue, sources, scans (un à la fois,
+ * annulable), décisions, impact, extrait de code d'une preuve. Toute écriture est refusée sur un projet
+ * archivé ; les dossiers lus sont toujours sous les racines que le serveur autorise.
+ */
+async function handleCartography(
+  ctx: Context,
+  project: StoredProject,
+  rest: string[],
+  method: string,
+  request: IncomingMessage,
+  url: URL,
+  json: (body: unknown, status?: number) => void,
+): Promise<void> {
+  const [part, item, action] = rest;
+  const roots = ctx.rules.allowedSourceRoots;
+  try {
+    if (part === undefined && method === 'GET') {
+      json(await cartographyView(project, roots, url.searchParams.get('scan') ?? undefined));
+      return;
+    }
+    if (part === 'config' && item === undefined && method === 'POST') {
+      refuseArchived(project);
+      json(await saveConfig(project, await readJson(request), roots, new Date(), ctx.git));
+      return;
+    }
+    if (part === 'scans' && item === undefined && method === 'POST') {
+      refuseArchived(project);
+      const body = await readOptionalJson(request);
+      json(await startScan(project, roots, { incremental: body.incremental }, ctx.git, ctx.maven), 202);
+      return;
+    }
+    if (part === 'scans' && item === 'current' && action === undefined && method === 'GET') {
+      const state = lastScanState(project);
+      if (!state) throw new HttpError(404, 'NOT_FOUND', 'no scan has run since the server started');
+      json(state);
+      return;
+    }
+    if (part === 'scans' && item === 'current' && action === 'cancel' && method === 'POST') {
+      if (!cancelScan(project)) throw new HttpError(409, 'NOT_CANCELLABLE', 'no scan is running');
+      json(lastScanState(project), 202);
+      return;
+    }
+    if (part === 'decisions' && item === undefined && method === 'POST') {
+      refuseArchived(project);
+      json(await addDecision(project, await readJson(request), authorOf(request)), 201);
+      return;
+    }
+    // Les investigations : lancer, lister, lire, reprendre une branche, relancer sur le dernier scan.
+    if (part === 'investigations') {
+      if (item === undefined && method === 'POST') {
+        json(await startInvestigation(project, await readJson(request)), 201);
+        return;
+      }
+      if (item === undefined && method === 'GET') {
+        json(await mapInvestigations(project));
+        return;
+      }
+      if (item !== undefined && action === undefined && method === 'GET') {
+        json(await mapInvestigation(project, item));
+        return;
+      }
+      if (item !== undefined && action === 'expand' && method === 'POST') {
+        json(await expandInvestigationOf(project, item, await readJson(request)));
+        return;
+      }
+      if (item !== undefined && action === 'rerun' && method === 'POST') {
+        json(await rerunInvestigation(project, item), 201);
+        return;
+      }
+    }
+    if (part === 'impact' && item === undefined && method === 'POST') {
+      json(await impactOf(project, await readOptionalJson(request)));
+      return;
+    }
+    // L'exploration progressive : un résumé, puis des pages et des fiches, jamais le graphe entier.
+    if (method === 'GET' && item === undefined) {
+      const params = url.searchParams;
+      const id = params.get('id') ?? '';
+      const bounds = {
+        ...(queryNumber(params.get('depth')) !== undefined
+          ? { depth: queryNumber(params.get('depth')) }
+          : {}),
+        ...(queryNumber(params.get('limit')) !== undefined
+          ? { limit: queryNumber(params.get('limit')) }
+          : {}),
+      };
+      switch (part) {
+        case 'summary':
+          json(await mapSummary(project, roots, ctx.git));
+          return;
+        case 'features':
+          json(await mapFeatures(project, listQuery(params)));
+          return;
+        case 'feature':
+          json(await mapFeature(project, id));
+          return;
+        case 'feature-fields':
+          json(await mapFeatureFields(project, id, listQuery(params)));
+          return;
+        case 'field':
+          json(
+            await mapField(project, id, {
+              ...bounds,
+              ...(params.get('feature') ? { feature: params.get('feature') ?? '' } : {}),
+            }),
+          );
+          return;
+        case 'neighbors':
+          json(await mapNeighbours(project, id, bounds));
+          return;
+        case 'concepts':
+          json(await mapConcepts(project, listQuery(params)));
+          return;
+        case 'issues':
+          json(await mapIssues(project, listQuery(params)));
+          return;
+        case 'apis':
+          json(await mapApis(project, listQuery(params)));
+          return;
+        case 'api':
+          json(await mapApi(project, id));
+          return;
+        case 'structure':
+          json(await mapStructure(project, params.get('feature') ?? undefined));
+          return;
+        case 'element':
+          json(await mapElement(project, id));
+          return;
+        case 'trace':
+          json(await mapTrace(project, id, { ...bounds, ...traceOptions(params) }));
+          return;
+        case 'conditions':
+          json(await mapConditions(project, listQuery(params)));
+          return;
+        case 'actions':
+          json(await mapActions(project, listQuery(params)));
+          return;
+        default:
+          break;
+      }
+    }
+    if (part === 'evidence' && item === undefined && method === 'GET') {
+      json(
+        await evidenceExcerpt(
+          project,
+          roots,
+          {
+            source: url.searchParams.get('source'),
+            file: url.searchParams.get('file'),
+            line: url.searchParams.get('line'),
+            revision: url.searchParams.get('revision'),
+            scan: url.searchParams.get('scan'),
+          },
+          ctx.git,
+        ),
+      );
+      return;
+    }
+  } catch (error) {
+    const known = cartographyError(error);
+    if (known) throw new HttpError(known.status, known.code, known.message);
+    throw error;
+  }
+  throw new HttpError(404, 'NOT_FOUND', 'unknown cartography route');
+}
+
 async function requirementsCall<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();

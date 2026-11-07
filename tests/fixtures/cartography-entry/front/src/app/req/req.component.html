@@ -1,0 +1,22 @@
+<h1>Requêtes</h1>
+<mat-tab-group>
+  <mat-tab label="Saisie">
+    <form (ngSubmit)="submit()">
+      <input type="submit" value="Envoyer" />
+    </form>
+    <button type="button" [disabled]="!(canValidate$ | async)" (click)="validate()">Valider</button>
+    <button type="button" (click)="run('VALIDER')">Lancer la validation</button>
+    <button type="button" (click)="run('ENREGISTRER')">Lancer l'enregistrement</button>
+    <a (click)="quick()">Lien rapide</a>
+    <button type="button" (click)="handlers[0]()">Dynamique</button>
+  </mat-tab>
+  <mat-tab *ngFor="let t of tabs" [label]="t.label">
+    <button type="button" (click)="refresh()">Actualiser</button>
+  </mat-tab>
+  <mat-tab label="Pièces">
+    <app-shared-panel (saved)="onSaved()"></app-shared-panel>
+  </mat-tab>
+  <mat-tab label="Historique">
+    <app-shared-panel></app-shared-panel>
+  </mat-tab>
+</mat-tab-group>

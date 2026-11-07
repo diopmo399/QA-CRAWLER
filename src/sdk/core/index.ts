@@ -9,12 +9,14 @@ export * from './journey.js';
 export * from './journey-loop.js';
 export * from './journey-trace.js';
 export * from './wait.js';
+export * from './cartography.js';
 export {
   createQaCrawler,
   isCompatible,
   readEventStream,
   QaCrawlerError,
   type ClientOptions,
+  type MapRequestOptions,
   type IncidentExperimentInput,
   type IncidentExtensionRequest,
   type IncidentScopeValidation,

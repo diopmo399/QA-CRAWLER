@@ -1,0 +1,28 @@
+<h1>Request creation</h1>
+<form [formGroup]="form" (ngSubmit)="save()">
+  <section class="general">
+    <h2>General information</h2>
+    <label for="type">Company type</label>
+    <select id="type" formControlName="companyType"></select>
+  </section>
+  @if (state.showCompanySection) {
+    <section class="company">
+      <h2>Company</h2>
+      <label for="cname">Company name</label>
+      <input id="cname" type="text" formControlName="companyName" />
+      <label for="reg">Registration number</label>
+      <input id="reg" type="text" formControlName="registrationNumber" />
+    </section>
+  }
+  <button type="submit">Save</button>
+</form>
+@if (state.showValidationSection) {
+  <section class="validation">
+    <h2>Validation</h2>
+    <button type="button" (click)="validateRequest()" [disabled]="!state.canValidate">Validate</button>
+    <button type="button" (click)="refuse()">Refuse</button>
+  </section>
+}
+<section class="attachments" [hidden]="!hasPermission">
+  <h2>Attachments</h2>
+</section>

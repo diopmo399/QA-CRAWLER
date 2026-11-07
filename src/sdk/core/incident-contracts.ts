@@ -921,6 +921,12 @@ export interface OutgoingHttpCall {
   status: RelationStatus;
   file: string;
   line: number;
+  /** L'origine (« https://hôte:port ») quand l'URL reconstruite en porte une ; jamais d'identifiants. */
+  origin?: string;
+  /** Le client HTTP qui fait l'appel (RestTemplate, WebClient, RestClient, Feign…). */
+  client?: string;
+  /** Les clés de configuration lues pour reconstruire l'URL (« partner.url »). */
+  properties?: string[];
 }
 
 /** Un appel de méthode à méthode lu dans le code. */
@@ -933,6 +939,13 @@ export interface CodeCall {
   status: RelationStatus;
   file: string;
   line: number;
+  /**
+   * Appel ambigu : toutes les cibles possibles (implémentations d'une interface sans désignation), dont
+   * celle-ci. Le code ne dit pas laquelle s'exécute : aucune n'est choisie.
+   */
+  candidates?: string[];
+  /** Comment la cible a été trouvée quand ce n'est pas le type du receveur (implémentation unique, @Primary…). */
+  via?: string;
 }
 
 export interface CodeIndex {

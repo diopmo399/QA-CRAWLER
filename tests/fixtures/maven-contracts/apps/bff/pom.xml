@@ -1,0 +1,12 @@
+<project><modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId><artifactId>orders-bff</artifactId><version>1.0.0</version>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>acme-bom</artifactId><version>1.0.0</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId><version>3.2.0</version></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>orders-api</artifactId></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>orders-client</artifactId></dependency>
+    <dependency><groupId>com.acme</groupId><artifactId>missing-api</artifactId><version>9.9.9</version></dependency>
+  </dependencies>
+</project>

@@ -20,6 +20,23 @@ export default tseslint.config(
       'tests/fixtures/incident-app/',
       // Application Angular fictive analysée par la découverte des déclencheurs (dépendances absentes).
       'tests/fixtures/angular-app/',
+      // Projet Front/BFF/Backend/contrat fictif analysé par la cartographie (dépendances absentes).
+      'tests/fixtures/cartography/',
+      // Le mini-projet du graphe enrichi (API & Services), analysé de la même façon.
+      'tests/fixtures/cartography-graph/',
+      // Le mini-projet de la cartographie conditionnelle (conteneurs, boutons, décisions Backend).
+      'tests/fixtures/cartography-conditions/',
+      // Les stores et flux RxJS maison analysés par la cartographie (dépendances absentes).
+      'tests/fixtures/cartography-rxjs/',
+      // Les onglets Angular analysés par la cartographie (dépendances absentes).
+      'tests/fixtures/cartography-tabs/',
+      'tests/fixtures/cartography-flow/',
+      'tests/fixtures/cartography-entry/',
+      'tests/fixtures/cartography-contract/',
+      'tests/fixtures/cartography-config/',
+      'tests/fixtures/cartography-trace/',
+      // Les applications et contrats Maven analysés par la résolution des contrats (dépendances absentes).
+      'tests/fixtures/maven-contracts/',
       // Les exemples importent les paquets compilés (dist) : ils se vérifient en les lançant.
       'examples/',
     ],

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { chromium, type Browser, type Locator, type Page } from 'playwright';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runRecording, type RecordRequest } from '../../src/recording/record-orchestrator.js';
 import {
   createQaCrawler,
@@ -71,13 +71,23 @@ const zoomLabel = async (): Promise<number> => Number((await inStudio('.zv').inn
 const transform = (): Promise<string | null> => inStudio('.vp').getAttribute('transform');
 const view = (): Promise<FlowStudioView> => client.recordings.studio(project.id, NAME);
 
+/** Le centre d'un élément affiché. Après une commande du moteur, le Studio redessine le parcours : la carte
+ * n'a pas de boîte tant que ce rendu n'est pas fini, la mesure attend donc qu'elle en ait une. */
 async function center(locator: Locator): Promise<{ x: number; y: number }> {
-  const box = await locator.boundingBox();
-  if (!box) throw new Error('no box');
+  const box = await vi.waitFor(
+    async () => {
+      const found = await locator.boundingBox();
+      if (!found) throw new Error('no box');
+      return found;
+    },
+    { timeout: 5000, interval: 50 },
+  );
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
 async function dragTo(from: Locator, to: { x: number; y: number }): Promise<void> {
+  // Une commande précédente se termine par un redessin complet : glisser pendant celui-ci perdrait le geste.
+  await page.locator('qa-crawler-flow-studio[aria-busy="false"]').waitFor();
   const start = await center(from);
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();

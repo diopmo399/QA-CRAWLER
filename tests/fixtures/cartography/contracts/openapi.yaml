@@ -1,0 +1,38 @@
+openapi: 3.0.3
+info:
+  title: Requests backend
+  version: 1.0.0
+paths:
+  /requests:
+    post:
+      operationId: createRequest
+      summary: Create a request
+      tags: [requests]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRequestCommand'
+      responses:
+        '200':
+          description: created
+  /requests/{id}/validate:
+    post:
+      operationId: validateRequest
+      summary: Validate a request
+      tags: [requests]
+      responses:
+        '200':
+          description: validated
+components:
+  schemas:
+    CreateRequestCommand:
+      type: object
+      required: [organizationName]
+      properties:
+        organizationName:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email

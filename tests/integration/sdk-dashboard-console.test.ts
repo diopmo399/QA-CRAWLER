@@ -264,15 +264,19 @@ describe('Dashboard — execution console in Chromium', () => {
     await page.mouse.up();
     // Le glissement a été pris : le séparateur porte sa valeur.
     await expect.poll(() => handle.getAttribute('aria-valuenow')).not.toBeNull();
-    const taller = (await panel.boundingBox())?.height ?? 0;
     // La hauteur suit le pointeur jusqu'à la borne que le séparateur annonce (elle dépend de la place
     // au-dessus de l'éditeur, où une note d'un run précédent peut s'afficher).
     const max = Number(await handle.getAttribute('aria-valuemax'));
     expect(await handle.getAttribute('aria-valuemin')).toBe('150');
     expect(max).toBeGreaterThan(panelBox.height);
-    // Le pointeur part du milieu de la poignée : il monte de 120 px plus la moitié de sa hauteur.
+    // Le pointeur part du milieu de la poignée : il monte de 120 px plus la moitié de sa hauteur. La valeur
+    // apparaît dès le premier déplacement : la hauteur finale est attendue, pas lue une seule fois.
     const moved = 120 + box.height / 2;
-    expect(Math.abs(taller - Math.min(panelBox.height + moved, max))).toBeLessThanOrEqual(2);
+    const expected = Math.min(panelBox.height + moved, max);
+    await expect
+      .poll(async () => Math.abs(((await panel.boundingBox())?.height ?? 0) - expected))
+      .toBeLessThanOrEqual(2);
+    const taller = (await panel.boundingBox())?.height ?? 0;
     expect(Number(await handle.getAttribute('aria-valuenow'))).toBeLessThanOrEqual(max);
     // La hauteur choisie survit au rendu suivant (un autre onglet, puis retour).
     await consoleTab('summary').click();

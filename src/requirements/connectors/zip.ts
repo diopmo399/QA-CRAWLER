@@ -40,6 +40,8 @@ export interface ZipArchive {
   has(name: string): boolean;
   /** Le contenu d'une entrée (texte UTF-8), ou undefined si elle n'existe pas. */
   text(name: string): string | undefined;
+  /** Le contenu brut d'une entrée (une classe compilée), mêmes contrôles que `text`. */
+  bytes(name: string): Uint8Array | undefined;
 }
 
 const corrupted = (message: string): ConnectorError => new ConnectorError('CORRUPTED', message);
@@ -126,6 +128,7 @@ export function openZip(data: Uint8Array, limits: ZipLimits = DEFAULT_ZIP_LIMITS
     names: [...entries.keys()],
     has: (name) => entries.has(name),
     text: (name) => read(name)?.toString('utf8'),
+    bytes: (name) => read(name),
   };
 }
 

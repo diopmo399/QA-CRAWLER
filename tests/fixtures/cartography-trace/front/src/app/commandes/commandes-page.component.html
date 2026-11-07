@@ -1,0 +1,25 @@
+<mat-tab-group>
+  <mat-tab label="Saisie">
+    <section class="saisie">
+      <button type="button" (click)="valider()">Valider</button>
+      <button type="button" (click)="supprimer()">Supprimer</button>
+    </section>
+    @if ((etat$ | async)?.enregistree) {
+      <mat-tab-group>
+        <mat-tab label="Confirmation">
+          <p class="confirmation">Commande enregistrée</p>
+        </mat-tab>
+        <mat-tab label="Détails">
+          <button type="button" (click)="basculerDetails()">Afficher les détails</button>
+          @if (detailsVisibles()) {
+            <div class="details">{{ commande.client }}</div>
+          }
+        </mat-tab>
+      </mat-tab-group>
+    }
+  </mat-tab>
+  <mat-tab label="Statistiques">
+    <button type="button" (click)="compter()">Compter</button>
+    <span class="total">{{ total }}</span>
+  </mat-tab>
+</mat-tab-group>
