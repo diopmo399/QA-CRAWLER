@@ -229,6 +229,8 @@ import {
   impactOf,
   lastScanState,
   listQuery,
+  featureMapQuery,
+  mapFeatureMap,
   mapConcepts,
   mapFeature,
   mapFeatureFields,
@@ -4511,6 +4513,9 @@ async function handleCartography(
           return;
         case 'feature-fields':
           json(await mapFeatureFields(project, id, listQuery(params)));
+          return;
+        case 'feature-map':
+          json(await mapFeatureMap(project, id, featureMapQuery(params)));
           return;
         case 'field':
           json(

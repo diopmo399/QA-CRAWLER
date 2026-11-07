@@ -1191,6 +1191,70 @@ réuni sur un nom). Sous le graphe, « Relations détectées » donne la source,
 confiance et la preuve de chaque lien de la vue (ou de l'étape, ou de la sélection), avec « Voir le
 code ». Les listes se parcourent au clavier (flèches haut et bas).
 
+### Parcours & Graphe
+
+L'onglet « Parcours & Graphe » montre une fonctionnalité de bout en bout, en quatre couloirs dans un
+ordre fixe : **Angular (SPA)** → **BFF** → **Backend (Java)** → **API externe**. Tout vient du scan :
+`GET /cartography/feature-map?id=…` (`client.cartography.featureMap(projectId, id, query)`) renvoie les
+éléments, les relations et les lacunes de la fonctionnalité ; une valeur inconnue de `category`, `lane`
+ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
+
+- **Couloirs et groupes.** Angular : pages, composants, conteneurs, champs, boutons, conditions, stores,
+  services SPA. BFF : contrôleurs, endpoints, contrats, DTO, services. Backend : contrôleurs, endpoints,
+  services, règles métier (méthodes de décision booléennes), puis l'encadré **Persistance
+  (Hibernate/JPA)** (repositories, entités et tables). API externe : seulement les services tiers que le
+  scan a établis et leurs appels ; un appel sortant non classé est listé dans les lacunes, jamais rangé
+  là. Un couloir que la fonctionnalité n'atteint pas reste vide, sans passage inventé.
+- **Cartes.** Une carte par classe, DTO, entité ou store, repliée par défaut pour que le graphe tienne
+  dans l'écran : son nom, son nombre de liens et de membres (en orange si des membres ne sont pas
+  reliés). Un clic sur la carte la choisit et la déplie ; « Déplier toutes les cartes » (barre d'outils)
+  montre tous les membres (« +N autre(s) » pour les suivants) ; un élément sans relation est marqué
+  « non relié ». Par groupe, le serveur
+  renvoie les 40 cartes les plus reliées (et celle de l'élément choisi) ; les autres restent comptées
+  dans l'en-tête du groupe et leurs relations restent dans le tableau.
+- **« Tout » sans fouillis.** Les liens ne sont jamais tracés un par un : entre deux couloirs, une
+  pastille par catégorie (contient, visible si, dépend de, appelle, flux de données, persistance, API
+  externe) porte le compte exact ; en pointillé si une partie n'est que probable ou non démontrée. Les
+  compteurs de la colonne gauche et des pastilles portent toujours sur toutes les relations.
+- **Exploration progressive.** Un clic sur un élément (arbre, carte ou tableau) le met au premier plan
+  et replie le reste : les branches de l'arbre hors de son chemin, les groupes qui ne le touchent pas
+  (réduits à leur titre, un clic les déplie) et, dans ses groupes, les cartes sans lien avec lui (« +N
+  cartes sans lien avec l'élément choisi »). Ce qui reste visible est tout son parcours, de proche en
+  proche sur toutes les relations de la fonctionnalité : en aval ce qu'il déclenche (bouton → méthode du
+  composant → service SPA → endpoint BFF → contrôleur BFF → service → endpoint backend → contrôleur →
+  service → repository → table), en amont ce qui le contient ou l'appelle (conteneur, composant, page).
+  Chaque carte du parcours montre sa méthode concernée (par exemple `refuse()`). Une seule carte est
+  dépliée à la fois. Le tableau ne garde que les relations de ce parcours.
+  Cliquer de nouveau l'élément, ou « Tout montrer », rouvre tout. Une
+  catégorie (colonne gauche ou pastille) restreint le tableau à elle ; la sélection est gardée quand la
+  catégorie change.
+- **Tableau des liens.** Type, source, cible, statut (confirmé, probable, non démontré) et preuve
+  (« Voir le code »), par pages de 25 ; listes de catégorie, de couche, de statut et recherche. Aucune
+  relation n'est perdue : tout ce que le graphe agrège est ici, page par page.
+- **Onglets du haut.** Vue d'ensemble (couloirs, faisceaux, lacunes), Parcours & Graphe, Structure UI,
+  Stores & Dépendances, Conditions & Règles, Flux de données, Persistance (JPA), API externes, Preuves :
+  chacun met en avant ses groupes et ouvre l'onglet du bas correspondant.
+- **Onglets du bas.** Détails des liens, Conditions & Règles (expression, aspect, décision backend et son
+  statut), Stores, Appels & Services, Données, Code & Preuves ; à droite, « Règles principales » et
+  « Flux de données » couche par couche.
+- **Zoom.** À l'ouverture, le graphe est amené en haut de l'écran et occupe toute la hauteur visible ;
+  l'échelle est calculée pour que les quatre couloirs tiennent en largeur et en hauteur, sans descendre
+  sous 75 % (cartes lisibles ; au-delà, la zone défile). « Ajuster » refait ce calcul (50 à 150 %) ;
+  « Centrer » ramène l'élément choisi au milieu sans changer l'échelle. Plein écran, quitté par Échap.
+
+**Lacunes dites, jamais comblées.** Couche sans source configurée ou non atteinte ; aucun store atteint
+(l'analyseur reconnaît une classe à état par ses `Subject`/`BehaviorSubject` : un état tenu par des
+signaux ou un autre mécanisme n'apparaît pas comme store) ; éléments sans relation, avec ce que le scan en
+dit (source lue partiellement, relié hors de cette fonctionnalité seulement, conteneur relié mais aucune
+lecture ni écriture du membre démontrée, aucune relation dans le scan) ; appels dont la cible n'est pas
+démontrée ; appels sortants non classés ; dépendances Maven ou contrats non lus ; ruptures relevées dans
+les écrans ; relations coupées au-delà de 20 000.
+
+**Limites.** La carte ne déduit pas l'usage d'une entité de sa seule annotation : il faut une lecture ou
+une écriture démontrée. Un booléen calculé par le backend n'est relié à l'interface que si la chaîne est
+établie (condition → appel → endpoint → méthode de décision). Les conditions sont statiques : leur
+résultat observé et les branches vérifiées par assertion relèvent des exécutions de scénarios.
+
 ### API & Services
 
 L'onglet **API & Services** dresse le catalogue des API et services du projet, déduit du scan (aucune

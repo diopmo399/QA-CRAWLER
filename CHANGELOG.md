@@ -4,6 +4,29 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : onglet « Parcours & Graphe »
+
+- Une fonctionnalité de bout en bout en quatre couloirs ordonnés (Angular → BFF → Backend → API
+  externe), groupés par nature : stores et services SPA dans Angular, règles métier et persistance
+  Hibernate/JPA dans le backend, seulement les services tiers établis dans le couloir externe.
+- Relations réunies en faisceaux comptés par catégorie (contient, visible si, dépend de, appelle, flux de
+  données, persistance, API externe) ; « Tout » ne trace jamais une ligne par relation. Focus sur un
+  élément, tableau paginé de toutes les relations avec statut et preuve, onglets du haut et du bas.
+- Lacunes dites avec leur cause : couche absente ou non atteinte, aucun store, éléments non reliés,
+  appels non démontrés ou non classés, dépendances non lues, ruptures, coupe à 20 000 relations.
+- Route `GET /cartography/feature-map` et `client.cartography.featureMap` ; au plus 40 cartes par groupe
+  (les plus reliées), le reste compté. Zoom distinct de « Centrer », ajustement lisible à l'ouverture,
+  plein écran.
+- Graphe visible sans défiler : cartes repliées par défaut (liens et membres dans l'en-tête, dépliées au
+  choix ou par « Déplier toutes les cartes »), graphe amené en haut de l'écran à l'ouverture, ajustement
+  en largeur et en hauteur, zone à la hauteur de l'écran.
+- Choisir un élément replie les autres : branches de l'arbre hors de son chemin, groupes sans lien
+  (réduits à leur titre), cartes sans lien (« +N cartes ») ; une seule carte dépliée à la fois. Ce qui
+  reste visible est tout le parcours de l'élément, en aval jusqu'aux contrôleurs BFF et backend, au
+  repository et à la table, en amont jusqu'à la page (`neighbours`, calculé par le serveur sur toutes les
+  relations) ; le tableau ne garde que les relations de ce parcours, et chaque carte montre sa méthode
+  concernée.
+
 ### Cartographie : contrats d'API des dépendances Maven
 
 - Un contrôleur qui implémente une interface publiée dans un jar de contrat expose ses endpoints : le jar
