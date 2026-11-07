@@ -126,17 +126,35 @@ describe('carte d’une fonctionnalité sur le scan réel (front, BFF, backend)'
     const beyond = featureMap(index, cov, id, { size: 10, page: 999 });
     expect(beyond?.relations.page).toBe(Math.ceil(map.relationCount / 10));
     const refuse = map.items.find((i) => i.kind === 'BUTTON' && i.name === 'Refuse');
-    const focused = featureMap(index, cov, id, { item: refuse?.id ?? '' });
-    expect(focused?.relations.total).toBe(refuse?.links);
-    expect(focused?.relations.items.every((r) => r.from === refuse?.id || r.to === refuse?.id)).toBe(true);
-    // Ses voisins : sur toutes ses relations, même au-delà de la page du tableau.
-    const ends = new Set([
-      refuse?.id ?? '',
-      ...(focused?.relations.items ?? []).flatMap((r) => [r.from, r.to]),
-    ]);
-    expect(new Set(focused?.neighbours)).toEqual(ends);
+    // Le parcours du bouton : en aval jusqu'au contrôleur BFF, au contrôleur backend et à la table ; en
+    // amont, le conteneur, le composant et la page. Le tableau ne garde que les relations de ce parcours.
+    const focused = featureMap(index, cov, id, { item: refuse?.id ?? '', size: 100 });
+    const nameOf = (nid: string) => map.items.find((i) => i.id === nid)?.name;
+    const path = new Set((focused?.neighbours ?? []).map(nameOf));
+    for (const step of [
+      'Refuse',
+      'Validation',
+      'RequestCreateComponent',
+      'RequestService.refuse',
+      'POST /api/requests/refuse',
+      'RequestBffController.refuse',
+      'RequestBffService.refuse',
+      'POST /requests/refuse',
+      'RequestController.refuse',
+      'RequestValidationService.refuse',
+      'RequestRepository',
+      'REQUEST',
+    ])
+      expect(path).toContain(step);
+    // Rien d'une autre action : ni « Validate » ni l'appel au partenaire externe.
+    expect(path).not.toContain('Validate');
+    expect(path).not.toContain('RequestBffController.validate');
+    expect(focused?.relations.total).toBeGreaterThan(refuse?.links ?? 0);
+    const ids = new Set(focused?.neighbours);
+    expect(focused?.relations.items.every((r) => ids.has(r.from) && ids.has(r.to))).toBe(true);
+    // Le parcours ne dépend pas de la page du tableau.
     const narrow = featureMap(index, cov, id, { item: refuse?.id ?? '', size: 1 });
-    expect(new Set(narrow?.neighbours)).toEqual(ends);
+    expect(new Set(narrow?.neighbours)).toEqual(ids);
     expect(map.neighbours).toBeUndefined();
     const searched = featureMap(index, cov, id, { q: 'partner' });
     expect(searched?.relations.total).toBeGreaterThan(0);

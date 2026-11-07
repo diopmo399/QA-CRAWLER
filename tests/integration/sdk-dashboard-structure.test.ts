@@ -467,10 +467,17 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     // L'élément choisi : au premier plan, les autres atténués, ses relations seulement.
     await journey().locator('.jr-tn', { hasText: 'Refuse' }).click();
     await journey().locator('.jr-focus').waitFor();
-    await expect.poll(async () => rows().count()).toBe(3);
+    // Son parcours jusqu'aux contrôleurs BFF et backend : cartes visibles, méthode montrée, tableau.
+    await expect.poll(async () => rows().count()).toBeGreaterThan(3);
+    for (const controller of ['RequestBffController', 'RequestController']) {
+      const card = journey().locator('.jr-card', { hasText: controller }).first();
+      expect(await card.count()).toBe(1);
+      expect(await card.locator('.jr-ml').textContent()).toContain('refuse()');
+    }
+    expect(await journey().locator('.jr-t').textContent()).toContain('RequestController.refuse');
     // Les autres sont repliés : groupes sans lien à leur titre, autres boutons en une ligne.
     const folded = journey().locator('.jr-sec.folded');
-    await expect.poll(async () => folded.count()).toBeGreaterThan(5);
+    await expect.poll(async () => folded.count()).toBeGreaterThan(3);
     const others = journey().locator('[data-group="BUTTON"] .jr-folded');
     expect(await others.textContent()).toContain('+2 cartes');
     expect(await journey().locator('[data-group="BUTTON"] .jr-card').count()).toBe(1);

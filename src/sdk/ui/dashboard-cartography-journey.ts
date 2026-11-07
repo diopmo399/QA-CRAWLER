@@ -207,7 +207,7 @@ const FR = {
   selected: 'Élément choisi',
   clear: 'Tout montrer',
   focusNote: (name: string) =>
-    `Focus sur ${name} : ses relations sont au premier plan, les autres atténuées.`,
+    `Focus sur ${name} : son parcours (en amont et en aval) est au premier plan, le reste est replié.`,
   col: {
     n: '#',
     type: 'Type de lien',
@@ -368,7 +368,8 @@ const EN: JourneyStrings = {
   exitFull: 'Exit full screen',
   selected: 'Selected element',
   clear: 'Show everything',
-  focusNote: (name) => `Focus on ${name}: its relations are in front, the others dimmed.`,
+  focusNote: (name) =>
+    `Focus on ${name}: its path (upstream and downstream) is in front, the rest is collapsed.`,
   col: {
     n: '#',
     type: 'Link type',
@@ -582,7 +583,10 @@ function laneCards(
       const sel = members.some((i) => i.id === st.jSelect);
       // Repliée par défaut (le graphe tient dans l'écran) : dépliée si demandé, ouverte ou choisie.
       const compact = !st.jDetail && !open && !sel;
-      const shown = compact ? [] : open ? rest : rest.slice(0, MEMBERS_SHOWN);
+      // Repliée, une carte du parcours de l'élément choisi montre quand même ses membres sur ce parcours
+      // (la méthode du contrôleur, du service…).
+      const onPath = compact && near ? rest.filter((i) => near.has(i.id)) : [];
+      const shown = compact ? onPath : open ? rest : rest.slice(0, MEMBERS_SHOWN);
       const links = members.reduce((sum, i) => sum + i.links, 0);
       const title = head ?? members[0];
       const isolated = rest.filter((i) => i.links === 0).length;

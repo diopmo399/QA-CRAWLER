@@ -1219,8 +1219,12 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
 - **Exploration progressive.** Un clic sur un élément (arbre, carte ou tableau) le met au premier plan
   et replie le reste : les branches de l'arbre hors de son chemin, les groupes qui ne le touchent pas
   (réduits à leur titre, un clic les déplie) et, dans ses groupes, les cartes sans lien avec lui (« +N
-  cartes sans lien avec l'élément choisi »). Ses voisins viennent de toutes ses relations, pas seulement
-  de la page du tableau. Une seule carte est dépliée à la fois. Le tableau ne garde que ses relations.
+  cartes sans lien avec l'élément choisi »). Ce qui reste visible est tout son parcours, de proche en
+  proche sur toutes les relations de la fonctionnalité : en aval ce qu'il déclenche (bouton → méthode du
+  composant → service SPA → endpoint BFF → contrôleur BFF → service → endpoint backend → contrôleur →
+  service → repository → table), en amont ce qui le contient ou l'appelle (conteneur, composant, page).
+  Chaque carte du parcours montre sa méthode concernée (par exemple `refuse()`). Une seule carte est
+  dépliée à la fois. Le tableau ne garde que les relations de ce parcours.
   Cliquer de nouveau l'élément, ou « Tout montrer », rouvre tout. Une
   catégorie (colonne gauche ou pastille) restreint le tableau à elle ; la sélection est gardée quand la
   catégorie change.

@@ -94,11 +94,18 @@ describe('onglet Parcours & Graphe', () => {
     expect(compact).toContain('data-action="map-j-detail" aria-label="Déplier toutes les cartes"');
     const detailed = render({ jDetail: true });
     expect(count(detailed, 'class="jr-ml"')).toBeGreaterThan(3);
-    // La carte de l'élément choisi se déplie seule.
+    // La carte de l'élément choisi se déplie ; les autres cartes de son parcours ne montrent que leurs
+    // membres sur ce parcours, celles hors parcours restent repliées.
     const method = map.items.find((i) => i.kind === 'METHOD' && i.card !== i.id);
-    const chosen = render({ jSelect: method?.id ?? '' });
+    const chosen = render({ jSelect: method?.id ?? '', jMap: { ...map, neighbours: [method?.id ?? ''] } });
     expect(count(chosen, 'class="jr-ml"')).toBe(1);
     expect(chosen).toContain('jr-m sel');
+    const onPath = map.items.find((i) => i.kind === 'METHOD' && i.card !== i.id && i.card !== method?.card);
+    const both = render({
+      jSelect: method?.id ?? '',
+      jMap: { ...map, neighbours: [method?.id ?? '', onPath?.id ?? ''] },
+    });
+    expect(count(both, 'class="jr-ml"')).toBe(2);
   });
 
   it('un élément choisi replie le reste : groupes sans lien à leur titre, cartes sans lien en une ligne', () => {
