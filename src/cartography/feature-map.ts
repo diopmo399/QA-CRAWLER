@@ -414,20 +414,28 @@ export function featureMap(
   // ── Les lacunes, avec leur cause ──
   const gaps = gapsOf(index, feature, items, sorted, unclassified, detail.truncated, featureId);
 
-  // ── Le tableau des relations, filtré et paginé ──
+  // ── L'élément demandé et ses voisins directs (sur toutes ses relations) ──
+  const touches = (r: FeatureMapRelation, id: string): boolean =>
+    r.from === id || r.to === id || items.get(r.from)?.card === id || items.get(r.to)?.card === id;
+  let neighbours: string[] | undefined;
+  if (query.item) {
+    const item = query.item;
+    const near = new Set<string>([item]);
+    for (const r of unique)
+      if (touches(r, item)) {
+        near.add(r.from);
+        near.add(r.to);
+      }
+    neighbours = [...near];
+  }
+
+  // ── Le tableau des relations, restreint et paginé ──
   const q = query.q?.trim().toLowerCase() ?? '';
   const filtered = unique
     .filter((r) => !query.category || r.category === query.category)
     .filter((r) => !query.lane || r.fromLane === query.lane || r.toLane === query.lane)
     .filter((r) => !query.status || r.status === query.status)
-    .filter(
-      (r) =>
-        !query.item ||
-        r.from === query.item ||
-        r.to === query.item ||
-        items.get(r.from)?.card === query.item ||
-        items.get(r.to)?.card === query.item,
-    )
+    .filter((r) => !query.item || touches(r, query.item))
     .filter((r) => !q || `${r.fromName} ${r.toName} ${r.reason} ${r.kind}`.toLowerCase().includes(q))
     .sort(
       (a, b) =>
@@ -457,6 +465,7 @@ export function featureMap(
     items: shown,
     lanes,
     itemCount: sorted.length,
+    ...(neighbours ? { neighbours } : {}),
     tree,
     bundles: [...bundles.values()].sort(
       (a, b) =>

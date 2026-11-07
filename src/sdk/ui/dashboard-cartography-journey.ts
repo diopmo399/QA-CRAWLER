@@ -192,6 +192,12 @@ const FR = {
   isolatedCount: (n: number) => (n === 1 ? '1 non relié' : `${String(n)} non reliés`),
   showMembers: 'Déplier toutes les cartes',
   hideMembers: 'Replier les cartes',
+  foldedCards: (n: number) =>
+    n === 1
+      ? '+1 carte sans lien avec l’élément choisi'
+      : `+${String(n)} cartes sans lien avec l’élément choisi`,
+  unfoldGroup: 'Déplier ce groupe',
+  foldGroup: 'Replier',
   zoomIn: 'Zoom avant',
   zoomOut: 'Zoom arrière',
   center: 'Centrer (garde l’échelle)',
@@ -351,6 +357,9 @@ const EN: JourneyStrings = {
   isolatedCount: (n) => `${String(n)} not linked`,
   showMembers: 'Expand all cards',
   hideMembers: 'Collapse the cards',
+  foldedCards: (n) => `+${String(n)} card(s) not linked to the selected element`,
+  unfoldGroup: 'Expand this group',
+  foldGroup: 'Collapse',
   zoomIn: 'Zoom in',
   zoomOut: 'Zoom out',
   center: 'Center (keeps the scale)',
@@ -475,10 +484,8 @@ function neighbourSet(map: FeatureMap, selected: string | undefined): Set<string
   const set = new Set<string>([selected]);
   const card = map.items.find((i) => i.id === selected)?.card;
   for (const item of map.items) if (item.card === selected || (card && item.id === card)) set.add(item.id);
-  for (const r of map.relations.items) {
-    set.add(r.from);
-    set.add(r.to);
-  }
+  // Les voisins donnés par le serveur (toutes les relations) ; sinon, ceux de la page du tableau.
+  for (const id of map.neighbours ?? map.relations.items.flatMap((r) => [r.from, r.to])) set.add(id);
   return set;
 }
 
@@ -597,10 +604,36 @@ function laneCards(
       const zero = links === 0;
       const member = (i: FeatureMapItem): string =>
         `<li><button class="jr-m${i.id === st.jSelect ? ' sel' : ''}${i.links === 0 ? ' zero' : ''}${near && !near.has(i.id) ? ' dim' : ''}" data-action="map-j-item" data-item="${esc(i.id)}" title="${esc(i.sub ? `${i.label ?? i.name} — ${i.sub}` : (i.label ?? i.name))}"><span>${esc(memberText(i))}</span>${i.sub ? `<small>${esc(i.sub)}</small>` : ''}${i.links === 0 ? `<em>${esc(s.isolated)}</em>` : ''}</button></li>`;
-      return `<div class="jr-card${sel ? ' sel' : ''}${cardDim ? ' dim' : ''}${zero ? ' zero' : ''}"><button class="jr-ch" data-action="map-j-item" data-item="${esc(title?.id ?? card)}" title="${esc(title?.cardTitle ?? '')}">${icon(GROUP_ICON[group] ?? 'cube')}<span><b>${esc(head ? (head.label ?? head.name) : (title?.cardTitle ?? card))}</b>${head?.sub ? `<small>${esc(head.sub)}</small>` : ''}</span>${count}</button>${shown.length ? `<ul class="jr-ml">${shown.map(member).join('')}</ul>` : ''}${toggle}</div>`;
+      return {
+        near: !cardDim,
+        html: `<div class="jr-card${sel ? ' sel' : ''}${cardDim ? ' dim' : ''}${zero ? ' zero' : ''}"><button class="jr-ch" data-action="map-j-item" data-item="${esc(title?.id ?? card)}" title="${esc(title?.cardTitle ?? '')}">${icon(GROUP_ICON[group] ?? 'cube')}<span><b>${esc(head ? (head.label ?? head.name) : (title?.cardTitle ?? card))}</b>${head?.sub ? `<small>${esc(head.sub)}</small>` : ''}</span>${count}</button>${shown.length ? `<ul class="jr-ml">${shown.map(member).join('')}</ul>` : ''}${toggle}</div>`,
+      };
     });
     const more = hidden > 0 ? `<p class="jr-hidden">${esc(s.hiddenCards(hidden))}</p>` : '';
-    return `<div class="jr-sec${dim ? ' dim' : ''}" data-group="${group}"><h4>${icon(GROUP_ICON[group] ?? 'cube')}<span>${esc(s.groups[group])}</span><i>${String(counts?.count ?? list.length)}</i></h4>${body.join('')}${more}</div>`;
+    const title = `${icon(GROUP_ICON[group] ?? 'cube')}<span>${esc(s.groups[group])}</span><i>${String(counts?.count ?? list.length)}</i>`;
+    if (!near)
+      return `<div class="jr-sec${dim ? ' dim' : ''}" data-group="${group}"><h4>${title}</h4>${body.map((b) => b.html).join('')}${more}</div>`;
+    // Un élément est choisi : ce qui ne le touche pas est replié (le groupe à son titre, les cartes en
+    // une ligne) ; un clic déplie, sans perdre la sélection.
+    const secKey = `sec:${lane}|${group}`;
+    const restKey = `rest:${lane}|${group}`;
+    const relevant = body.some((b) => b.near);
+    const secOpen = st.jOpen.includes(secKey);
+    const fold = (key: string, expanded: boolean, inner: string, cls: string): string =>
+      `<button class="${cls}" data-action="map-j-card" data-card="${esc(key)}" aria-expanded="${String(expanded)}" title="${esc(expanded ? s.foldGroup : s.unfoldGroup)}">${inner}</button>`;
+    if (!relevant && !secOpen)
+      return `<div class="jr-sec dim folded" data-group="${group}">${fold(secKey, false, `<h4>${title}</h4>`, 'jr-fold')}</div>`;
+    const restOpen = secOpen || st.jOpen.includes(restKey);
+    const visible = restOpen ? body : body.filter((b) => b.near);
+    const folded = body.length - visible.length;
+    const head = relevant ? `<h4>${title}</h4>` : fold(secKey, true, `<h4>${title}</h4>`, 'jr-fold');
+    const rest =
+      folded > 0
+        ? fold(restKey, false, esc(s.foldedCards(folded)), 'lnk jr-folded')
+        : relevant && restOpen && body.some((b) => !b.near)
+          ? fold(restKey, true, esc(s.foldGroup), 'lnk jr-folded')
+          : '';
+    return `<div class="jr-sec${dim ? ' dim' : ''}" data-group="${group}">${head}${visible.map((b) => b.html).join('')}${rest}${more}</div>`;
   };
   const order = [...groups.keys()];
   const main = order.filter((g) => g !== 'REPOSITORY' && g !== 'ENTITY');
@@ -890,6 +923,9 @@ export const JOURNEY_CSS = `
 .jr-m.sel{background:#e3f4e8;font-weight:700}.jr-m.dim{opacity:.4}.jr-m:hover,.jr-ch:hover,.jr-tn:hover{background:rgba(0,0,0,.04)}
 .jr-more{font-size:11.5px;padding:0 8px 6px 31px;margin-top:-3px}.jr-more em{font-style:normal;color:#9b5b00}
 .jr-hidden{margin:2px 4px 0;font-size:11px;color:var(--qa-color-muted)}
+.jr-fold{display:block;width:100%;border:0;background:none;padding:2px 0;text-align:left;cursor:pointer;border-radius:5px}
+.jr-fold:hover{background:rgba(0,0,0,.04)}.jr-sec.folded{opacity:.55}.jr-sec.folded h4::after{content:"▸";margin-left:4px}
+.jr-folded{font-size:11px;padding:2px 4px;text-align:left}
 .jr-persist{border:1px dashed #b0661a;border-radius:9px;padding:6px;display:flex;flex-direction:column;gap:6px;background:rgba(255,255,255,.5)}
 .jr-ph{display:flex;gap:6px;align-items:center;margin:0;font-size:12px;color:#8a4d10}
 .jr-inner{font-size:11.5px;color:var(--qa-color-muted);display:flex;flex-wrap:wrap;gap:4px;margin-top:auto}

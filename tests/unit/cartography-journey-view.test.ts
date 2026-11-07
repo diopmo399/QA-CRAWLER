@@ -12,6 +12,7 @@ import {
   type JourneyHelpers,
   type JourneyState,
 } from '../../src/sdk/ui/dashboard-cartography-journey.js';
+import { foldTree } from '../../src/sdk/ui/dashboard-cartography-controller.js';
 
 /**
  * Le rendu de l'onglet « Parcours & Graphe » sur la carte réelle du mini-projet : couloirs dans l'ordre,
@@ -98,6 +99,61 @@ describe('onglet Parcours & Graphe', () => {
     const chosen = render({ jSelect: method?.id ?? '' });
     expect(count(chosen, 'class="jr-ml"')).toBe(1);
     expect(chosen).toContain('jr-m sel');
+  });
+
+  it('un élément choisi replie le reste : groupes sans lien à leur titre, cartes sans lien en une ligne', () => {
+    const refuse = map.items.find((i) => i.kind === 'BUTTON' && i.name === 'Refuse');
+    // Les voisins tels que le serveur les donne pour cet élément (toutes ses relations).
+    const neighbours = [
+      refuse?.id ?? '',
+      ...map.relations.items
+        .filter((r) => r.from === refuse?.id || r.to === refuse?.id)
+        .flatMap((r) => [r.from, r.to]),
+    ];
+    const focused = { ...map, neighbours };
+    const html = journeyTab(
+      { ...emptyJourney(), jMap: focused, jSelect: refuse?.id ?? '' },
+      helpers(map.feature.id),
+    );
+    expect(count(html, 'jr-sec dim folded')).toBeGreaterThan(5);
+    expect(html).toContain('+2 cartes sans lien avec l’élément choisi');
+    // Les groupes qui touchent l'élément restent ouverts ; un groupe replié se déplie sur demande.
+    expect(html).toMatch(/data-group="BUTTON"[^]*?Refuse/);
+    const opened = journeyTab(
+      { ...emptyJourney(), jMap: focused, jSelect: refuse?.id ?? '', jOpen: ['sec:BFF|ENDPOINT'] },
+      helpers(map.feature.id),
+    );
+    expect(count(opened, 'jr-sec dim folded')).toBe(count(html, 'jr-sec dim folded') - 1);
+    // Sans élément choisi, rien n'est replié.
+    expect(render()).not.toContain('folded');
+  });
+
+  it('foldTree replie les branches hors du chemin de l’élément choisi', () => {
+    const tree = [
+      {
+        id: 'P',
+        kind: 'ROUTE' as const,
+        name: 'p',
+        children: [
+          {
+            id: 'A',
+            kind: 'CONTAINER' as const,
+            name: 'a',
+            children: [{ id: 'A1', kind: 'BUTTON' as const, name: 'a1', children: [] }],
+          },
+          {
+            id: 'B',
+            kind: 'CONTAINER' as const,
+            name: 'b',
+            children: [{ id: 'B1', kind: 'BUTTON' as const, name: 'b1', children: [] }],
+          },
+        ],
+      },
+    ];
+    expect(foldTree(tree, 'A1', [])).toEqual(['B']);
+    expect(foldTree(tree, 'P', [])).toEqual(['A', 'B']);
+    // Un élément hors de l'arbre (backend, BFF) ne touche pas à l'arbre.
+    expect(foldTree(tree, 'X', ['A'])).toEqual(['A']);
   });
 
   it('chaque vue ouvre son onglet du bas, sans erreur de rendu', () => {

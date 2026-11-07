@@ -129,6 +129,15 @@ describe('carte d’une fonctionnalité sur le scan réel (front, BFF, backend)'
     const focused = featureMap(index, cov, id, { item: refuse?.id ?? '' });
     expect(focused?.relations.total).toBe(refuse?.links);
     expect(focused?.relations.items.every((r) => r.from === refuse?.id || r.to === refuse?.id)).toBe(true);
+    // Ses voisins : sur toutes ses relations, même au-delà de la page du tableau.
+    const ends = new Set([
+      refuse?.id ?? '',
+      ...(focused?.relations.items ?? []).flatMap((r) => [r.from, r.to]),
+    ]);
+    expect(new Set(focused?.neighbours)).toEqual(ends);
+    const narrow = featureMap(index, cov, id, { item: refuse?.id ?? '', size: 1 });
+    expect(new Set(narrow?.neighbours)).toEqual(ends);
+    expect(map.neighbours).toBeUndefined();
     const searched = featureMap(index, cov, id, { q: 'partner' });
     expect(searched?.relations.total).toBeGreaterThan(0);
     expect(featureMap(index, cov, 'FEATURE:unknown')).toBeUndefined();

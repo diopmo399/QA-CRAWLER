@@ -3,6 +3,7 @@ import type {
   FeatureDetail,
   FeatureLane,
   FeatureMap,
+  FeatureTreeNode,
   FieldRow,
   FieldSheet,
   MapDecisionInput,
@@ -54,6 +55,32 @@ import {
   type MapTab,
 } from './dashboard-cartography.js';
 import type { DashboardRoute, DashboardState } from './dashboard-view.js';
+
+/**
+ * Les branches de l'arbre à replier quand `id` est choisi : toutes celles qui ont des enfants, sauf le
+ * chemin qui mène à `id` (et `id` lui-même). Si `id` n'est pas dans l'arbre, l'arbre reste tel quel.
+ */
+export function foldTree(tree: readonly FeatureTreeNode[], id: string, current: readonly string[]): string[] {
+  const path: string[] = [];
+  const find = (nodes: readonly FeatureTreeNode[]): boolean =>
+    nodes.some((n) => {
+      path.push(n.id);
+      if (n.id === id || find(n.children)) return true;
+      path.pop();
+      return false;
+    });
+  if (!find(tree)) return [...current];
+  const keep = new Set(path);
+  const closed: string[] = [];
+  const walk = (nodes: readonly FeatureTreeNode[]): void => {
+    for (const n of nodes) {
+      if (n.children.length > 0 && !keep.has(n.id)) closed.push(n.id);
+      walk(n.children);
+    }
+  };
+  walk(tree);
+  return closed;
+}
 
 /** Les critères du tableau des relations, sans les valeurs vides (la clé de cache reste stable). */
 const compactQuery = (q: CartographyUi['jQuery']): CartographyUi['jQuery'] => ({
@@ -675,6 +702,11 @@ export class CartographyController {
         const id = target.dataset.item ?? '';
         const same = ui.jSelect === id;
         ui.jSelect = same ? undefined : id;
+        // Voir un élément replie les autres : cartes ouvertes, cartes dépliées, branches de l'arbre hors
+        // de son chemin. Le désélectionner rouvre tout.
+        ui.jOpen = [];
+        ui.jDetail = false;
+        ui.jClosed = same ? [] : foldTree(ui.jMap?.tree ?? [], id, ui.jClosed);
         query({ item: same ? undefined : id });
         ui.jBottom = 'links';
         this.reloadJourney();
@@ -682,6 +714,8 @@ export class CartographyController {
       }
       case 'map-j-clear':
         ui.jSelect = undefined;
+        ui.jOpen = [];
+        ui.jClosed = [];
         query({ item: undefined, category: undefined, lane: undefined });
         this.reloadJourney();
         return true;
@@ -713,7 +747,11 @@ export class CartographyController {
       }
       case 'map-j-card': {
         const card = target.dataset.card ?? '';
-        ui.jOpen = ui.jOpen.includes(card) ? ui.jOpen.filter((c) => c !== card) : [...ui.jOpen, card];
+        // Une seule carte ouverte à la fois (les groupes repliés « sec: » / « rest: » sont à part).
+        const fold = (k: string): boolean => k.startsWith('sec:') || k.startsWith('rest:');
+        ui.jOpen = ui.jOpen.includes(card)
+          ? ui.jOpen.filter((c) => c !== card)
+          : [...ui.jOpen.filter((c) => fold(card) || fold(c)), card];
         this.host.paint();
         return true;
       }
