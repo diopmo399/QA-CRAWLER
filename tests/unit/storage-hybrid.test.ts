@@ -362,7 +362,7 @@ describe('qa-crawler sdk-server --storage', () => {
     expect(() => parseSdkServerArgs(['--workspace', 'w', '--storage', 'hybrid'])).toThrow('--storage-db');
     expect(() =>
       parseSdkServerArgs(['--workspace', 'w', '--storage', 'hybrid', '--storage-db', 'postgres']),
-    ).toThrow('--objects fs, s3 or azure');
+    ).toThrow('--objects fs, s3, azure or artifactory');
     expect(() =>
       parseSdkServerArgs([
         '--workspace',

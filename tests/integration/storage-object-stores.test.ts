@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { SqliteAdapter } from '../../src/persistence/database/sqlite/sqlite-adapter.js';
+import { ArtifactoryStore } from '../../src/storage/artifactory-store.js';
 import { AzureBlobStore, sharedKeyAuthorization } from '../../src/storage/azure-blob-store.js';
 import type { ObjectStore } from '../../src/storage/object-store.js';
 import { S3ObjectStore } from '../../src/storage/s3-object-store.js';
@@ -17,6 +18,8 @@ import { workspaceMirrorContract } from '../persistence/workspace-mirror-contrac
  *   Azure Blob (ou Azurite) : QA_TEST_AZURE_URL (https://<compte>.blob.core.windows.net ou
  *     http://127.0.0.1:10000/devstoreaccount1), QA_TEST_AZURE_ACCOUNT, QA_TEST_AZURE_KEY ; le conteneur
  *     est créé par le test.
+ *   Artifactory : QA_TEST_ARTIFACTORY_URL (https://<hôte>/artifactory), QA_TEST_ARTIFACTORY_REPOSITORY
+ *     (un dépôt local générique existant, droits lire, déployer, supprimer), QA_TEST_ARTIFACTORY_TOKEN.
  *
  * Sans ces variables, les tests correspondants sont ignorés (et le disent). Le miroir y est vérifié de
  * bout en bout avec SQLite comme base.
@@ -24,6 +27,10 @@ import { workspaceMirrorContract } from '../persistence/workspace-mirror-contrac
 const env = process.env;
 const S3 = env.QA_TEST_S3_ENDPOINT && env.QA_TEST_S3_BUCKET ? env : undefined;
 const AZURE = env.QA_TEST_AZURE_URL && env.QA_TEST_AZURE_ACCOUNT && env.QA_TEST_AZURE_KEY ? env : undefined;
+const ARTIFACTORY =
+  env.QA_TEST_ARTIFACTORY_URL && env.QA_TEST_ARTIFACTORY_REPOSITORY && env.QA_TEST_ARTIFACTORY_TOKEN
+    ? env
+    : undefined;
 /** Une base SQLite par miroir vérifié (la même pour toutes les ouvertures de ce miroir). */
 const sqlite = (): (() => SqliteAdapter) => {
   const file = path.join(mkdtempSync(path.join(tmpdir(), 'qa-objects-db-')), 'qa.db');
@@ -49,11 +56,11 @@ function objectStoreContract(name: string, store: () => ObjectStore, refused: ()
       expect(await objects.get(key)).toBeUndefined();
     });
 
-    it('a wrong secret is refused (403), and the error carries no secret', async () => {
+    it('a wrong secret is refused (401 or 403), and the error carries no secret', async () => {
       const objects = refused();
       const error = (await objects.put('contract/x', Buffer.from('x')).catch((e: unknown) => e)) as Error;
       expect(error).toBeInstanceOf(Error);
-      expect(error.message).toMatch(/HTTP 403/);
+      expect(error.message).toMatch(/HTTP 40[13]/);
       expect(error.message).not.toContain('wrong-secret');
     });
   });
@@ -108,4 +115,26 @@ if (AZURE) {
 } else
   describe('object store: Azure Blob', () => {
     it.skip('QA_TEST_AZURE_URL is not set: no Azure Blob store to test against', () => undefined);
+  });
+
+if (ARTIFACTORY) {
+  const prefix = `qa-test-${randomUUID().slice(0, 8)}/`;
+  const artifactory = (token: string): ArtifactoryStore =>
+    new ArtifactoryStore({
+      url: ARTIFACTORY.QA_TEST_ARTIFACTORY_URL ?? '',
+      repository: ARTIFACTORY.QA_TEST_ARTIFACTORY_REPOSITORY ?? '',
+      prefix,
+      auth: { token },
+    });
+  objectStoreContract(
+    'Artifactory',
+    () => artifactory(ARTIFACTORY.QA_TEST_ARTIFACTORY_TOKEN ?? ''),
+    () => artifactory('wrong-secret'),
+  );
+  workspaceMirrorContract('SQLite + Artifactory', sqlite(), () =>
+    artifactory(ARTIFACTORY.QA_TEST_ARTIFACTORY_TOKEN ?? ''),
+  );
+} else
+  describe('object store: Artifactory', () => {
+    it.skip('QA_TEST_ARTIFACTORY_URL is not set: no Artifactory to test against', () => undefined);
   });

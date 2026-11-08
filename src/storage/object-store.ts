@@ -5,11 +5,11 @@ import { randomBytes } from 'node:crypto';
 /**
  * Le stockage objet du stockage hybride : les fichiers lourds ou binaires du dossier de travail
  * (captures, traces, rapports HTML…). Une clé est un chemin relatif (`a/b/c`) ; le contenu est opaque.
- * Trois implémentations : un dossier (disque réseau monté, tests), S3 et compatibles (AWS, MinIO…),
- * Azure Blob Storage.
+ * Quatre implémentations : un dossier (disque réseau monté, tests), S3 et compatibles (AWS, MinIO…),
+ * Azure Blob Storage, un dépôt générique JFrog Artifactory.
  */
 export interface ObjectStore {
-  readonly kind: 'filesystem' | 's3' | 'azure-blob';
+  readonly kind: 'filesystem' | 's3' | 'azure-blob' | 'artifactory';
   /** Où sont les objets, sans aucun secret (affiché dans l'état du stockage). */
   describe(): string;
   put(key: string, body: Buffer, contentType?: string): Promise<void>;

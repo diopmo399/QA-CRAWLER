@@ -1875,8 +1875,8 @@ le serveur le recopie en continu :
   SQLite, par la couche de persistance existante (migration additive `006_add_workspace_mirror`,
   tables `workspace_file` et `workspace_lease`) ;
 - les **fichiers lourds ou binaires** (captures, traces, vidéos, archives) vont dans un **stockage
-  objet** : un dossier monté (partage réseau), S3 et compatibles (AWS, MinIO, Ceph…) ou Azure Blob
-  Storage. La base en garde l'index. Un contenu identique n'est stocké qu'une fois ; un objet n'est
+  objet** : un dossier monté (partage réseau), S3 et compatibles (AWS, MinIO, Ceph…), Azure Blob
+  Storage ou un dépôt générique JFrog Artifactory. La base en garde l'index. Un contenu identique n'est stocké qu'une fois ; un objet n'est
   supprimé que lorsque plus aucun fichier ne le désigne.
 
 ```bash
@@ -1886,6 +1886,13 @@ export QA_OBJECTS_ACCESS_KEY_ID=… QA_OBJECTS_SECRET_ACCESS_KEY=…
 qa-crawler sdk-server --workspace /var/qa/workspace \
   --storage hybrid --storage-db postgres --storage-db-tls \
   --objects s3 --objects-bucket qa-crawler --objects-endpoint https://minio.example.test:9000
+
+# PostgreSQL + Artifactory (dépôt local générique) ; jeton d'accès dans l'environnement
+export QA_OBJECTS_TOKEN=…   # ou QA_OBJECTS_USERNAME et QA_OBJECTS_PASSWORD
+qa-crawler sdk-server --workspace /var/qa/workspace \
+  --storage hybrid --storage-db postgres \
+  --objects artifactory --objects-url https://artifactory.example.test/artifactory \
+  --objects-repository qa-crawler-objects --objects-prefix staging
 
 # Sans serveur : SQLite + un dossier monté
 qa-crawler sdk-server --workspace /work --storage hybrid \
@@ -1897,11 +1904,12 @@ qa-crawler sdk-server --workspace /work --storage hybrid \
 | `--storage hybrid`                                           | Active le stockage hybride (défaut `local`)                                                          |
 | `--storage-db postgres\|sqlserver\|sqlite`                   | La base : hôte, port, nom, utilisateur, mot de passe dans `QA_DB_*`                                  |
 | `--storage-db-file`, `--storage-db-tls`                      | Le fichier SQLite ; le chiffrement de la connexion                                                   |
-| `--objects fs\|s3\|azure`                                    | Le stockage objet                                                                                    |
+| `--objects fs\|s3\|azure\|artifactory`                       | Le stockage objet                                                                                    |
 | `--objects-dir`                                              | `fs` : le dossier                                                                                    |
 | `--objects-bucket`, `--objects-region`, `--objects-endpoint` | `s3` : le bucket, la région (défaut `us-east-1`), un point d'accès compatible (adressage par chemin) |
 | `--objects-account-url`, `--objects-container`               | `azure` : `https://<compte>.blob.core.windows.net` et le conteneur                                   |
-| `--objects-prefix`                                           | Préfixe de toutes les clés (`s3`, `azure`)                                                           |
+| `--objects-url`, `--objects-repository`                      | `artifactory` : `https://<hôte>/artifactory` et la clé d'un dépôt local générique                    |
+| `--objects-prefix`                                           | Préfixe de toutes les clés (`s3`, `azure`, `artifactory`)                                            |
 | `--storage-space`                                            | Le nom de l'espace : plusieurs serveurs peuvent partager une base                                    |
 | `--sync-interval <s>`                                        | Secondes entre deux envois (défaut 10)                                                               |
 | `--storage-takeover`                                         | Reprendre le bail d'un serveur arrêté brutalement                                                    |
@@ -1909,8 +1917,17 @@ qa-crawler sdk-server --workspace /work --storage hybrid \
 **Secrets.** Aucun secret en argument ni en fichier de configuration : `QA_DB_USERNAME`,
 `QA_DB_PASSWORD`, `QA_OBJECTS_ACCESS_KEY_ID`, `QA_OBJECTS_SECRET_ACCESS_KEY`
 (`QA_OBJECTS_SESSION_TOKEN` pour des identifiants temporaires), et pour Azure `QA_OBJECTS_SAS` ou
-`QA_OBJECTS_ACCOUNT_NAME` + `QA_OBJECTS_ACCOUNT_KEY`. Il manque un secret du stockage objet : le serveur ne démarre pas et nomme la variable. Les messages d'erreur portent le code HTTP et le code du service, jamais la clé.
+`QA_OBJECTS_ACCOUNT_NAME` + `QA_OBJECTS_ACCOUNT_KEY`, pour Artifactory `QA_OBJECTS_TOKEN` (jeton
+d'accès, envoyé en `Bearer`) ou `QA_OBJECTS_USERNAME` + `QA_OBJECTS_PASSWORD` (Basic). Il manque un secret du stockage objet : le serveur ne démarre pas et nomme la variable. Les messages d'erreur portent le code HTTP et le code du service, jamais la clé.
 S3 est signé en Signature Version 4, Azure en Shared Key ou par jeton SAS, sans SDK tiers.
+
+**Artifactory.** Un dépôt **local générique** dédié (pas un dépôt Maven ni npm), par l'API REST de
+déploiement : chaque envoi porte ses empreintes SHA-1 et SHA-256, qu'Artifactory vérifie. Le compte
+du jeton doit avoir les droits **lire, déployer et supprimer** sur ce dépôt : le démarrage les
+vérifie (informations du dépôt, puis un petit fichier de contrôle déployé et aussitôt supprimé) et
+refuse de démarrer s'il en manque un. Une **politique de nettoyage ou de rétention** d'Artifactory
+posée sur ce dépôt supprimerait des objets encore indexés : à exclure pour ce dépôt. Les objets
+supprimés passent par la corbeille d'Artifactory si elle est activée.
 
 **Cycle de vie.**
 

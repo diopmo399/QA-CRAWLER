@@ -50,7 +50,8 @@ Hybrid storage (the workspace becomes a cache, restored at start, saved every fe
                                password from QA_DB_HOST, QA_DB_PORT, QA_DB_NAME, QA_DB_USERNAME, QA_DB_PASSWORD)
       --storage-db-file <file> SQLite: the database file (or QA_DB_FILE)
       --storage-db-tls         Encrypt the database connection
-      --objects <fs|s3|azure>  Object store of heavy or binary files
+      --objects <fs|s3|azure|artifactory>
+                               Object store of heavy or binary files
       --objects-dir <dir>      fs: the folder (a mounted network share)
       --objects-bucket <name>  s3: the bucket (credentials: QA_OBJECTS_ACCESS_KEY_ID,
                                QA_OBJECTS_SECRET_ACCESS_KEY, optional QA_OBJECTS_SESSION_TOKEN)
@@ -60,7 +61,10 @@ Hybrid storage (the workspace becomes a cache, restored at start, saved every fe
                                azure: https://<account>.blob.core.windows.net (credentials: QA_OBJECTS_SAS,
                                or QA_OBJECTS_ACCOUNT_NAME and QA_OBJECTS_ACCOUNT_KEY)
       --objects-container <name>  azure: the container
-      --objects-prefix <p>     Prefix of every object key (s3, azure)
+      --objects-url <url>      artifactory: https://<host>/artifactory (credentials: QA_OBJECTS_TOKEN,
+                               or QA_OBJECTS_USERNAME and QA_OBJECTS_PASSWORD)
+      --objects-repository <key>  artifactory: a local generic repository (read, deploy and delete rights)
+      --objects-prefix <p>     Prefix of every object key (s3, azure, artifactory)
       --storage-space <name>   Name of this workspace in the database (default: default)
       --sync-interval <s>      Seconds between two saves (default: 10)
       --storage-takeover       Take the write lease of a server that stopped without releasing it
@@ -125,6 +129,8 @@ export function parseSdkServerArgs(argv: readonly string[]): SdkServerArgs {
         'objects-endpoint': { type: 'string' },
         'objects-account-url': { type: 'string' },
         'objects-container': { type: 'string' },
+        'objects-url': { type: 'string' },
+        'objects-repository': { type: 'string' },
         'objects-prefix': { type: 'string' },
         'storage-space': { type: 'string' },
         'sync-interval': { type: 'string' },
@@ -185,6 +191,8 @@ type StorageValues = Partial<
     | 'objects-endpoint'
     | 'objects-account-url'
     | 'objects-container'
+    | 'objects-url'
+    | 'objects-repository'
     | 'objects-prefix'
     | 'storage-space'
     | 'sync-interval',
@@ -249,8 +257,19 @@ function storageArgs(
           container: values['objects-container'],
           ...(withSlash ? { prefix: withSlash } : {}),
         };
+      case 'artifactory':
+        if (!values['objects-url'] || !values['objects-repository'])
+          throw new UsageError('--objects artifactory needs --objects-url and --objects-repository');
+        if (!/^[A-Za-z0-9._-]{1,64}$/.test(values['objects-repository']))
+          throw new UsageError('--objects-repository must be a repository key such as qa-crawler-objects');
+        return {
+          provider: 'artifactory',
+          url: https('objects-url', values['objects-url']),
+          repository: values['objects-repository'],
+          ...(withSlash ? { prefix: withSlash } : {}),
+        };
       default:
-        throw new UsageError('--storage hybrid needs --objects fs, s3 or azure');
+        throw new UsageError('--storage hybrid needs --objects fs, s3, azure or artifactory');
     }
   })();
   const space = values['storage-space'];

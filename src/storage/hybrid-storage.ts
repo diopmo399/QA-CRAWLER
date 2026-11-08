@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createDatabaseAdapter } from '../persistence/database/adapter-factory.js';
 import type { DatabaseEngine } from '../persistence/database/database-adapter.js';
 import { databaseConnectionOf } from '../persistence/persistence-manager.js';
+import { ArtifactoryStore } from './artifactory-store.js';
 import { AzureBlobStore } from './azure-blob-store.js';
 import { FilesystemObjectStore, type ObjectStore } from './object-store.js';
 import { S3ObjectStore } from './s3-object-store.js';
@@ -12,7 +13,7 @@ import { WorkspaceRepository } from './workspace-repository.js';
 /**
  * STOCKAGE HYBRIDE du serveur : les fichiers texte du dossier de travail en base (PostgreSQL, SQL Server,
  * SQLite), les fichiers lourds ou binaires dans un stockage objet (dossier monté, S3 et compatibles,
- * Azure Blob). Aucun secret ici : identifiants lus dans l'environnement (QA_DB_*, QA_OBJECTS_*).
+ * Azure Blob, dépôt générique Artifactory). Aucun secret ici : identifiants lus dans l'environnement (QA_DB_*, QA_OBJECTS_*).
  */
 export interface HybridStorageOptions {
   database: {
@@ -39,7 +40,8 @@ export interface HybridStorageOptions {
         pathStyle?: boolean;
         prefix?: string;
       }
-    | { provider: 'azure-blob'; accountUrl: string; container: string; prefix?: string };
+    | { provider: 'azure-blob'; accountUrl: string; container: string; prefix?: string }
+    | { provider: 'artifactory'; url: string; repository: string; prefix?: string };
   /** Le nom de l'espace : plusieurs serveurs (environnements) peuvent partager la même base (défaut « default »). */
   space?: string;
   /** Intervalle des envois en ms (défaut 10 000). */
@@ -58,6 +60,9 @@ export const OBJECT_STORE_ENV = {
   sas: 'QA_OBJECTS_SAS',
   accountName: 'QA_OBJECTS_ACCOUNT_NAME',
   accountKey: 'QA_OBJECTS_ACCOUNT_KEY',
+  token: 'QA_OBJECTS_TOKEN',
+  username: 'QA_OBJECTS_USERNAME',
+  password: 'QA_OBJECTS_PASSWORD',
 } as const;
 
 function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -102,6 +107,22 @@ export function createObjectStore(
       return new AzureBlobStore({
         accountUrl: options.accountUrl,
         container: options.container,
+        ...(options.prefix ? { prefix: options.prefix } : {}),
+        auth,
+      });
+    }
+    case 'artifactory': {
+      const token = envValue(env, OBJECT_STORE_ENV.token);
+      const username = envValue(env, OBJECT_STORE_ENV.username);
+      const password = envValue(env, OBJECT_STORE_ENV.password);
+      const auth = token ? { token } : username && password ? { username, password } : undefined;
+      if (!auth)
+        throw new Error(
+          `the Artifactory credentials are missing: set ${OBJECT_STORE_ENV.token}, or ${OBJECT_STORE_ENV.username} and ${OBJECT_STORE_ENV.password}`,
+        );
+      return new ArtifactoryStore({
+        url: options.url,
+        repository: options.repository,
         ...(options.prefix ? { prefix: options.prefix } : {}),
         auth,
       });

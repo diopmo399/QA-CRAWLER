@@ -565,7 +565,7 @@ docker run --rm \
 
 **Serveur du SDK dans un conteneur éphémère :** sans volume persistant, démarrer `qa-crawler sdk-server` en
 **stockage hybride** (`--storage hybrid`) : textes dans PostgreSQL, SQL Server ou SQLite, captures et
-traces dans S3, Azure Blob ou un partage monté, dossier de travail restauré au démarrage, enregistré
+traces dans S3, Azure Blob, Artifactory ou un partage monté, dossier de travail restauré au démarrage, enregistré
 toutes les 10 s et à l'arrêt (`SIGTERM`). Un seul serveur par espace (bail en base). Détails : section
 « Stockage hybride » de [sdk/README.md](sdk/README.md).
 
