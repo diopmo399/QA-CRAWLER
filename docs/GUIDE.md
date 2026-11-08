@@ -563,6 +563,12 @@ docker run --rm \
 
 **CI :** `.github/workflows/qa-crawler.yml` vérifie le code à chaque PR ; un job optionnel explore un vrai environnement quand la variable `TARGET_URL` est définie.
 
+**Serveur du SDK dans un conteneur éphémère :** sans volume persistant, démarrer `qa-crawler sdk-server` en
+**stockage hybride** (`--storage hybrid`) : textes dans PostgreSQL, SQL Server ou SQLite, captures et
+traces dans S3, Azure Blob ou un partage monté, dossier de travail restauré au démarrage, enregistré
+toutes les 10 s et à l'arrêt (`SIGTERM`). Un seul serveur par espace (bail en base). Détails : section
+« Stockage hybride » de [sdk/README.md](sdk/README.md).
+
 ---
 
 ## 16. Référence de la ligne de commande

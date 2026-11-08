@@ -9,6 +9,7 @@ import {
   openPersistence,
   PersistenceUnavailableError,
 } from '../../src/persistence/persistence-manager.js';
+import { MIGRATIONS } from '../../src/persistence/database/migrations.js';
 
 const MISSION = `
 mission: { name: p }
@@ -218,7 +219,7 @@ persistence:
     expect(session.status).toMatchObject({
       status: 'CONNECTED',
       actual: { provider: 'database', database: 'SQLite', location: file },
-      schemaVersion: 5,
+      schemaVersion: MIGRATIONS.length,
     });
     await session.provider?.close();
   });

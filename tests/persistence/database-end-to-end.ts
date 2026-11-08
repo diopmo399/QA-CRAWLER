@@ -8,6 +8,7 @@ import { parseConfig } from '../../src/config/config-loader.js';
 import type { ExplorationResult } from '../../src/model/exploration-result.js';
 import { runMission } from '../../src/orchestrator.js';
 import type { DatabaseConnection } from '../../src/persistence/database/database-adapter.js';
+import { MIGRATIONS } from '../../src/persistence/database/migrations.js';
 
 /**
  * Une vraie exploration (Chromium) enregistrée dans une vraie base, deux fois : le second run
@@ -80,7 +81,7 @@ output:
       expect(first.persistence).toMatchObject({
         status: 'CONNECTED',
         actual: { provider: 'database', database: name },
-        schemaVersion: 5,
+        schemaVersion: MIGRATIONS.length,
         memory: { mode: 'historical', historicalTransitionsLoaded: 0 },
         writeErrors: [],
       });

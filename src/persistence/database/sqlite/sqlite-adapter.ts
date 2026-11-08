@@ -26,6 +26,7 @@ export const SQLITE_DIALECT: SqlDialect = {
     int: 'INTEGER',
     double: 'REAL',
     timestamp: 'TEXT',
+    text: 'TEXT',
   },
   limit: (sql, count) => `${sql} LIMIT ${Math.max(0, Math.floor(count))}`,
   lockedTable: (table) => table,

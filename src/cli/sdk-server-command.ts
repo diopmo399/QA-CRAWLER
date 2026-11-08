@@ -3,6 +3,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import type { MavenRemote } from '../cartography/maven-resolve.js';
 import { startSdkServer, type RunningSdkServer, type SdkServerOptions } from '../sdk/server/server.js';
+import type { HybridStorageOptions } from '../storage/hybrid-storage.js';
 import { UsageError } from './args.js';
 import { logger } from './logger.js';
 
@@ -41,6 +42,29 @@ Options:
       --quiet                  Only the URL
   -h, --help                   This help
 
+Hybrid storage (the workspace becomes a cache, restored at start, saved every few seconds and at stop):
+      --storage <local|hybrid> local (default): files only; hybrid: text files in a database, heavy or
+                               binary files in an object store
+      --storage-db <postgres|sqlserver|sqlite>
+                               Database of the index and of the text files (host, port, name, user and
+                               password from QA_DB_HOST, QA_DB_PORT, QA_DB_NAME, QA_DB_USERNAME, QA_DB_PASSWORD)
+      --storage-db-file <file> SQLite: the database file (or QA_DB_FILE)
+      --storage-db-tls         Encrypt the database connection
+      --objects <fs|s3|azure>  Object store of heavy or binary files
+      --objects-dir <dir>      fs: the folder (a mounted network share)
+      --objects-bucket <name>  s3: the bucket (credentials: QA_OBJECTS_ACCESS_KEY_ID,
+                               QA_OBJECTS_SECRET_ACCESS_KEY, optional QA_OBJECTS_SESSION_TOKEN)
+      --objects-region <name>  s3: the region (default: us-east-1)
+      --objects-endpoint <url> s3: an S3-compatible endpoint (MinIO…); path-style addressing then
+      --objects-account-url <url>
+                               azure: https://<account>.blob.core.windows.net (credentials: QA_OBJECTS_SAS,
+                               or QA_OBJECTS_ACCOUNT_NAME and QA_OBJECTS_ACCOUNT_KEY)
+      --objects-container <name>  azure: the container
+      --objects-prefix <p>     Prefix of every object key (s3, azure)
+      --storage-space <name>   Name of this workspace in the database (default: default)
+      --sync-interval <s>      Seconds between two saves (default: 10)
+      --storage-takeover       Take the write lease of a server that stopped without releasing it
+
 The API requires the token (Authorization: Bearer …) on every call; browsers may only call it from the
 same origin or an --allow-origin. Environment variables are only read when their name matches QA_*, and
 only their presence is returned, never their value. Ctrl+C stops the server.
@@ -62,6 +86,8 @@ interface SdkServerArgs {
   access: 'single' | 'named';
   quiet: boolean;
   help: boolean;
+  /** Le stockage hybride ; absent en stockage local. */
+  storage?: HybridStorageOptions;
 }
 
 export function parseSdkServerArgs(argv: readonly string[]): SdkServerArgs {
@@ -88,6 +114,21 @@ export function parseSdkServerArgs(argv: readonly string[]): SdkServerArgs {
         access: { type: 'string' },
         quiet: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
+        storage: { type: 'string' },
+        'storage-db': { type: 'string' },
+        'storage-db-file': { type: 'string' },
+        'storage-db-tls': { type: 'boolean' },
+        objects: { type: 'string' },
+        'objects-dir': { type: 'string' },
+        'objects-bucket': { type: 'string' },
+        'objects-region': { type: 'string' },
+        'objects-endpoint': { type: 'string' },
+        'objects-account-url': { type: 'string' },
+        'objects-container': { type: 'string' },
+        'objects-prefix': { type: 'string' },
+        'storage-space': { type: 'string' },
+        'sync-interval': { type: 'string' },
+        'storage-takeover': { type: 'boolean' },
       },
       allowPositionals: false,
       strict: true,
@@ -112,8 +153,10 @@ export function parseSdkServerArgs(argv: readonly string[]): SdkServerArgs {
     if (!/^https?:\/\//i.test(origin) || !URL.canParse(origin))
       throw new UsageError(`--allow-origin must be an http(s) origin: ${origin}`);
   const maven = mavenArgs(values);
+  const storage = storageArgs(values, integer);
   return {
     ...(maven ? { maven } : {}),
+    ...(storage ? { storage } : {}),
     ...(values.workspace !== undefined ? { workspace: path.resolve(values.workspace) } : {}),
     host: values.host ?? '127.0.0.1',
     port: integer('port', values.port, 0, 4310),
@@ -127,6 +170,104 @@ export function parseSdkServerArgs(argv: readonly string[]): SdkServerArgs {
     access,
     quiet: values.quiet ?? false,
     help: values.help ?? false,
+  };
+}
+
+type StorageValues = Partial<
+  Record<
+    | 'storage'
+    | 'storage-db'
+    | 'storage-db-file'
+    | 'objects'
+    | 'objects-dir'
+    | 'objects-bucket'
+    | 'objects-region'
+    | 'objects-endpoint'
+    | 'objects-account-url'
+    | 'objects-container'
+    | 'objects-prefix'
+    | 'storage-space'
+    | 'sync-interval',
+    string
+  >
+> & { 'storage-db-tls'?: boolean; 'storage-takeover'?: boolean };
+
+/** Le stockage hybride de la ligne de commande : la base et le stockage objet (aucun secret en argument). */
+function storageArgs(
+  values: StorageValues,
+  integer: (name: string, value: string | undefined, min: number, fallback: number) => number,
+): HybridStorageOptions | undefined {
+  const mode = values.storage ?? 'local';
+  if (mode !== 'local' && mode !== 'hybrid') throw new UsageError('--storage must be local or hybrid');
+  const related = Object.entries(values).filter(
+    ([name]) => name !== 'storage' && /^(storage-|objects|sync-)/.test(name),
+  );
+  if (mode === 'local') {
+    if (related.length > 0) throw new UsageError(`--${related[0]?.[0] ?? ''} needs --storage hybrid`);
+    return undefined;
+  }
+  const type = values['storage-db'];
+  if (type !== 'postgres' && type !== 'sqlserver' && type !== 'sqlite')
+    throw new UsageError('--storage hybrid needs --storage-db postgres, sqlserver or sqlite');
+  if (values['storage-db-file'] !== undefined && type !== 'sqlite')
+    throw new UsageError('--storage-db-file is for --storage-db sqlite');
+  const objects = ((): HybridStorageOptions['objects'] => {
+    const prefix = values['objects-prefix'];
+    if (
+      prefix !== undefined &&
+      (!/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\/?$/.test(prefix) ||
+        prefix.split('/').some((segment) => segment === '.' || segment === '..'))
+    )
+      throw new UsageError('--objects-prefix must be a path such as qa-crawler/');
+    const withSlash = prefix === undefined ? undefined : prefix.endsWith('/') ? prefix : `${prefix}/`;
+    const https = (name: string, value: string): string => {
+      if (!/^https?:\/\//i.test(value) || !URL.canParse(value))
+        throw new UsageError(`--${name} must be an http(s) URL: ${value}`);
+      return value;
+    };
+    switch (values.objects) {
+      case 'fs':
+        if (!values['objects-dir']) throw new UsageError('--objects fs needs --objects-dir');
+        return { provider: 'filesystem', directory: path.resolve(values['objects-dir']) };
+      case 's3':
+        if (!values['objects-bucket']) throw new UsageError('--objects s3 needs --objects-bucket');
+        return {
+          provider: 's3',
+          bucket: values['objects-bucket'],
+          region: values['objects-region'] ?? 'us-east-1',
+          ...(values['objects-endpoint']
+            ? { endpoint: https('objects-endpoint', values['objects-endpoint']) }
+            : {}),
+          ...(withSlash ? { prefix: withSlash } : {}),
+        };
+      case 'azure':
+        if (!values['objects-account-url'] || !values['objects-container'])
+          throw new UsageError('--objects azure needs --objects-account-url and --objects-container');
+        return {
+          provider: 'azure-blob',
+          accountUrl: https('objects-account-url', values['objects-account-url']),
+          container: values['objects-container'],
+          ...(withSlash ? { prefix: withSlash } : {}),
+        };
+      default:
+        throw new UsageError('--storage hybrid needs --objects fs, s3 or azure');
+    }
+  })();
+  const space = values['storage-space'];
+  if (space !== undefined && !/^[A-Za-z0-9._-]{1,64}$/.test(space))
+    throw new UsageError('--storage-space must be 1 to 64 letters, digits, dots, dashes or underscores');
+  return {
+    database: {
+      type,
+      ...(values['storage-db-file'] !== undefined ? { file: path.resolve(values['storage-db-file']) } : {}),
+      ...(values['storage-db-tls'] ? { tls: true } : {}),
+    },
+    objects,
+    ...(space !== undefined ? { space } : {}),
+    ...(values['sync-interval'] !== undefined
+      ? { intervalMs: integer('sync-interval', values['sync-interval'], 1, 10) * 1000 }
+      : {}),
+    ...(values['storage-takeover'] ? { takeover: true } : {}),
   };
 }
 
@@ -229,6 +370,7 @@ export async function runSdkServerCli(argv: string[], runtime: SdkServerRuntime 
           }
         : {}),
       ...(args.maven ? { mavenContracts: args.maven } : {}),
+      ...(args.storage ? { storage: args.storage } : {}),
       language: args.language,
       concurrency: args.concurrency,
       access: args.access,
@@ -240,8 +382,11 @@ export async function runSdkServerCli(argv: string[], runtime: SdkServerRuntime 
       },
     });
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     logger.error(
-      `Error: cannot listen on ${args.host}:${String(args.port)} (${error instanceof Error ? error.message : String(error)})`,
+      args.storage && !/EADDRINUSE|EACCES|EADDRNOTAVAIL/.test(message)
+        ? `Error: cannot open the hybrid storage (${message})`
+        : `Error: cannot listen on ${args.host}:${String(args.port)} (${message})`,
     );
     return 3;
   }
@@ -257,6 +402,12 @@ export async function runSdkServerCli(argv: string[], runtime: SdkServerRuntime 
     logger.info(
       `  Access    : ${args.access === 'named' ? 'named tokens (the service token is the administrator)' : 'single service token'}`,
     );
+    if (running.storage) {
+      const status = running.storage.status();
+      logger.info(
+        `  Storage   : hybrid, space ${status.space}, ${String(status.restored.documents + status.restored.objects)} files restored, objects in ${status.objects}`,
+      );
+    }
     logger.info(`  Module    : ${running.url}/sdk/ui/index.js`);
     logger.info(`  API       : ${running.url}/api`);
     logger.info('');
@@ -264,7 +415,12 @@ export async function runSdkServerCli(argv: string[], runtime: SdkServerRuntime 
   }
   runtime.onStarted?.(running);
   await (runtime.waitForStop ?? waitForSignal)();
-  await running.close().catch(() => undefined);
+  try {
+    await running.close();
+  } catch (error) {
+    logger.error(`Error: stop failed (${error instanceof Error ? error.message : String(error)})`);
+    return 1;
+  }
   return 0;
 }
 

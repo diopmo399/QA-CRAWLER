@@ -29,6 +29,8 @@ export interface SqlDialect {
     double: string;
     /** TIMESTAMPTZ, DATETIMEOFFSET(3), TEXT ISO 8601. */
     timestamp: string;
+    /** Texte long sans limite pratique : TEXT, NVARCHAR(MAX). */
+    text: string;
   };
   /** Ajoute la limite à une requête qui a déjà son ORDER BY : LIMIT n, ou OFFSET 0 ROWS FETCH NEXT n ROWS ONLY. */
   limit(selectWithOrderBy: string, count: number): string;

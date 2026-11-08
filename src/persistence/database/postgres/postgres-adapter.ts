@@ -25,6 +25,7 @@ export const POSTGRES_DIALECT: SqlDialect = {
     int: 'INTEGER',
     double: 'DOUBLE PRECISION',
     timestamp: 'TIMESTAMPTZ',
+    text: 'TEXT',
   },
   limit: (sql, count) => `${sql} LIMIT ${Math.max(0, Math.floor(count))}`,
   lockedTable: (table) => table,
