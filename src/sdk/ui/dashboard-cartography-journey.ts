@@ -707,6 +707,16 @@ const GROUP_ICON: Partial<Record<FeatureGroup, string>> = {
 };
 const MEMBERS_SHOWN = 4;
 
+/**
+ * Un nom de code échappé, coupable aux bons endroits : après un point, une barre ou un souligné, et entre
+ * deux mots d'un nom en camelCase (« RequestStore<wbr>Service.<wbr>manage… »), plutôt qu'en plein mot.
+ */
+function wb(text: string): string {
+  return esc(text)
+    .replace(/([./_])/g, '$1<wbr>')
+    .replace(/([a-z0-9])([A-Z])/g, '$1<wbr>$2');
+}
+
 /** Le texte d'un membre dans sa carte : sans le nom de la carte devant, une méthode avec ses parenthèses. */
 function memberText(item: FeatureMapItem): string {
   const name = item.label ?? item.name;
@@ -777,7 +787,7 @@ function treeView(nodes: readonly FeatureTreeNode[], st: JourneyState, map: Feat
     const label = n.kind === 'ROUTE' || n.kind === 'SCREEN' ? `Page : ${n.name}` : n.name;
     const sel = st.jSelect === n.id;
     const zero = (links.get(n.id) ?? 0) === 0;
-    return `<li>${kids}<button class="jr-tn k-${n.kind.toLowerCase()}${sel ? ' sel' : ''}${zero ? ' zero' : ''}" data-action="map-j-item" data-item="${esc(n.id)}" aria-pressed="${String(sel)}">${icon(n.kind === 'BUTTON' ? 'pointer' : n.kind === 'FIELD' ? 'text' : n.kind === 'CONTAINER' ? 'grid' : n.kind === 'COMPONENT' ? 'cube' : 'file')}<span>${esc(label)}</span></button>${!closed && n.children.length ? `<ul>${n.children.map(row).join('')}</ul>` : ''}</li>`;
+    return `<li>${kids}<button class="jr-tn k-${n.kind.toLowerCase()}${sel ? ' sel' : ''}${zero ? ' zero' : ''}" data-action="map-j-item" data-item="${esc(n.id)}" aria-pressed="${String(sel)}">${icon(n.kind === 'BUTTON' ? 'pointer' : n.kind === 'FIELD' ? 'text' : n.kind === 'CONTAINER' ? 'grid' : n.kind === 'COMPONENT' ? 'cube' : 'file')}<span>${wb(label)}</span></button>${!closed && n.children.length ? `<ul>${n.children.map(row).join('')}</ul>` : ''}</li>`;
   };
   return nodes.length ? `<ul class="jr-tree" role="tree">${nodes.map(row).join('')}</ul>` : '';
 }
@@ -859,10 +869,10 @@ function laneCards(
       const cardDim = near && !members.some((i) => near.has(i.id));
       const zero = links === 0;
       const member = (i: FeatureMapItem): string =>
-        `<li><button class="jr-m${i.id === st.jSelect ? ' sel' : ''}${stepCls(i.id)}${i.links === 0 ? ' zero' : ''}${near && !near.has(i.id) ? ' dim' : ''}" data-action="map-j-item" data-item="${esc(i.id)}" title="${esc(i.sub ? `${i.label ?? i.name} — ${i.sub}` : (i.label ?? i.name))}">${badge(i.id)}<span>${esc(memberText(i))}</span>${i.sub ? `<small>${esc(i.sub)}</small>` : ''}${i.links === 0 ? `<em>${esc(s.isolated)}</em>` : ''}</button></li>`;
+        `<li><button class="jr-m${i.id === st.jSelect ? ' sel' : ''}${stepCls(i.id)}${i.links === 0 ? ' zero' : ''}${near && !near.has(i.id) ? ' dim' : ''}" data-action="map-j-item" data-item="${esc(i.id)}" title="${esc(i.sub ? `${i.label ?? i.name} — ${i.sub}` : (i.label ?? i.name))}">${badge(i.id)}<span>${wb(memberText(i))}</span>${i.sub ? `<small>${esc(i.sub)}</small>` : ''}${i.links === 0 ? `<em>${esc(s.isolated)}</em>` : ''}</button></li>`;
       return {
         near: !cardDim,
-        html: `<div class="jr-card${sel ? ' sel' : ''}${cardDim ? ' dim' : ''}${zero ? ' zero' : ''}"><button class="jr-ch${stepCls(title?.id ?? card)}" data-action="map-j-item" data-item="${esc(title?.id ?? card)}" title="${esc(title?.cardTitle ?? '')}">${badge(title?.id ?? card)}${icon(GROUP_ICON[group] ?? 'cube')}<span><b>${esc(head ? (head.label ?? head.name) : (title?.cardTitle ?? card))}</b>${head?.sub ? `<small>${esc(head.sub)}</small>` : ''}</span>${count}</button>${shown.length ? `<ul class="jr-ml">${shown.map(member).join('')}</ul>` : ''}${toggle}</div>`,
+        html: `<div class="jr-card${sel ? ' sel' : ''}${cardDim ? ' dim' : ''}${zero ? ' zero' : ''}"><button class="jr-ch${stepCls(title?.id ?? card)}" data-action="map-j-item" data-item="${esc(title?.id ?? card)}" title="${esc(title?.cardTitle ?? '')}">${badge(title?.id ?? card)}${icon(GROUP_ICON[group] ?? 'cube')}<span><b>${wb(head ? (head.label ?? head.name) : (title?.cardTitle ?? card))}</b>${head?.sub ? `<small>${esc(head.sub)}</small>` : ''}</span>${count}</button>${shown.length ? `<ul class="jr-ml">${shown.map(member).join('')}</ul>` : ''}${toggle}</div>`,
       };
     });
     const more = hidden > 0 ? `<p class="jr-hidden">${esc(s.hiddenCards(hidden))}</p>` : '';
@@ -1141,7 +1151,7 @@ function guideBar(
   for (const x of t.down) if (x.end) ends.set(x.end, (ends.get(x.end) ?? 0) + 1);
   const stepBtn = (x: FeatureTraceStep, i: number): string => {
     const cls = `${i === active ? ' on' : i === active + 1 ? ' next' : ''}${x.end === 'STOP' ? ' stop' : ''}`;
-    return `<li class="jr-gs l-${x.lane.toLowerCase()}${cls}"><button class="jr-crb" data-action="map-j-step" data-step="${String(i)}" data-item="${esc(x.id)}" aria-current="${i === active ? 'step' : 'false'}" title="${esc(`${s.lanes[x.lane][0]} · ${s.groups[x.group]}${x.sub ? ` — ${x.sub}` : ''}`)}">${stepBadge(s, steps.get(x.id), x.end)}<span class="jr-gk">${icon(GROUP_ICON[x.group] ?? 'cube')}${esc(s.groups[x.group])}</span><span>${esc(x.name)}</span></button></li>`;
+    return `<li class="jr-gs l-${x.lane.toLowerCase()}${cls}"><button class="jr-crb" data-action="map-j-step" data-step="${String(i)}" data-item="${esc(x.id)}" aria-current="${i === active ? 'step' : 'false'}" title="${esc(`${s.lanes[x.lane][0]} · ${s.groups[x.group]}${x.sub ? ` — ${x.sub}` : ''}`)}">${stepBadge(s, steps.get(x.id), x.end)}<span class="jr-gk">${icon(GROUP_ICON[x.group] ?? 'cube')}${esc(s.groups[x.group])}</span><span>${wb(x.name)}</span></button></li>`;
   };
   const arrow = (i: number): string => {
     const via = linkInto(p, i);
@@ -1193,7 +1203,7 @@ function guideBar(
         .slice(0, 8)
         .map(
           (x) =>
-            `<button class="jr-stop" data-action="map-j-item" data-item="${esc(x.id)}">${stepBadge(s, steps.get(x.id), 'STOP')}<span>${esc(x.name)}</span><small>${esc(x.gap ?? s.trace.noOut)}</small></button>`,
+            `<button class="jr-stop" data-action="map-j-item" data-item="${esc(x.id)}">${stepBadge(s, steps.get(x.id), 'STOP')}<span>${wb(x.name)}</span><small>${esc(x.gap ?? s.trace.noOut)}</small></button>`,
         )
         .join('')}${stops.length > 8 ? `<span class="mu">${esc(s.more(stops.length - 8))}</span>` : ''}</div>`
     : '';
@@ -1388,9 +1398,9 @@ export const JOURNEY_CSS = `
 .jr-tree li{display:flex;flex-wrap:wrap;align-items:center}.jr-tree li>ul{flex-basis:100%}
 .jr-tg,.jr-tg-sp{width:18px;height:18px;border:0;background:none;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:none}
 .jr-tg .ico{width:12px;height:12px}
-.jr-tn{display:inline-flex;gap:6px;align-items:center;border:0;background:none;padding:3px 6px;border-radius:6px;text-align:left;font-size:13px;min-width:0;max-width:100%}
-.jr-tn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.jr-tn .ico{width:14px;height:14px;flex:none;color:var(--qa-color-muted)}
+.jr-tn{display:inline-flex;gap:6px;align-items:flex-start;border:0;background:none;padding:3px 6px;border-radius:6px;text-align:left;font-size:13px;min-width:0;max-width:100%}
+.jr-tn span{min-width:0;overflow-wrap:anywhere}
+.jr-tn .ico{width:14px;height:14px;flex:none;margin-top:2px;color:var(--qa-color-muted)}
 .jr-tn.k-button .ico{color:#2f7d4f}.jr-tn.sel{background:#e3f4e8;font-weight:700}.jr-tn.zero span{text-decoration:underline dotted}
 .jr-links ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
 .jr-cat{display:flex;gap:7px;align-items:center;width:100%;border:0;background:none;padding:4px 6px;border-radius:6px;font-size:13px;text-align:left}
@@ -1427,17 +1437,18 @@ export const JOURNEY_CSS = `
 .jr-n{font-style:normal;font-size:10.5px;color:var(--qa-color-muted);white-space:nowrap;flex:none;display:flex;flex-direction:column;align-items:flex-end;line-height:1.25}.jr-n small{font-size:10px;color:var(--qa-color-primary)}.jr-n small.w{color:#b0661a}
 .jr-ml{list-style:none;margin:0;padding:0 6px 6px 31px;display:flex;flex-direction:column;gap:1px}
 .jr-m{display:flex;flex-wrap:wrap;gap:0 6px;align-items:baseline;width:100%;border:0;background:none;padding:2px 4px;border-radius:5px;text-align:left;font-size:12px}
+.jr-m span{min-width:0;overflow-wrap:anywhere}
 .jr-m small{color:var(--qa-color-muted);font-size:10.5px}.jr-m em{font-style:normal;font-size:10px;color:#9b5b00}
 .jr-m.sel{background:#e3f4e8;font-weight:700}.jr-m.dim{opacity:.4}.jr-m:hover,.jr-ch:hover,.jr-tn:hover{background:rgba(0,0,0,.04)}
 .jr-more{font-size:11.5px;padding:0 8px 6px 31px;margin-top:-3px}.jr-more em{font-style:normal;color:#9b5b00}
 .jr-hidden{margin:2px 4px 0;font-size:11px;color:var(--qa-color-muted)}
-.jr-focus.jr-path{display:flex;flex-direction:column;align-items:stretch;color:inherit;gap:6px;padding:8px 10px;border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);background:var(--qa-color-surface)}
+.jr-focus.jr-path{min-width:0;overflow-wrap:anywhere;display:flex;flex-direction:column;align-items:stretch;color:inherit;gap:6px;padding:8px 10px;border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);background:var(--qa-color-surface)}
 .jr-ph1{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:12.5px}.jr-ph1>.ico{color:var(--qa-color-primary)}
 .jr-pst{display:inline-flex;gap:4px;align-items:center}
 .jr-crumbs{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
 .jr-cr{display:flex}.jr-cr.l-frontend,.jr-cr.l-bff,.jr-cr.l-backend,.jr-cr.l-external{border:0;border-radius:999px}
 .jr-crb{display:inline-flex;gap:5px;align-items:center;border:1px solid rgba(0,0,0,.08);background:none;border-radius:999px;padding:2px 9px 2px 3px;font-size:12px;font-weight:600;cursor:pointer;max-width:260px}
-.jr-crb span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.jr-crb .ico{width:13px;height:13px;flex:none;color:var(--qa-color-muted)}
+.jr-crb span{min-width:0;overflow-wrap:anywhere}.jr-crb .ico{width:13px;height:13px;flex:none;color:var(--qa-color-muted)}
 .jr-crb:hover{border-color:var(--qa-color-primary)}.jr-crb.sel{outline:2px solid var(--qa-color-primary)}
 .jr-cl{display:inline-flex;gap:3px;align-items:center;font-size:10.5px;color:var(--qa-color-muted)}.jr-cl::after{content:"→";font-size:13px;margin-left:2px}
 .jr-cl.weak span{text-decoration:underline dashed}
@@ -1447,6 +1458,7 @@ export const JOURNEY_CSS = `
 .jr-stops{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;font-size:12px}.jr-stops>b{color:#a12a1f}
 .jr-stop{display:inline-flex;gap:5px;align-items:center;border:1px solid #f0a59d;background:#fff5f4;border-radius:8px;padding:2px 8px 2px 3px;font-size:12px;cursor:pointer;text-align:left}
 .jr-stop small{color:var(--qa-color-muted);font-size:10.5px}
+.jr-stop{max-width:100%;flex-wrap:wrap}.jr-stop span,.jr-stop small{min-width:0;overflow-wrap:anywhere}
 .jr-sn{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:var(--qa-color-primary);color:#fff;font-style:normal;font-size:10px;font-weight:700;line-height:1;flex:none;font-variant-numeric:tabular-nums}
 .jr-sn.goal{background:#1f6f3d}.jr-sn.stop{background:#c0392b}
 .jr-m .jr-sn{align-self:center}.jr-ch .jr-sn{margin-top:0}
@@ -1454,7 +1466,8 @@ export const JOURNEY_CSS = `
 .jr-t td:last-child{white-space:nowrap}
 .jr-crumbs{row-gap:14px;padding-top:8px}
 .jr-gs.l-frontend,.jr-gs.l-bff,.jr-gs.l-backend,.jr-gs.l-external{background:none;border:0;display:flex}
-.jr-gs .jr-crb{flex-direction:column;align-items:flex-start;gap:1px;border-radius:10px;padding:8px 11px 5px;max-width:230px;position:relative;font-size:12px}
+.jr-gs{max-width:100%;min-width:0}
+.jr-gs .jr-crb{flex-direction:column;align-items:flex-start;gap:1px;border-radius:10px;padding:8px 11px 5px;max-width:min(320px,100%);position:relative;font-size:12px}
 .jr-gs .jr-crb>.jr-sn{position:absolute;top:-9px;left:50%;transform:translateX(-50%);box-shadow:0 0 0 2px var(--qa-color-surface)}
 .jr-gs .jr-crb>span{max-width:100%}
 .jr-gk{display:inline-flex;gap:4px;align-items:center;font-size:10px;font-weight:600;color:var(--qa-color-muted);text-transform:uppercase;letter-spacing:.02em}.jr-gk .ico{width:11px;height:11px}

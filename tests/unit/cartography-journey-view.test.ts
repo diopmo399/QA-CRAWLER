@@ -188,7 +188,10 @@ describe('onglet Parcours & Graphe', () => {
     const steps = new Set([...(t?.up ?? []), ...(t?.down ?? [])].map((x) => x.id)).size;
     expect(html).toContain(`${String(steps)} étapes`);
     // Le chemin principal, dans l'ordre : de la page au bouton, puis jusqu'à la table.
-    const ribbon = html.slice(html.indexOf('data-path'), html.indexOf('data-jr-canvas'));
+    // Les noms portent des points de coupure (<wbr>) ; on les lit sans.
+    const ribbon = html
+      .slice(html.indexOf('data-path'), html.indexOf('data-jr-canvas'))
+      .replaceAll('<wbr>', '');
     const order = [
       '/requests/create',
       'RequestCreateComponent',
@@ -241,6 +244,10 @@ describe('onglet Parcours & Graphe', () => {
       render({ jMap: traced, jSelect: t?.item ?? '', jBottom: 'step', ...patch });
     // Par défaut, l'étape active est l'élément choisi (4e du chemin : page, composant, conteneur, bouton).
     const html = at({});
+    // Les noms longs se coupent entre les mots (camelCase, points), jamais en plein mot ni tronqués.
+    expect(html).toContain('Request<wbr>Create<wbr>Component');
+    expect(html).toContain('Request<wbr>Service.<wbr>refuse');
+    expect(html).not.toContain('text-overflow:ellipsis;white-space:nowrap}.jr-crb');
     expect(html).toMatch(
       /<li class="jr-gs l-frontend on"><button class="jr-crb" data-action="map-j-step" data-step="3"[^>]*aria-current="step"/,
     );
