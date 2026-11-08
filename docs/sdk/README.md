@@ -1205,8 +1205,11 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
   (Hibernate/JPA)** (repositories, entités et tables). API externe : seulement les services tiers que le
   scan a établis et leurs appels ; un appel sortant non classé est listé dans les lacunes, jamais rangé
   là. Un couloir que la fonctionnalité n'atteint pas reste vide, sans passage inventé.
-- **Cartes.** Une carte par classe, DTO, entité ou store, avec ses membres (« +N autre(s) » les déplie)
-  et son nombre de liens ; un élément sans relation est marqué « non relié ». Par groupe, le serveur
+- **Cartes.** Une carte par classe, DTO, entité ou store, repliée par défaut pour que le graphe tienne
+  dans l'écran : son nom, son nombre de liens et de membres (en orange si des membres ne sont pas
+  reliés). Un clic sur la carte la choisit et la déplie ; « Déplier toutes les cartes » (barre d'outils)
+  montre tous les membres (« +N autre(s) » pour les suivants) ; un élément sans relation est marqué
+  « non relié ». Par groupe, le serveur
   renvoie les 40 cartes les plus reliées (et celle de l'élément choisi) ; les autres restent comptées
   dans l'en-tête du groupe et leurs relations restent dans le tableau.
 - **« Tout » sans fouillis.** Les liens ne sont jamais tracés un par un : entre deux couloirs, une
@@ -1214,9 +1217,44 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
   externe) porte le compte exact ; en pointillé si une partie n'est que probable ou non démontrée. Les
   compteurs de la colonne gauche et des pastilles portent toujours sur toutes les relations.
 - **Exploration progressive.** Un clic sur un élément (arbre, carte ou tableau) le met au premier plan
-  et atténue le reste ; le tableau ne garde que ses relations. « Tout montrer » rétablit la vue. Une
+  et replie le reste : les branches de l'arbre hors de son chemin, les groupes qui ne le touchent pas
+  (réduits à leur titre, un clic les déplie) et, dans ses groupes, les cartes sans lien avec lui (« +N
+  cartes sans lien avec l'élément choisi »). Ce qui reste visible est tout son parcours : en aval ce
+  qu'il déclenche (bouton → méthode du
+  composant → service SPA → endpoint BFF → contrôleur BFF → service → endpoint backend → contrôleur →
+  service → repository → table), en amont ce qui le contient ou l'appelle (conteneur, composant, page).
+  Chaque carte du parcours montre sa méthode concernée (par exemple `refuse()`). Une seule carte est
+  dépliée à la fois. Le tableau ne garde que les relations de ce parcours.
+  Cliquer de nouveau l'élément, ou « Tout montrer », rouvre tout. Une
   catégorie (colonne gauche ou pastille) restreint le tableau à elle ; la sélection est gardée quand la
   catégorie change.
+- **Parcours guidé.** Choisir un élément ouvre, au-dessus du graphe, le bandeau « Parcours d'exécution » :
+  les étapes de son chemin principal, numérotées sans trou de la page jusqu'à la table (ou l'API
+  externe, ou le couloir le plus loin), chacune avec sa nature et son nom ; entre deux étapes le verbe de
+  la relation (affiche, contient, déclenche, appelle, dépend de, lit + écrit…), son statut s'il n'est pas
+  confirmé, chaque passage de couche (BFF, Backend) et le bout atteint. Le bandeau rappelle que l'ordre
+  est déduit des relations prouvées par le code, pas observé en exécution, et liste les ruptures avec la
+  cause donnée par le scan (corrélation non démontrée) ou « aucune relation sortante démontrée ».
+  Une étape se clique pour devenir active (Précédent, Suivant, Revenir au début) : elle est mise en
+  évidence dans le graphe, l'étape suivante en pointillé, et « Suivre le parcours » (actif par défaut)
+  l'amène au centre de la zone ; « Focus sur cette étape » en fait l'élément choisi ; « Voir le code »
+  ouvre sa preuve. Le graphe a trois modes : « Parcours principal » (par défaut, le chemin seul, le reste
+  replié), « Branches alternatives » (tout le parcours) et « Graphe complet » (sans repli, avec un
+  avertissement au-delà de 150 éléments) ; la mini-carte compte les étapes par couche et amène le
+  couloir à l'écran. L'onglet « Détails de l'étape » montre l'étape active : rang, nature, rôle, couche,
+  preuve, la relation qui y mène et celle qui en part (verbe, statut, preuve), ses autres relations, ses
+  conditions d'affichage et le niveau de confiance (prouvé par le code, probable, non démontré) ; la
+  fiche de l'élément choisi (nature, couche, détail, carte, liens, conditions, preuve) s'affiche sous
+  l'arbre. Les mêmes numéros sont portés dans le graphe (vert au bout, rouge à la rupture) et dans le
+  tableau des liens, trié dans l'ordre des étapes (« 9 → 10 ») ; les branches hors du chemin principal
+  sont numérotées après lui.
+  Règles du parcours (serveur, `trace` de `featureMap`) : en aval, ni le contenu d'un conteneur ou d'un
+  composant ni l'intérieur d'un écran atteint ne sont suivis (le focus ne ramasse pas des composants
+  sans rapport) ; en amont, l'affichage d'une page compte. Une branche qui rejoint une étape déjà
+  tracée le dit au lieu de la répéter ; une branche s'arrête à une table, à une API externe ou à un
+  écran ; un bouton, un store, un service SPA, un endpoint, un contrat, un contrôleur ou un client sans
+  suite est une rupture, sauf si une branche voisine va plus loin. Au plus 5 000 éléments par sens et
+  400 étapes, avec un avertissement si la trace est coupée.
 - **Tableau des liens.** Type, source, cible, statut (confirmé, probable, non démontré) et preuve
   (« Voir le code »), par pages de 25 ; listes de catégorie, de couche, de statut et recherche. Aucune
   relation n'est perdue : tout ce que le graphe agrège est ici, page par page.
@@ -1226,9 +1264,10 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
 - **Onglets du bas.** Détails des liens, Conditions & Règles (expression, aspect, décision backend et son
   statut), Stores, Appels & Services, Données, Code & Preuves ; à droite, « Règles principales » et
   « Flux de données » couche par couche.
-- **Zoom.** « Centrer » ramène l'élément choisi au milieu sans changer l'échelle ; « Ajuster » calcule
-  l'échelle qui fait tenir les couloirs (50 à 150 %) ; à l'ouverture, l'ajustement ne descend pas sous
-  75 % pour garder les cartes lisibles (la zone défile alors). Plein écran, quitté par Échap.
+- **Zoom.** À l'ouverture, le graphe est amené en haut de l'écran et occupe toute la hauteur visible ;
+  l'échelle est calculée pour que les quatre couloirs tiennent en largeur et en hauteur, sans descendre
+  sous 75 % (cartes lisibles ; au-delà, la zone défile). « Ajuster » refait ce calcul (50 à 150 %) ;
+  « Centrer » ramène l'élément choisi au milieu sans changer l'échelle. Plein écran, quitté par Échap.
 
 **Lacunes dites, jamais comblées.** Couche sans source configurée ou non atteinte ; aucun store atteint
 (l'analyseur reconnaît une classe à état par ses `Subject`/`BehaviorSubject` : un état tenu par des

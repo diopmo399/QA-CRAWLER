@@ -11,6 +11,8 @@ import {
   type MapEdge,
   type MapEdgeKind,
   type MapNode,
+  traceMainPath,
+  traceSteps,
 } from '../../src/sdk/core/cartography.js';
 import { buildIndex, type CoverageContext, type MapIndex } from '../../src/cartography/explorer.js';
 import { featureMap } from '../../src/cartography/feature-map.js';
@@ -126,12 +128,113 @@ describe('carte d’une fonctionnalité sur le scan réel (front, BFF, backend)'
     const beyond = featureMap(index, cov, id, { size: 10, page: 999 });
     expect(beyond?.relations.page).toBe(Math.ceil(map.relationCount / 10));
     const refuse = map.items.find((i) => i.kind === 'BUTTON' && i.name === 'Refuse');
-    const focused = featureMap(index, cov, id, { item: refuse?.id ?? '' });
-    expect(focused?.relations.total).toBe(refuse?.links);
-    expect(focused?.relations.items.every((r) => r.from === refuse?.id || r.to === refuse?.id)).toBe(true);
+    // Le parcours du bouton : en aval jusqu'au contrôleur BFF, au contrôleur backend et à la table ; en
+    // amont, le conteneur, le composant et la page. Le tableau ne garde que les relations de ce parcours.
+    const focused = featureMap(index, cov, id, { item: refuse?.id ?? '', size: 100 });
+    const nameOf = (nid: string) => map.items.find((i) => i.id === nid)?.name;
+    const path = new Set((focused?.neighbours ?? []).map(nameOf));
+    for (const step of [
+      'Refuse',
+      'Validation',
+      'RequestCreateComponent',
+      'RequestService.refuse',
+      'POST /api/requests/refuse',
+      'RequestBffController.refuse',
+      'RequestBffService.refuse',
+      'POST /requests/refuse',
+      'RequestController.refuse',
+      'RequestValidationService.refuse',
+      'RequestRepository',
+      'REQUEST',
+    ])
+      expect(path).toContain(step);
+    // Rien d'une autre action : ni « Validate » ni l'appel au partenaire externe.
+    expect(path).not.toContain('Validate');
+    expect(path).not.toContain('RequestBffController.validate');
+    expect(focused?.relations.total).toBeGreaterThan(refuse?.links ?? 0);
+    const ids = new Set(focused?.neighbours);
+    expect(focused?.relations.items.every((r) => ids.has(r.from) && ids.has(r.to))).toBe(true);
+    // Le parcours ne dépend pas de la page du tableau.
+    const narrow = featureMap(index, cov, id, { item: refuse?.id ?? '', size: 1 });
+    expect(new Set(narrow?.neighbours)).toEqual(ids);
+    expect(map.neighbours).toBeUndefined();
     const searched = featureMap(index, cov, id, { q: 'partner' });
     expect(searched?.relations.total).toBeGreaterThan(0);
     expect(featureMap(index, cov, 'FEATURE:unknown')).toBeUndefined();
+  });
+
+  it('trace le bouton étape par étape : d’où il vient, ce qu’il déclenche, jusqu’à la table', () => {
+    const refuse = map.items.find((i) => i.kind === 'BUTTON' && i.name === 'Refuse');
+    const trace = featureMap(index, cov, map.feature.id, { item: refuse?.id ?? '' })?.trace;
+    expect(trace?.item).toBe(refuse?.id);
+    expect(trace?.reached).toEqual(['FRONTEND', 'BFF', 'BACKEND']);
+    expect(trace?.truncated).toBe(false);
+    const up = trace?.up ?? [];
+    const down = trace?.down ?? [];
+    // En amont, du plus proche au plus loin : le conteneur, le composant, la page.
+    expect(up.filter((s) => s.depth > 0).map((s) => [s.depth, s.name, s.via?.kind])).toEqual([
+      [1, 'Validation', 'CONTAINS'],
+      [2, 'RequestCreateComponent', 'CONTAINS'],
+      [3, '/requests/create', 'DISPLAYS'],
+    ]);
+    // En aval, chaque étape a son parent déjà tracé, à la profondeur suivante, et la relation qui l'y mène.
+    const byId = new Map(down.map((s) => [s.id, s]));
+    expect(down[0]?.id).toBe(refuse?.id);
+    for (const s of down.slice(1)) {
+      const parent = byId.get(s.parent ?? '');
+      expect(parent?.depth).toBe(s.depth - 1);
+      expect(s.via?.kinds).toContain(s.via?.kind);
+      // Le contenu d'un conteneur ou d'un composant n'est jamais suivi vers l'aval.
+      expect(s.via?.kinds).not.toContain('CONTAINS');
+    }
+    const step = (name: string) => down.find((s) => s.name === name);
+    const chain = (name: string): string[] => {
+      const out: string[] = [];
+      for (let s = step(name); s; s = byId.get(s.parent ?? '')) out.unshift(s.name);
+      return out;
+    };
+    expect(chain('REQUEST')).toEqual([
+      'Refuse',
+      'RequestService.refuse',
+      'POST /api/requests/refuse',
+      'RequestBffController.refuse',
+      'RequestBffService.refuse',
+      'POST /requests/refuse',
+      'RequestController.refuse',
+      'RequestValidationService.refuse',
+      'REQUEST',
+    ]);
+    expect(step('REQUEST')?.end).toBe('TABLE');
+    expect(step('REQUEST')?.via?.kinds).toEqual(expect.arrayContaining(['READS']));
+    expect(step('POST /requests/refuse')?.via?.status).toBe('PROBABLE');
+    // La méthode du composant appelle le service déjà tracé : la branche le rejoint au lieu de le répéter.
+    const method = step('RequestCreateComponent.refuse');
+    expect(method?.end).toBe('JOIN');
+    expect(method?.joins).toBe('RequestService.refuse');
+    expect(down.filter((s) => s.name === 'RequestService.refuse')).toHaveLength(1);
+    // Rien de l'autre action, aucune rupture, et les compteurs sont ceux des relations de la trace.
+    expect(down.some((s) => /validate/i.test(s.name))).toBe(false);
+    expect(down.some((s) => s.end === 'STOP')).toBe(false);
+    const steps = [...up, ...down].filter((s) => s.via).length;
+    expect(sum(Object.values(trace?.statuses ?? {}))).toBe(steps);
+    expect(map.trace).toBeUndefined();
+    // La numérotation : la page d'abord, l'élément choisi après son amont, puis l'aval.
+    const order = traceSteps(trace as NonNullable<typeof trace>);
+    const num = (name: string) => order.get([...up, ...down].find((s) => s.name === name)?.id ?? '');
+    expect(num('/requests/create')).toBe(1);
+    expect(num('Refuse')).toBe(4);
+    expect(num('RequestService.refuse')).toBeLessThan(num('RequestController.refuse') ?? 0);
+    // Le chemin principal va de la page jusqu'à la table.
+    const main = traceMainPath(trace as NonNullable<typeof trace>).map((s) => s.name);
+    expect(main[0]).toBe('/requests/create');
+    expect(main.at(-1)).toBe('REQUEST');
+    expect(main).toContain('RequestBffController.refuse');
+    // Le tableau du parcours se lit dans l'ordre de ces numéros.
+    const rows =
+      featureMap(index, cov, map.feature.id, { item: refuse?.id ?? '', size: 100 })?.relations.items ?? [];
+    const keys = rows.map((r) => Math.min(order.get(r.from) ?? 0, order.get(r.to) ?? 0));
+    expect(keys[0]).toBe(1);
+    expect([...keys].sort((a, b) => a - b)).toEqual(keys);
   });
 
   it('donne à chaque relation sa preuve quand le scan en a une', () => {
@@ -238,8 +341,8 @@ function synthetic(n: number): CartographyModel {
   };
 }
 
-describe('volumes synthétiques : 0, 10, 100, 1 000 et 10 000 relations, catégorie « Tout »', () => {
-  for (const n of [0, 10, 100, 1_000, 10_000]) {
+describe('volumes synthétiques : 0, 10, 100, 160, 1 000 et 10 000 relations, catégorie « Tout »', () => {
+  for (const n of [0, 10, 100, 160, 1_000, 10_000]) {
     it(`${String(n)} relations : comptes exacts, faisceaux agrégés, réponse bornée`, () => {
       const index = buildIndex(synthetic(n));
       const started = performance.now();
@@ -271,6 +374,58 @@ describe('volumes synthétiques : 0, 10, 100, 1 000 et 10 000 relations, catégo
       expect(ms).toBeLessThan(5_000);
     });
   }
+
+  it('dit où la chaîne s’arrête : rupture avec la cause du scan, ou sans relation sortante démontrée', () => {
+    const model = synthetic(2);
+    // F0 → B0 et F1 → B1 ; on ajoute F0 → F1 : depuis F0, deux services backend sont atteints ; un service
+    // SPA seul (Lonely appelé par F1) s'arrête sans aller plus loin.
+    const evidence = model.edges[0]?.evidence ?? [];
+    model.edges.push(
+      {
+        id: 'X1',
+        from: 'SERVICE:f:F0',
+        to: 'SERVICE:f:F1',
+        kind: 'CALLS',
+        confidence: 'CONFIRMED',
+        reason: 'r',
+        evidence,
+      },
+      {
+        id: 'X2',
+        from: 'SERVICE:f:F1',
+        to: 'SERVICE:f:Lonely',
+        kind: 'CALLS',
+        confidence: 'CONFIRMED',
+        reason: 'r',
+        evidence,
+      },
+    );
+    const index = buildIndex(model);
+    const stopped = (m?: FeatureMap) => m?.trace?.down.find((s) => s.name === 'Lonely');
+    // Une branche sœur (F1 → B1) va plus loin : l'arrêt de Lonely n'est pas une rupture.
+    const fromF0 = featureMap(index, cov, 'FEATURE:big', { item: 'SERVICE:f:F0' });
+    expect(fromF0?.trace?.reached).toEqual(['FRONTEND', 'BACKEND']);
+    expect(stopped(fromF0)?.end).toBe('END');
+    // Sans branche sœur plus loin : rupture, sans cause inventée.
+    model.edges.splice(1, 1);
+    const alone = featureMap(buildIndex(model), cov, 'FEATURE:big', { item: 'SERVICE:f:F1' });
+    expect(stopped(alone)?.end).toBe('STOP');
+    expect(stopped(alone)?.gap).toBeUndefined();
+    // Avec la corrélation non démontrée du scan : sa cause.
+    model.correlations = [
+      {
+        from: 'SERVICE:f:Lonely',
+        method: 'GET',
+        path: '/api/lonely',
+        status: 'UNDEMONSTRATED',
+        candidates: [],
+        causes: [{ code: 'CONTRACT_NOT_FOUND', message: 'contrat introuvable' }],
+        steps: [],
+      },
+    ];
+    const explained = featureMap(buildIndex(model), cov, 'FEATURE:big', { item: 'SERVICE:f:F1' });
+    expect(stopped(explained)?.gap).toBe('GET /api/lonely — contrat introuvable');
+  });
 
   it('garde la carte de l’élément demandé même au-delà de la limite par groupe', () => {
     const index = buildIndex(synthetic(1_000));
