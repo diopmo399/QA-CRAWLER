@@ -20,7 +20,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -51,7 +51,7 @@ jobs:
   # Integration tests (real browser, local fixture apps) split into shards that run in parallel:
   # each shard installs Chromium and runs a sixth of the files (vitest distributes them by name).
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -73,7 +73,7 @@ jobs:
   # check of the tarballs, then installation of the tarballs into the consumer fixtures
   # (Angular, React, generic, OpenAPI) and `npx qa-crawler init | replay | analyze | test-api`.
   packaging:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -131,7 +131,7 @@ jobs:
   # plus the hybrid storage on real object stores: an S3 server that checks Signature V4
   # (moto, throwaway key) and the Azure Blob emulator (Azurite, its public development key).
   persistence:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
       postgres:
@@ -210,7 +210,7 @@ jobs:
   smoke:
     needs: build
     if: ${{ vars.TARGET_URL != '' || github.event.inputs.target_url != '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
