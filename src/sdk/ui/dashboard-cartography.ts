@@ -47,6 +47,7 @@ import {
 } from './dashboard-cartography-structure.js';
 import { impactView, SCAN_CSS, scanView, type ScanViewHelpers } from './dashboard-cartography-scan.js';
 import { emptyJourney, JOURNEY_CSS, journeyTab, type JourneyState } from './dashboard-cartography-journey.js';
+import { emptyUnresolved, unresolvedTab, type UnresolvedUi } from './dashboard-cartography-unresolved.js';
 import { header, icon } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
@@ -68,6 +69,7 @@ export const MAP_TABS = [
   'apis',
   'coverage',
   'trace',
+  'unresolved',
   'impact',
 ] as const;
 export type MapTab = (typeof MAP_TABS)[number];
@@ -117,10 +119,11 @@ export type MapPane =
   | 'investigation'
   | 'conditions'
   | 'actions'
-  | 'journey';
+  | 'journey'
+  | 'unresolved';
 
 /** Parcours & Graphe (JourneyState) : la carte de la fonctionnalité ouverte, sa vue, ses critères, l'élément choisi. */
-export interface CartographyUi extends JourneyState {
+export interface CartographyUi extends JourneyState, UnresolvedUi {
   tab: MapTab;
   summary?: MapSummary;
   loading: Partial<Record<MapPane, boolean>>;
@@ -269,6 +272,7 @@ export interface CartographyUi extends JourneyState {
 
 export const emptyCartographyUi = (): CartographyUi => ({
   ...emptyJourney(),
+  ...emptyUnresolved(),
   tab: 'overview',
   loading: {},
   errors: {},
@@ -437,6 +441,7 @@ const TAB_ICON: Record<MapTab, string> = {
   fields: 'merge',
   coverage: 'scenarios',
   trace: 'traceability',
+  unresolved: 'alert',
   apis: 'code',
   structure: 'grid',
   impact: 'trends',
@@ -516,6 +521,16 @@ export function cartographyView(input: DashboardState): string {
       ...(ui.feature ? { feature: ui.feature } : {}),
       loading: ui.loading.journey === true,
       ...(ui.errors.journey ? { error: ui.errors.journey } : {}),
+    });
+  else if (ui.tab === 'unresolved')
+    content = unresolvedTab(ui, {
+      locale: state.t.locale === 'en' ? 'en' : 'fr',
+      evidence: (e) => evidenceButton(m, e, state),
+      pager: (list, page, sizes) => pager(m, list, page, sizes),
+      spinner: () => spinner(m),
+      loading: ui.loading.unresolved === true,
+      ...(ui.errors.unresolved ? { error: ui.errors.unresolved } : {}),
+      paneError,
     });
   else if (ui.tab === 'fields') content = fieldsTab(m, state);
   else if (ui.tab === 'coverage') content = coverageTab(m, state, summary);

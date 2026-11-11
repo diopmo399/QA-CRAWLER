@@ -4,6 +4,27 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : TraceGraph V2 (liens gardés, identité des classes, sens du flux)
+
+- Une relation lue mais non raccordée au graphe n'est plus supprimée sans trace : elle est gardée comme
+  lien non résolu (cause `TARGET_MISSING`, `SOURCE_MISSING`, `BOTH_MISSING`, `TARGET_UNKNOWN`, `SELF`,
+  raison, preuves), comptée dans `scan.unattached`, consultable par `GET /cartography/unresolved`
+  (`client.cartography.unresolved`) et l'onglet « Liens non résolus ».
+- Deux classes de même nom dans deux fichiers sont gardées toutes les deux
+  (`ListComponent(admin/list)`, `ListComponent(catalog/list)`) ; types injectés, classes de base,
+  composants de route et types de champ sont résolus par les imports du fichier, alias compris. Une
+  référence ambiguë reste non résolue.
+- Les parcours (`traceOf`, « Parcours & Graphe ») suivent le sens du flux : la provenance d'une donnée et
+  le contrôle remontent au lieu de descendre ; une action n'atteint plus les appels d'une autre action
+  par l'état partagé.
+- L'installation d'un abonnement (`ngOnInit` qui souscrit un flux) est une relation distincte de la
+  propagation à chaque émission.
+- Un `@RequestBody` scalaire (String, Long, Map…) ne tente plus de relation vers un DTO.
+- Version d'analyseur `cartography-11;rxjs-4` : les faits des scans antérieurs sont recalculés.
+- Documents : `docs/audits/tracegraph-baseline.md`, `docs/architecture/tracegraph-engine-v2.md`,
+  `link-reconciliation.md`, `reactive-causality-resolver.md`, `targeted-verification.md` (conception),
+  `docs/benchmarks/tracegraph-performance.md`, `docs/audits/tracegraph-final-report.md`.
+
 ### Cartographie : onglet « Parcours & Graphe »
 
 - Une fonctionnalité de bout en bout en quatre couloirs ordonnés (Angular → BFF → Backend → API

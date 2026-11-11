@@ -109,7 +109,11 @@ export interface UiSymbol {
 export interface UiLink {
   from: string;
   to: string;
-  kind: 'CALL' | 'EMIT' | 'PROPAGATES' | 'PIPE' | 'OUTPUT' | 'DERIVES' | 'FEEDS';
+  /**
+   * SUBSCRIBES : l'INSTALLATION d'un abonnement (la méthode, souvent ngOnInit, s'abonne au flux une fois) ;
+   * la PROPAGATION (émission → rappel) est un autre lien, du flux vers le rappel.
+   */
+  kind: 'CALL' | 'EMIT' | 'PROPAGATES' | 'PIPE' | 'OUTPUT' | 'DERIVES' | 'FEEDS' | 'SUBSCRIBES';
   confidence: 'CONFIRMED' | 'PROBABLE' | 'UNKNOWN';
   reason: string;
   /** Les conditions qui entourent l'appel (« action = OrderAction.Submit », « valid est faux »…). */

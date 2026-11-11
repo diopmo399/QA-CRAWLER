@@ -3,6 +3,7 @@ import type * as TS from 'typescript';
 import type { TypeScriptModule } from '../static-analysis/typescript-loader.js';
 import type { ReadFile } from './files.js';
 import type { Loc, UiCall, UiDiagnostic, UiLink, UiSymbol } from './facts.js';
+import { ClassIdentity } from '../static-analysis/class-identity.js';
 
 /**
  * LES STORES ET FLUX RXJS DU FRONTAL : lus dans l'AST TypeScript, sans convention de nommage ni NgRx. Une
@@ -14,7 +15,7 @@ import type { Loc, UiCall, UiDiagnostic, UiLink, UiSymbol } from './facts.js';
  * réponses qui alimentent un flux. Un Observable est paresseux : un appel dont le résultat n'est jamais
  * souscrit n'est pas présenté comme exécuté. Rien n'est exécuté ; une URL non résolue garde son expression.
  */
-export const RXJS_ANALYZER = 'rxjs-3';
+export const RXJS_ANALYZER = 'rxjs-4';
 
 const SUBJECTS = new Set(['Subject', 'BehaviorSubject', 'ReplaySubject', 'AsyncSubject']);
 const CREATION = new Set([
@@ -279,6 +280,7 @@ export function analyzeRxjs(
   ts: TypeScriptModule,
   files: readonly ReadFile[],
   knownCalls: ReadonlyMap<string, UiCall>,
+  identity: ClassIdentity = new ClassIdentity(files),
 ): RxjsFacts {
   const warnings: string[] = [];
   const byPath = new Map(files.map((f) => [f.path, f]));
@@ -293,9 +295,13 @@ export function analyzeRxjs(
       continue;
     }
     try {
-      for (const info of classesOf(ts, file, byPath, constants, functions))
+      // Une classe par identité : deux classes de même nom dans deux fichiers sont gardées toutes les deux
+      // (« ListComponent(admin/list) ») ; leurs types référencés sont résolus par les imports de leur fichier.
+      for (const info of classesOf(ts, file, byPath, constants, functions)) {
+        identify(info, identity);
         if (classes.has(info.name)) warnings.push(`class ${info.name} declared twice: the first one is kept`);
         else classes.set(info.name, info);
+      }
     } catch (error) {
       // Un fichier illisible n'arrête pas l'analyse des autres.
       warnings.push(`${file.path}: RxJS analysis failed (${(error as Error).message})`);
@@ -316,6 +322,29 @@ export function analyzeRxjs(
   } finally {
     externals = undefined;
   }
+}
+
+/**
+ * L'identité d'une classe et de ses références : son nom devient celui que lui donne l'identité commune
+ * (homonymes distingués) ; ses types injectés, sa classe de base et les types écrits de ses paramètres sont
+ * résolus par les imports de son fichier (alias compris). Un type ambigu garde son nom écrit : il ne désigne
+ * alors aucune classe, et la chaîne s'arrête avec un diagnostic au lieu d'aller vers une classe au hasard.
+ */
+function identify(info: ClassInfo, identity: ClassIdentity): void {
+  const resolve = (type: string): string => identity.resolve(info.file, type) ?? type;
+  info.name = identity.key(info.file, info.name);
+  for (const [property, type] of info.deps) info.deps.set(property, resolve(type));
+  if (info.base) info.base = resolve(info.base);
+  // Les receveurs typés par un paramètre (`store: OrderStore`) : la cible porte le type écrit.
+  const retarget = (site: CallSite): void => {
+    if (site.target.startsWith('@type:')) site.target = `@type:${resolve(site.target.slice(6))}`;
+  };
+  for (const method of info.methods.values()) {
+    for (const [param, type] of method.paramTypes ?? []) method.paramTypes?.set(param, resolve(type));
+    method.calls.forEach(retarget);
+    for (const pipeline of method.pipelines) pipeline.calls.forEach(retarget);
+  }
+  for (const stream of info.streams.values()) stream.calls.forEach(retarget);
 }
 
 /** Une fonction de module (déclarée ou fléchée) : ses paramètres, ses retours, ses constantes locales. */
@@ -2971,6 +3000,22 @@ function resolve(
             ? { async: `le traitement s’arrête par ${stops.join(', ')} (annulation possible)` }
             : {}),
         };
+        // L'installation de l'abonnement, distincte de sa propagation : la méthode (ngOnInit…) s'abonne une
+        // fois ; ensuite chaque émission exécute le rappel, sans réexécuter la méthode qui l'a installé.
+        if (r && p.subscribed)
+          link({
+            from,
+            to: sid,
+            kind: 'SUBSCRIBES',
+            confidence: 'CONFIRMED',
+            reason: `${methodId(c, m.name).replace('#', '.')}() installe un abonnement à ${sid}${
+              LIFECYCLE.has(m.name) ? ' au cycle de vie du composant' : ''
+            } : le rappel s’exécute à chaque émission tant que l’abonnement est actif${
+              stops.length ? ` (arrêté par ${stops.join(', ')})` : ''
+            }`,
+            async: 'installation de l’abonnement (une fois), pas une exécution à chaque émission',
+            loc: p.loc,
+          });
         for (const cs of p.calls)
           callLink(c, m, sid, { ...cs, ...(operator ? { operator } : {}) }, 'PIPE', pipeBase);
         for (const e of p.emits) {

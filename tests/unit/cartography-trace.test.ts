@@ -172,8 +172,10 @@ describe('Angular → endpoints', () => {
     expect(names).toEqual(
       expect.arrayContaining(['Saisie', 'Onglets : Saisie, Statistiques', PAGE, '/commandes']),
     );
-    // L'aval du conteneur suit sa condition jusqu'au flux qui la pilote.
-    expect(ids(down(container))).toEqual(expect.arrayContaining([condition, `STREAM:front:${PAGE}.etat$`]));
+    // Le flux qui pilote la condition est en AMONT du conteneur (il le rend visible) ; l'aval du conteneur ne
+    // remonte jamais vers lui (une provenance n'est pas une étape d'exécution).
+    expect(ids(up)).toEqual(expect.arrayContaining([condition, `STREAM:front:${PAGE}.etat$`]));
+    expect(ids(down(container))).not.toContain(`STREAM:front:${PAGE}.etat$`);
   });
 
   it('6 — a button triggers its handler and the service the handler calls, down to the data read', () => {
@@ -346,10 +348,12 @@ describe('local journeys, async and limits', () => {
     expect(JSON.stringify(trace.nodes.find((n) => n.id === condition)?.detail)).not.toContain(
       'PRODUCER_UNRESOLVED',
     );
-    const up = traceOf(index, writer, { direction: 'UP' });
-    expect(ids(up)).toEqual(
-      expect.arrayContaining([`BUTTON:front:${PAGE}#button:afficher-les-details`, condition, container]),
+    // Le bouton déclenche l'écrivain (amont) ; l'écriture du signal rend la condition vraie et affiche le
+    // conteneur (aval) : le sens du flux, de la cause vers l'effet.
+    expect(ids(traceOf(index, writer, { direction: 'UP' }))).toContain(
+      `BUTTON:front:${PAGE}#button:afficher-les-details`,
     );
+    expect(ids(down(writer))).toEqual(expect.arrayContaining([condition, container]));
     expect(down(container)?.breaks).toEqual([]);
   });
 

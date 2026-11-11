@@ -470,4 +470,18 @@ describe('SDK cartography — real server, real engine', () => {
       statuses.push(((await refused().catch((error: unknown) => error)) as QaCrawlerError).status);
     expect(statuses).toEqual([404, 404, 400]);
   });
+
+  it('the unresolved links: every relation counted as unattached is listed, with its cause and evidence', async () => {
+    const view = await client.cartography.get(project.id);
+    const counted = Object.values(view.model?.scan.unattached ?? {}).reduce((sum, n) => sum + n, 0);
+    const page = await client.cartography.unresolved(project.id, { size: 100 });
+    expect(page.total + page.uncounted).toBe(counted);
+    expect(page.total).toBe(view.model?.unresolved?.length ?? 0);
+    for (const link of page.items) {
+      expect(link.state).toBe('UNRESOLVED');
+      expect(link.evidence.length).toBeGreaterThan(0);
+    }
+    // Une cause qui n'existe pas ne rend rien (et n'est pas une erreur).
+    expect((await client.cartography.unresolved(project.id, { status: 'NOPE' })).total).toBe(0);
+  });
 });

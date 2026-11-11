@@ -50,7 +50,9 @@ import { resolveContracts, type MavenOptions } from './maven-resolve.js';
 // 8 : constantes Java entre fichiers (imports statiques, `Classe.CHAMP`), accès aux données hors Spring Data
 //     (EntityManager, JDBC, @Query classée), écritures des états du gabarit (signal, affectation), sources
 //     partielles (limites atteintes).
-export const ANALYZERS = `cartography-10;${RXJS_ANALYZER}`;
+// 11 : identité des classes (homonymes distingués, références et routes résolues par les imports), installation
+//      des abonnements (ngOnInit → flux) distincte de leur propagation.
+export const ANALYZERS = `cartography-11;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;

@@ -37,6 +37,7 @@ import {
   queryApis,
   queryIssues,
   traceOf,
+  unresolvedOf,
   type CoverageContext,
   type MapIndex,
 } from '../../cartography/explorer.js';
@@ -97,6 +98,7 @@ import {
   type ImpactReport,
   type MapDecision,
   type MapListQuery,
+  type UnresolvedPage,
   type MapPage,
   type MapSource,
   type MetadataRoot,
@@ -941,6 +943,15 @@ export function featureMapQuery(params: URLSearchParams): FeatureMapQuery {
 }
 
 /** La carte d'une fonctionnalité (Parcours & Graphe) : couloirs, faisceaux comptés, lacunes, une page de relations. */
+/** Les liens non résolus du dernier scan (page, critères, comptes). */
+export async function mapUnresolved(
+  project: CartographyProject,
+  query: MapListQuery,
+): Promise<UnresolvedPage> {
+  const state = await required(project);
+  return unresolvedOf(state.index, query);
+}
+
 export async function mapFeatureMap(
   project: CartographyProject,
   id: string,

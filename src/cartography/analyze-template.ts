@@ -1,3 +1,4 @@
+import { ClassIdentity } from '../static-analysis/class-identity.js';
 import type { ReadFile } from './files.js';
 import type { UiChild, UiCondition, UiElement, UiHandler, UiState, UiTab } from './facts.js';
 
@@ -658,7 +659,11 @@ export interface TemplateFacts {
 }
 
 /** Les gabarits et classes des composants d'une source Angular. */
-export function analyzeTemplates(files: readonly ReadFile[], knownCalls: ReadonlySet<string>): TemplateFacts {
+export function analyzeTemplates(
+  files: readonly ReadFile[],
+  knownCalls: ReadonlySet<string>,
+  identity: ClassIdentity = new ClassIdentity(files),
+): TemplateFacts {
   const byPath = new Map(files.map((f) => [f.path, f]));
   const elements: UiElement[] = [];
   const states: UiState[] = [];
@@ -671,7 +676,8 @@ export function analyzeTemplates(files: readonly ReadFile[], knownCalls: Readonl
       /@Component\s*\(\s*\{([\s\S]*?)\}\s*\)\s*export\s+class\s+([A-Z][\w$]*)/g,
     )) {
       const decorator = m[1] ?? '';
-      const component = m[2] ?? '';
+      // L'identité commune : deux composants de même nom dans deux dossiers restent distincts.
+      const component = identity.key(file.path, m[2] ?? '');
       const decoratorAt = m.index + m[0].indexOf(decorator);
       const template = templateOf(file, decorator, decoratorAt, byPath);
       const shown: (UiChild & { holder?: UiElement })[] = [];
@@ -722,7 +728,10 @@ export function analyzeTemplates(files: readonly ReadFile[], knownCalls: Readonl
         ].map((x) => x[1] ?? '');
         if (items.length) el.tab.items = items.slice(0, 30);
       }
-      const types = fieldTypes(body);
+      // Les types injectés, résolus par les imports du fichier (alias, homonymes).
+      const types = new Map(
+        [...fieldTypes(body)].map(([member, type]) => [member, identity.resolve(file.path, type) ?? type]),
+      );
       const methods = methodsOf(body);
       const lineOf = (at: number) => lineAt(file.text, bodyAt + at);
       // Les appels de service de chaque méthode : this.x.m(…) où x est un service injecté.

@@ -1191,6 +1191,17 @@ réuni sur un nom). Sous le graphe, « Relations détectées » donne la source,
 confiance et la preuve de chaque lien de la vue (ou de l'étape, ou de la sélection), avec « Voir le
 code ». Les listes se parcourent au clavier (flèches haut et bas).
 
+### Liens non résolus
+
+Une relation lue dans le code mais non raccordée au graphe (extrémité absente des sources, cible non
+trouvée par le résolveur, relation d'un élément vers lui-même) n'est jamais supprimée sans trace.
+`GET /cartography/unresolved` (`client.cartography.unresolved(projectId, query)`) renvoie une page de
+ces liens : relation, origine, cible (`?` si inconnue), cause, raison et preuves ; `type` choisit le
+type de relation, `status` la cause, `q` cherche dans l'origine, la cible et la raison. La page donne
+aussi les totaux par cause (`byCause`) et par relation (`byKind`), et `uncounted` au-delà des 5 000
+liens gardés. L'onglet « Liens non résolus » de la Cartographie les affiche ; aucun n'entre dans un
+parcours. Voir `docs/architecture/link-reconciliation.md`.
+
 ### Parcours & Graphe
 
 L'onglet « Parcours & Graphe » montre une fonctionnalité de bout en bout, en quatre couloirs dans un
