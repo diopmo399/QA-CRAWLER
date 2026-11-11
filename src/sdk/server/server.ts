@@ -1,5 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { openWorkspaceMirror, type HybridStorageOptions } from '../../storage/hybrid-storage.js';
+import type { WorkspaceMirror } from '../../storage/workspace-mirror.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
@@ -94,6 +96,7 @@ import { readCoreVersion } from '../../tool-identity.js';
 import type {
   AssertionProposalView,
   Capabilities,
+  StorageView,
   DraftIssue,
   ErrorBody,
   ExplorationEvent,
@@ -375,6 +378,12 @@ export interface SdkServerOptions {
   ai?: AiConfig;
   /** Un runtime IA déjà assemblé (tests : client scripté) ; il prime sur `ai`. */
   aiRuntime?: IncidentAiRuntime;
+  /**
+   * STOCKAGE HYBRIDE : le dossier de travail devient un cache, sauvegardé en continu — fichiers texte en
+   * base, fichiers lourds ou binaires dans un stockage objet — et reconstruit au démarrage (conteneur
+   * éphémère). Absent : le dossier de travail est la seule copie (comportement historique).
+   */
+  storage?: HybridStorageOptions;
 }
 
 export interface RunningSdkServer {
@@ -385,6 +394,8 @@ export interface RunningSdkServer {
   recordings: RecordingManager;
   /** Les exécutions des tests générés (YAML, Gherkin, Playwright, Java). */
   testRuns: TestRunManager;
+  /** Le miroir durable du dossier de travail (stockage hybride), s'il est configuré. */
+  storage?: WorkspaceMirror;
   close(): Promise<void>;
 }
 
@@ -425,6 +436,16 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     reportLanguage: options.language ?? 'en',
   };
   const workspace = path.resolve(options.workspace);
+  // Stockage hybride : le dossier est restauré depuis la base et le stockage objet AVANT toute lecture.
+  const mirror = options.storage
+    ? await openWorkspaceMirror(workspace, options.storage, env, options.onWarning)
+    : undefined;
+  try {
+    await mirror?.start();
+  } catch (error) {
+    await mirror?.stop().catch(() => undefined);
+    throw error;
+  }
   const projects = new Map<string, StoredProject>();
   const tickets = new Map<string, ReportTicket>();
   // Les rejeux d'une investigation écoutent aussi le moteur (progression en direct), par dossier de run.
@@ -468,6 +489,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
   const maven = mavenPolicy(options.mavenContracts, workspace, env, envNames);
   const context: Context = {
     token,
+    ...(mirror ? { mirror } : {}),
     env,
     envNames,
     ...(git ? { git } : {}),
@@ -514,6 +536,7 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
     explorations,
     recordings,
     testRuns,
+    ...(mirror ? { storage: mirror } : {}),
     close: async () => {
       corrections.closeAll();
       if (testRuns.cancelAll() > 0) {
@@ -536,12 +559,16 @@ export async function startSdkServer(options: SdkServerOptions): Promise<Running
         });
         server.closeAllConnections();
       });
+      // Après l'arrêt des explorations (rapports écrits) : le dernier envoi, puis le bail est rendu.
+      await mirror?.stop();
     },
   };
 }
 
 interface Context {
   token: string;
+  /** Le miroir durable du dossier de travail (stockage hybride). */
+  mirror?: WorkspaceMirror;
   env: NodeJS.ProcessEnv;
   envNames: RegExp;
   /** La préparation des sources Git distantes (absente : refusées). */
@@ -644,6 +671,17 @@ async function handle(ctx: Context, request: IncomingMessage, response: ServerRe
 
   if (resource === 'capabilities' && method === 'GET') {
     json(capabilities(ctx));
+    return;
+  }
+  if (resource === 'storage' && id === undefined && method === 'GET') {
+    json(storageView(ctx));
+    return;
+  }
+  if (resource === 'storage' && id === 'sync' && method === 'POST') {
+    if (!ctx.mirror)
+      throw new HttpError(409, 'STORAGE_LOCAL', 'the hybrid storage is not configured on this server');
+    await ctx.mirror.sync({ now: true });
+    json(storageView(ctx));
     return;
   }
   if (resource === 'access') {
@@ -3014,6 +3052,11 @@ async function reportDirOf(project: StoredProject, kind: ReportEntryKind, name: 
     : false;
   if (!directory || !isDir) throw new HttpError(404, 'NOT_FOUND', 'report not found');
   return directory;
+}
+
+/** Le stockage du dossier de travail : local seulement, ou hybride avec l'état du miroir (aucun secret). */
+function storageView(ctx: Context): StorageView {
+  return ctx.mirror ? { mode: 'hybrid', ...ctx.mirror.status() } : { mode: 'local' };
 }
 
 function capabilities(ctx: Context): Capabilities {

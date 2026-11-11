@@ -25,6 +25,25 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   `link-reconciliation.md`, `reactive-causality-resolver.md`, `targeted-verification.md` (conception),
   `docs/benchmarks/tracegraph-performance.md`, `docs/audits/tracegraph-final-report.md`.
 
+### Serveur du SDK : stockage hybride (base + stockage objet)
+
+- `qa-crawler sdk-server --storage hybrid` : le dossier de travail devient un cache. Fichiers texte en
+  base (PostgreSQL, SQL Server, SQLite ; migration additive `006_add_workspace_mirror`), fichiers lourds
+  ou binaires dans un stockage objet (dossier monté, S3 et compatibles, Azure Blob, dépôt générique
+  Artifactory), indexés en base, dédupliqués par empreinte.
+- Restauration avant de servir, envoi toutes les `--sync-interval` secondes, dernier envoi à l'arrêt
+  (code de sortie 1 s'il est incomplet), bail d'écriture unique en base (`--storage-takeover` après un
+  arrêt brutal, état `LEASE_LOST` pour un serveur dépossédé).
+- Secrets dans l'environnement seulement (`QA_DB_*`, `QA_OBJECTS_*`) ; S3 signé en Signature Version 4,
+  Azure en Shared Key ou SAS, sans SDK tiers.
+- Artifactory : `--objects artifactory --objects-url … --objects-repository …`, jeton (`QA_OBJECTS_TOKEN`)
+  ou Basic ; empreintes SHA-1/SHA-256 vérifiées au dépôt, droits lire, déployer et supprimer contrôlés au
+  démarrage.
+- `GET /api/storage`, `POST /api/storage/sync` (administrateur), `client.storage.status()` et `sync()`,
+  option `storage` de `startSdkServer`.
+- CI : le contrat du miroir sur PostgreSQL et SQL Server réels, et les stockages objet sur moto (S3 avec
+  vérification des signatures) et Azurite.
+
 ### Cartographie : onglet « Parcours & Graphe »
 
 - Une fonctionnalité de bout en bout en quatre couloirs ordonnés (Angular → BFF → Backend → API

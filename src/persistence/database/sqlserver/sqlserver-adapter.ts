@@ -32,6 +32,7 @@ export const SQLSERVER_DIALECT: SqlDialect = {
     int: 'INT',
     double: 'FLOAT',
     timestamp: 'DATETIMEOFFSET(3)',
+    text: 'NVARCHAR(MAX)',
   },
   limit: (sql, count) => `${sql} OFFSET 0 ROWS FETCH NEXT ${Math.max(0, Math.floor(count))} ROWS ONLY`,
   lockedTable: (table) => `${table} WITH (UPDLOCK, HOLDLOCK)`,

@@ -2,6 +2,7 @@ import { beforeAll, describe, it } from 'vitest';
 import { SqlServerAdapter } from '../../src/persistence/database/sqlserver/sqlserver-adapter.js';
 import { databaseContract } from '../persistence/database-contract.js';
 import { databaseEndToEnd } from '../persistence/database-end-to-end.js';
+import { workspaceMirrorContract } from '../persistence/workspace-mirror-contract.js';
 import { SQLSERVER_TEST } from '../persistence/test-databases.js';
 
 // SQL Server réel (QA_TEST_MSSQL_*) : exactement le même contrat que PostgreSQL, SQLite et les fichiers.
@@ -22,6 +23,8 @@ if (SQLSERVER_TEST) {
   });
   databaseContract('SQL Server', () => new SqlServerAdapter(connection));
   databaseEndToEnd('SQL Server', connection);
+  // Le miroir du stockage hybride (index, documents, bail) sur la même base réelle.
+  workspaceMirrorContract('SQL Server', () => new SqlServerAdapter(connection));
 } else {
   describe('database contract: SQL Server', () => {
     it.skip('QA_TEST_MSSQL_HOST is not set: no SQL Server to test against', () => undefined);

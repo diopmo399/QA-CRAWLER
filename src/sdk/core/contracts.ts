@@ -127,6 +127,34 @@ export interface UrlCheck {
   reachable?: { ok: boolean; status?: number; durationMs: number; message?: string };
 }
 
+/**
+ * L'état du miroir durable du dossier de travail (stockage hybride) : fichiers texte en base, fichiers
+ * lourds ou binaires dans un stockage objet. Aucun secret.
+ */
+export interface MirrorStatus {
+  /** L'espace (plusieurs serveurs peuvent partager la même base, un espace chacun). */
+  space: string;
+  /** Où sont les objets (dossier, s3://bucket, conteneur Azure), sans identifiant. */
+  objects: string;
+  /** LEASE_LOST : un autre serveur a repris l'espace ; celui-ci ne sauvegarde plus. */
+  state: 'STARTING' | 'RUNNING' | 'STOPPED' | 'LEASE_LOST';
+  /** Le dossier reconstruit au démarrage : fichiers écrits depuis la base, depuis le stockage objet, introuvables. */
+  restored: { documents: number; objects: number; missing: number };
+  /** Le contenu sauvegardé : fichiers en base, fichiers en stockage objet, octets. */
+  stored: { documents: number; objects: number; bytes: number };
+  lastSyncAt?: string;
+  lastSyncMs?: number;
+  /** Fichiers envoyés et supprimés depuis le démarrage. */
+  uploaded: number;
+  deleted: number;
+  /** Fichiers en cours d'écriture au dernier passage, envoyés au suivant. */
+  pending: number;
+  lastError?: string;
+}
+
+/** Le stockage du dossier de travail du serveur : `local` (une seule copie) ou `hybrid` (miroir durable). */
+export type StorageView = { mode: 'local' } | ({ mode: 'hybrid' } & MirrorStatus);
+
 export interface Capabilities {
   apiVersion: number;
   engineVersion: string;

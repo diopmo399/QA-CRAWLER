@@ -154,6 +154,14 @@ function createProvider(config: PersistenceConfig, env: NodeJS.ProcessEnv): Pers
 export function connectionOf(config: PersistenceConfig, env: NodeJS.ProcessEnv): DatabaseConnection {
   const database = config.database;
   if (!database) throw new Error('persistence.database is required when provider is database');
+  return databaseConnectionOf(database, env);
+}
+
+/** Les paramètres de connexion d'un bloc `database` (persistance ou stockage hybride). */
+export function databaseConnectionOf(
+  database: NonNullable<PersistenceConfig['database']>,
+  env: NodeJS.ProcessEnv,
+): DatabaseConnection {
   const value = (name: string): string | undefined => {
     const found = env[name];
     return found === undefined || found.trim() === '' ? undefined : found.trim();
