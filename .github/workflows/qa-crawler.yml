@@ -127,7 +127,9 @@ jobs:
         run: npm test
 
   # Persistence against real databases: the same contract tests and an end-to-end
-  # crawl for PostgreSQL and SQL Server (throwaway service containers, CI-only passwords).
+  # crawl for PostgreSQL and SQL Server (throwaway service containers, CI-only passwords),
+  # plus the hybrid storage on real object stores: an S3 server that checks Signature V4
+  # (moto, throwaway key) and the Azure Blob emulator (Azurite, its public development key).
   persistence:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -161,6 +163,10 @@ jobs:
       QA_TEST_MSSQL_PASSWORD: Qa-ci-only-1
       # Conteneur local au certificat auto-signé : accepté pour ce test seulement.
       QA_TEST_MSSQL_TRUST_CERT: 'true'
+      # Azurite : le compte et la clé de développement publiés par Microsoft (aucun secret).
+      QA_TEST_AZURE_URL: http://127.0.0.1:10000/devstoreaccount1
+      QA_TEST_AZURE_ACCOUNT: devstoreaccount1
+      QA_TEST_AZURE_KEY: Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -177,8 +183,27 @@ jobs:
             sleep 2
           done
           exit 1
-      - name: Persistence tests (PostgreSQL, SQL Server)
-        run: npx vitest run tests/integration/persistence-postgres.test.ts tests/integration/persistence-sqlserver.test.ts
+      - name: Object stores (S3 with signature checks, Azure Blob emulator)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/moto"
+          "$RUNNER_TEMP/moto/bin/pip" install --quiet "moto[server]==5.0.28"
+          # Three unauthenticated IAM calls create the key; every later request must be signed.
+          INITIAL_NO_AUTH_ACTION_COUNT=3 nohup "$RUNNER_TEMP/moto/bin/moto_server" -H 127.0.0.1 -p 4570 \
+            > "$RUNNER_TEMP/moto.log" 2>&1 &
+          nohup npx --yes --package=azurite@3.37.0 azurite-blob --blobHost 127.0.0.1 --blobPort 10000 \
+            --location "$RUNNER_TEMP/azurite" --skipApiVersionCheck > "$RUNNER_TEMP/azurite.log" 2>&1 &
+          # TCP only: an HTTP probe would use one of moto's unauthenticated calls.
+          for port in 4570 10000; do
+            for attempt in $(seq 1 60); do
+              (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null && break
+              sleep 2
+            done
+          done
+          "$RUNNER_TEMP/moto/bin/python" -I scripts/ci-moto-s3.py http://127.0.0.1:4570 >> "$GITHUB_ENV"
+      - name: Persistence tests (PostgreSQL, SQL Server, object stores)
+        run: >-
+          npx vitest run tests/integration/persistence-postgres.test.ts tests/integration/persistence-sqlserver.test.ts
+          tests/integration/storage-object-stores.test.ts
 
   # Real smoke test, only when a target is available (repository variable
   # TARGET_URL or a manual run with target_url). Never runs against nothing.

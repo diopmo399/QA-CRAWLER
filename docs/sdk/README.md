@@ -1904,6 +1904,105 @@ analysée, et un appel externe du frontal (URL absolue) reste « à classifier �
 est reconstruit après un redémarrage, à la première requête. Le lien entre une étape d'un
 bloc `run:` et l'exécution se juge sur le statut du flow entier.
 
+## Stockage hybride : le dossier de travail n'est plus qu'un cache
+
+Sans réglage, le serveur garde tout dans `--workspace` : projets, scénarios, exécutions, rapports,
+captures. Dans un conteneur éphémère, ce dossier disparaît avec le conteneur. En **stockage hybride**,
+le serveur le recopie en continu :
+
+- les **fichiers texte** (UTF-8, jusqu'à 256 Kio) vont dans une **base** : PostgreSQL, SQL Server ou
+  SQLite, par la couche de persistance existante (migration additive `006_add_workspace_mirror`,
+  tables `workspace_file` et `workspace_lease`) ;
+- les **fichiers lourds ou binaires** (captures, traces, vidéos, archives) vont dans un **stockage
+  objet** : un dossier monté (partage réseau), S3 et compatibles (AWS, MinIO, Ceph…), Azure Blob
+  Storage ou un dépôt générique JFrog Artifactory. La base en garde l'index. Un contenu identique n'est stocké qu'une fois ; un objet n'est
+  supprimé que lorsque plus aucun fichier ne le désigne.
+
+```bash
+# PostgreSQL + S3 compatible ; identifiants dans l'environnement seulement
+export QA_DB_HOST=db.example.test QA_DB_NAME=qa QA_DB_USERNAME=qa QA_DB_PASSWORD=…
+export QA_OBJECTS_ACCESS_KEY_ID=… QA_OBJECTS_SECRET_ACCESS_KEY=…
+qa-crawler sdk-server --workspace /var/qa/workspace \
+  --storage hybrid --storage-db postgres --storage-db-tls \
+  --objects s3 --objects-bucket qa-crawler --objects-endpoint https://minio.example.test:9000
+
+# PostgreSQL + Artifactory (dépôt local générique) ; jeton d'accès dans l'environnement
+export QA_OBJECTS_TOKEN=…   # ou QA_OBJECTS_USERNAME et QA_OBJECTS_PASSWORD
+qa-crawler sdk-server --workspace /var/qa/workspace \
+  --storage hybrid --storage-db postgres \
+  --objects artifactory --objects-url https://artifactory.example.test/artifactory \
+  --objects-repository qa-crawler-objects --objects-prefix staging
+
+# Sans serveur : SQLite + un dossier monté
+qa-crawler sdk-server --workspace /work --storage hybrid \
+  --storage-db sqlite --storage-db-file /data/qa.db --objects fs --objects-dir /data/objects
+```
+
+| Option                                                       | Rôle                                                                                                 |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `--storage hybrid`                                           | Active le stockage hybride (défaut `local`)                                                          |
+| `--storage-db postgres\|sqlserver\|sqlite`                   | La base : hôte, port, nom, utilisateur, mot de passe dans `QA_DB_*`                                  |
+| `--storage-db-file`, `--storage-db-tls`                      | Le fichier SQLite ; le chiffrement de la connexion                                                   |
+| `--objects fs\|s3\|azure\|artifactory`                       | Le stockage objet                                                                                    |
+| `--objects-dir`                                              | `fs` : le dossier                                                                                    |
+| `--objects-bucket`, `--objects-region`, `--objects-endpoint` | `s3` : le bucket, la région (défaut `us-east-1`), un point d'accès compatible (adressage par chemin) |
+| `--objects-account-url`, `--objects-container`               | `azure` : `https://<compte>.blob.core.windows.net` et le conteneur                                   |
+| `--objects-url`, `--objects-repository`                      | `artifactory` : `https://<hôte>/artifactory` et la clé d'un dépôt local générique                    |
+| `--objects-prefix`                                           | Préfixe de toutes les clés (`s3`, `azure`, `artifactory`)                                            |
+| `--storage-space`                                            | Le nom de l'espace : plusieurs serveurs peuvent partager une base                                    |
+| `--sync-interval <s>`                                        | Secondes entre deux envois (défaut 10)                                                               |
+| `--storage-takeover`                                         | Reprendre le bail d'un serveur arrêté brutalement                                                    |
+
+**Secrets.** Aucun secret en argument ni en fichier de configuration : `QA_DB_USERNAME`,
+`QA_DB_PASSWORD`, `QA_OBJECTS_ACCESS_KEY_ID`, `QA_OBJECTS_SECRET_ACCESS_KEY`
+(`QA_OBJECTS_SESSION_TOKEN` pour des identifiants temporaires), et pour Azure `QA_OBJECTS_SAS` ou
+`QA_OBJECTS_ACCOUNT_NAME` + `QA_OBJECTS_ACCOUNT_KEY`, pour Artifactory `QA_OBJECTS_TOKEN` (jeton
+d'accès, envoyé en `Bearer`) ou `QA_OBJECTS_USERNAME` + `QA_OBJECTS_PASSWORD` (Basic). Il manque un secret du stockage objet : le serveur ne démarre pas et nomme la variable. Les messages d'erreur portent le code HTTP et le code du service, jamais la clé.
+S3 est signé en Signature Version 4, Azure en Shared Key ou par jeton SAS, sans SDK tiers.
+
+**Artifactory.** Un dépôt **local générique** dédié (pas un dépôt Maven ni npm), par l'API REST de
+déploiement : chaque envoi porte ses empreintes SHA-1 et SHA-256, qu'Artifactory vérifie. Le compte
+du jeton doit avoir les droits **lire, déployer et supprimer** sur ce dépôt : le démarrage les
+vérifie (informations du dépôt, puis un petit fichier de contrôle déployé et aussitôt supprimé) et
+refuse de démarrer s'il en manque un. Une **politique de nettoyage ou de rétention** d'Artifactory
+posée sur ce dépôt supprimerait des objets encore indexés : à exclure pour ce dépôt. Les objets
+supprimés passent par la corbeille d'Artifactory si elle est activée.
+
+**Cycle de vie.**
+
+1. Au démarrage, le serveur prend le **bail d'écriture** de l'espace, vérifie que le stockage objet
+   répond, puis **reconstruit le dossier** avant de servir quoi que ce soit. Le contenu durable
+   l'emporte sur une copie locale différente. Un fichier présent sur le disque et absent de la base n'est pas effacé :
+   il est envoyé au premier passage (c'est ainsi qu'un dossier existant passe en stockage hybride). Une base ou un stockage injoignable empêche le
+   démarrage (code de sortie 3) : le serveur ne tourne jamais sur un dossier non sauvegardé.
+2. Ensuite, toutes les `--sync-interval` secondes : envoi des fichiers ajoutés ou modifiés, retrait des
+   fichiers supprimés. Un fichier modifié depuis moins d'une demi-seconde attend le passage suivant.
+   Une suppression n'est envoyée qu'après une lecture complète du dossier. Un fichier qui n'a pas pu
+   être envoyé est réessayé au passage suivant.
+3. À l'arrêt (Ctrl+C, `SIGTERM` de l'orchestrateur), après la fin des explorations : un dernier passage
+   complet, puis le bail est rendu. S'il n'a pas tout enregistré, l'erreur est affichée et le code de
+   sortie vaut 1.
+
+Jamais recopiés : `.git-sources`, `.maven-cache`, `.git`, `node_modules`, `target`, `.cache`
+(reconstructibles), ni la base SQLite ou le dossier d'objets s'ils sont dans le dossier de travail.
+
+**Un seul serveur écrit un espace.** Un second serveur sur le même espace est refusé tant que le bail
+du premier est valide (au moins 60 s, ou six intervalles). Si un serveur a été tué sans rendre son bail,
+le suivant attend l'expiration, ou démarre avec `--storage-takeover`. Un serveur dont le bail a été
+repris passe à `LEASE_LOST` et n'enregistre plus rien.
+
+**API.** `GET /api/storage` (droit lecture) : `{ mode: 'local' }`, ou `{ mode: 'hybrid', space, objects,
+state, restored, stored, lastSyncAt, lastSyncMs, uploaded, deleted, pending, lastError }`.
+`POST /api/storage/sync` (administrateur) : un passage immédiat, fichiers récents compris ; 409
+`STORAGE_LOCAL` sans stockage hybride. Client : `client.storage.status()`, `client.storage.sync()`.
+Dans un programme Node : `startSdkServer({ workspace, storage: { database, objects, … } })`.
+
+**Limites.** Ce qui a été écrit depuis le dernier passage est perdu si le conteneur est tué sans
+`SIGTERM` (au plus `--sync-interval` secondes). Le dossier reste nécessaire : Playwright et Maven
+travaillent sur des fichiers ; la base n'est pas interrogée à la place du disque. La restauration
+réécrit tout le dossier au démarrage (le temps croît avec son volume). La CLI seule (`qa-crawler run`
+sans serveur) n'utilise pas ce stockage.
+
 ## Accès : jetons nominatifs, rôles, journal
 
 Par défaut (`access: 'single'`), un seul jeton de service ouvre toute l'API, et les pages servies le

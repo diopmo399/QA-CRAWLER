@@ -204,6 +204,33 @@ export const MIGRATIONS: readonly Migration[] = [
       ),
     ],
   },
+  {
+    // STOCKAGE HYBRIDE : le miroir durable du dossier de travail du serveur. Une ligne par fichier ; le
+    // texte est dans `content`, un fichier lourd ou binaire est dans le stockage objet (`object_key`).
+    // Le bail (lease) garantit un seul serveur écrivain par espace.
+    id: '006_add_workspace_mirror',
+    statements: (d) => [
+      d.createTableIfMissing(
+        'workspace_file',
+        `id ${d.types.id} NOT NULL PRIMARY KEY,
+        space ${d.types.name} NOT NULL,
+        file_path ${d.types.url} NOT NULL,
+        kind ${d.types.name} NOT NULL,
+        sha256 ${d.types.signature} NOT NULL,
+        size_bytes ${d.types.int} NOT NULL,
+        content ${d.types.text} NULL,
+        object_key ${d.types.url} NULL,
+        updated_at ${d.types.timestamp} NOT NULL`,
+      ),
+      d.createIndexIfMissing('ix_workspace_file_space', 'workspace_file', ['space'], false),
+      d.createTableIfMissing(
+        'workspace_lease',
+        `space ${d.types.name} NOT NULL PRIMARY KEY,
+        holder ${d.types.name} NOT NULL,
+        expires_at ${d.types.timestamp} NOT NULL`,
+      ),
+    ],
+  },
 ];
 
 export interface MigrationResult {

@@ -1,6 +1,7 @@
 import type {
   AssertionProposalView,
   Capabilities,
+  StorageView,
   DataBindingInput,
   DataBindingResult,
   ErrorBody,
@@ -661,6 +662,14 @@ export interface QaCrawlerClient {
     setRole(memberId: string, role: Role | null, options?: { projectId?: string }): Promise<MemberView>;
     revoke(memberId: string): Promise<MemberView>;
     journal(options?: { projectId?: string; kind?: JournalKind; limit?: number }): Promise<JournalEntry[]>;
+  };
+  /**
+   * Le stockage du dossier de travail du serveur : `local`, ou `hybrid` (fichiers texte en base, fichiers
+   * lourds dans un stockage objet) avec l'état du miroir. `sync` force un envoi immédiat (administration).
+   */
+  storage: {
+    status(): Promise<StorageView>;
+    sync(): Promise<StorageView>;
   };
   /** Les tendances par semaine ISO : rejeux, anomalies, durée médiane, couverture, scénarios instables. */
   trends: {
@@ -1581,6 +1590,10 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         const suffix = query.toString();
         return request('GET', `/access/journal${suffix ? `?${suffix}` : ''}`);
       },
+    },
+    storage: {
+      status: () => request('GET', '/storage'),
+      sync: () => request('POST', '/storage/sync', {}),
     },
     trends: {
       get: (trendOptions = {}) => {
