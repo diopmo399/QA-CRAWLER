@@ -16,9 +16,22 @@ const KEY_LIKE =
 export const SECRET_NAME =
   /(pass(word|wd)?|pwd|secret|token|api[-_]?key|access[-_]?key|private[-_]?key|client[-_]?secret|credential|authorization|cookie|bearer|session[-_]?id)/i;
 
+/**
+ * Un nom du code (classe, composant, méthode) n'est pas une clé : des mots en casse chameau qui couvrent au
+ * moins 80 % des caractères, au plus deux groupes de chiffres (`Contract125PageComponent`,
+ * `Oauth2AuthorizationCallbackComponent`). Un jeton (`ghp_1a2B3c4D…`, une suite aléatoire) n'en est pas un :
+ * il reste masqué. Sans cette règle, un composant au nom long et chiffré disparaissait de l'analyse.
+ */
+function looksLikeCodeName(token: string): boolean {
+  if (!/^[A-Za-z][A-Za-z0-9]*$/.test(token)) return false;
+  if ((token.match(/\d+/g) ?? []).length > 2) return false;
+  const words = token.match(/[A-Z]?[a-z]{2,}|[A-Z]{2,}(?![a-z])/g) ?? [];
+  return words.reduce((sum, word) => sum + word.length, 0) >= token.length * 0.8;
+}
+
 export function sanitizeText(text: string): string {
   const redacted = /^https?:\/\//i.test(text) ? redactUrl(text) : redactText(text);
-  return redacted.replace(KEY_LIKE, REDACTED);
+  return redacted.replace(KEY_LIKE, (match) => (looksLikeCodeName(match) ? match : REDACTED));
 }
 
 /** Une chaîne de motif (Validators.pattern) : gardée telle quelle sauf si elle contient un secret. */

@@ -182,6 +182,9 @@ const SUGGESTIONS: Partial<Record<CorrelationCause, string[]>> = {
   MULTIPLE_DESTINATIONS: ['préciser la destination (une seule source par adresse)'],
 };
 
+/** Les homonymes gardés par concept (le total est donné au-delà). */
+const MAX_HOMONYMS = 50;
+
 /** Les corps de requête qui ne sont pas des objets (aucun DTO à relier). */
 const SCALAR_BODY =
   /^(String|CharSequence|Object|Integer|int|Long|long|Short|short|Double|double|Float|float|Boolean|boolean|BigDecimal|BigInteger|UUID|byte\[\]|Byte\[\]|Map(<.*>)?|JsonNode)$/;
@@ -3295,6 +3298,23 @@ export function buildGraph(input: GraphInput): GraphOutput {
           );
     }
   }
+  // Les relations par origine, lues une fois : les boucles des concepts et des anomalies ne parcourent plus
+  // toutes les relations pour chaque champ (coût quadratique mesuré sur une application de 500 000 lignes).
+  const outFrom = new Map<string, MapEdge[]>();
+  for (const e of edges.values()) {
+    const list = outFrom.get(e.from);
+    if (list) list.push(e);
+    else outFrom.set(e.from, [e]);
+  }
+  const hasColumn = [...nodes.values()].some((n) => n.kind === 'COLUMN');
+  const featureOrder = new Map(features.map((feature, i) => [feature.id, i]));
+  const featuresOfField = new Map<string, string[]>();
+  for (const feature of features)
+    for (const id of new Set(feature.fields)) {
+      const list = featuresOfField.get(id);
+      if (list) list.push(feature.id);
+      else featuresOfField.set(id, [feature.id]);
+    }
   const neighbours = new Map<string, Set<string>>();
   for (const e of edges.values()) {
     if (!FIELD_EDGES.has(e.kind) || !isField(e.from) || !isField(e.to)) continue;
@@ -3322,8 +3342,9 @@ export function buildGraph(input: GraphInput): GraphOutput {
         queue.push(next);
       }
     }
-    const inner = [...edges.values()].filter(
-      (e) => FIELD_EDGES.has(e.kind) && members.includes(e.from) && members.includes(e.to),
+    const memberSet = new Set(members);
+    const inner = members.flatMap((id) =>
+      (outFrom.get(id) ?? []).filter((e) => FIELD_EDGES.has(e.kind) && memberSet.has(e.to)),
     );
     const confidence: MapConfidence =
       inner.length === 0 ? 'CONFIRMED' : weakest(...inner.map((e) => e.confidence));
@@ -3332,9 +3353,9 @@ export function buildGraph(input: GraphInput): GraphOutput {
       id: `CONCEPT:${start.id}`,
       name: label ?? humanize(String(start.detail.javaField ?? start.detail.field ?? start.name)),
       fields: members,
-      features: features
-        .filter((feature) => feature.fields.some((id) => members.includes(id)))
-        .map((feature) => feature.id),
+      features: [...new Set(members.flatMap((id) => featuresOfField.get(id) ?? []))].sort(
+        (a, b) => (featureOrder.get(a) ?? 0) - (featureOrder.get(b) ?? 0),
+      ),
       layers: [
         ...new Set(members.map((id) => nodes.get(id)?.layer).filter((l): l is MapLayer => l !== undefined)),
       ],
@@ -3348,18 +3369,26 @@ export function buildGraph(input: GraphInput): GraphOutput {
     String(
       nodes.get(id)?.detail.javaField ?? nodes.get(id)?.detail.field ?? nodes.get(id)?.name ?? '',
     ).toLowerCase();
+  const conceptOrder = new Map(concepts.map((concept, i) => [concept.id, i]));
+  const conceptsOfKey = new Map<string, string[]>();
+  for (const concept of concepts)
+    for (const key of new Set(concept.fields.map(keyOf))) {
+      const list = conceptsOfKey.get(key);
+      if (list) list.push(concept.id);
+      else conceptsOfKey.set(key, [concept.id]);
+    }
   for (const concept of concepts) {
     const has = (layer: MapLayer): boolean => concept.fields.some((id) => nodes.get(id)?.layer === layer);
     const front = concept.fields.filter(
       (id) => nodes.get(id)?.layer === 'FRONTEND' && nodes.get(id)?.parent?.startsWith('COMPONENT:'),
     );
     for (const id of front) {
-      const sends = [...edges.values()].filter((e) => e.from === id && e.kind === 'SENDS');
+      const sends = (outFrom.get(id) ?? []).filter((e) => e.kind === 'SENDS');
       if (sends.length === 0)
         concept.gaps.push(`lien non démontré : ${nodes.get(id)?.name ?? id} n’est envoyé par aucun appel lu`);
       else if (!sends.some((e) => isField(e.to)) && sends.some((e) => !isField(e.to))) {
         const call = sends.find((e) => !isField(e.to))?.to ?? '';
-        const reached = [...edges.values()].some((e) => e.from === call && e.kind === 'CALLS');
+        const reached = (outFrom.get(call) ?? []).some((e) => e.kind === 'CALLS');
         concept.gaps.push(
           reached
             ? `lien non démontré : la propriété envoyée par ${nodes.get(id)?.name ?? id} n’existe pas dans le corps reçu`
@@ -3367,25 +3396,23 @@ export function buildGraph(input: GraphInput): GraphOutput {
         );
       }
     }
-    if (
-      (has('BACKEND') || has('BFF')) &&
-      !has('DATABASE') &&
-      [...nodes.values()].some((n) => n.kind === 'COLUMN')
-    )
+    if ((has('BACKEND') || has('BFF')) && !has('DATABASE') && hasColumn)
       concept.gaps.push('lien non démontré : aucune colonne persistée n’est reliée (mapping non lu)');
     const keys = new Set(concept.fields.map(keyOf));
-    concept.homonyms = concepts
-      .filter((other) => other.id !== concept.id && other.fields.some((id) => keys.has(keyOf(id))))
-      .map((other) => other.id);
+    const others = new Set<string>();
+    for (const key of keys)
+      for (const other of conceptsOfKey.get(key) ?? []) if (other !== concept.id) others.add(other);
+    const homonyms = [...others].sort((a, b) => (conceptOrder.get(a) ?? 0) - (conceptOrder.get(b) ?? 0));
+    // Une grande application a des centaines de champs « status » : la liste est bornée, le total est dit.
+    concept.homonyms = homonyms.slice(0, MAX_HOMONYMS);
+    if (homonyms.length > MAX_HOMONYMS) concept.homonymCount = homonyms.length;
   }
 
   // ── Anomalies des champs ──────────────────────────────────────────────────────────────────────
   const issues: FieldIssue[] = [];
   for (const n of nodes.values()) {
     if (n.kind !== 'FIELD' || n.layer !== 'FRONTEND' || !n.parent?.startsWith('COMPONENT:')) continue;
-    const sent = [...edges.values()].some(
-      (e) => e.from === n.id && (e.kind === 'SENDS' || e.kind === 'TRANSFORMS'),
-    );
+    const sent = (outFrom.get(n.id) ?? []).some((e) => e.kind === 'SENDS' || e.kind === 'TRANSFORMS');
     if (n.detail.bound === false && !sent)
       issues.push({
         kind: 'UNUSED',

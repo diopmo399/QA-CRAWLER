@@ -32,6 +32,28 @@ application importée modifiée.
 - `ngOnInit` : relie désormais l'installation de ses deux abonnements.
 - Temps de scan : écarts de quelques millisecondes (21 → 25 ms médian), voir le benchmark.
 
+## Épreuve à grande échelle
+
+Une application Angular synthétique de 504 562 lignes (1 200 modules) puis de 840 914 lignes
+(2 000 modules), avec cinq styles RxJS mélangés, des composants homonymes, un état partagé entre modules
+et des ruptures injectées. Détail : `docs/benchmarks/tracegraph-performance.md`.
+
+**Avant les corrections : 355 parcours justes sur 1 200.** Six défauts n'apparaissaient qu'à cette taille :
+
+1. Limite globale de 300 contextes d'appel.
+2. Budget de syntaxe épuisé sans que la source soit dite partielle.
+3. Noms de composants longs masqués comme des secrets.
+4. Émissions d'un flux d'actions partagé envoyées à tous ses pipes.
+5. Conjonctions non décomposées.
+6. Limite de 4 000 fichiers.
+
+**Après : 1 200 / 1 200 puis 2 000 / 2 000 parcours justes**, 0 faux lien entre modules, toutes les ruptures
+injectées gardées comme liens non résolus.
+
+- **Temps de scan :** 16,7 s à 1 200 modules et 36,8 s à 2 000, une fois supprimé un coût quadratique dans la
+  construction des concepts de champs. Avant cette suppression : 35 s et 99 s.
+- **Résultat inchangé :** la signature du graphe est la même avant et après cette optimisation.
+
 ## Vérifications exécutées
 
 - `tests/unit/tracegraph-v2.test.ts` : 15 tests (identité, alias, lien non résolu et sa preuve,
@@ -52,11 +74,12 @@ application importée modifiée.
 
 1. Invalidation incrémentale par les dépendances externes (Maven, configuration).
 2. Conditions par site d'appel quand une relation est fusionnée (seule la première est gardée).
-3. Évaluation abstraite des conditions RxJS selon le contexte d'émission.
+3. Évaluation générale des prédicats RxJS. Seule la garde par type en tête de pipe est traitée.
 4. Vérification ciblée (lecteurs de preuve par type de relation).
 5. Budgets FAST / BALANCED / DEEP du scan.
 6. État INVALIDATED d'une relation.
 7. Chemin de retour des données BFF / Java vers le composant.
 8. Persistance du graphe en base de données.
-9. Mesures sur une application de 100 000 à 500 000 lignes.
+9. Mesures sur une application réelle de grande taille (l'épreuve est synthétique). Le modèle sérialisé
+   pèse 94 Mo à 500 000 lignes.
 10. Vérification dans Chromium de l'onglet « Liens non résolus » (rendu testé en unitaire seulement).

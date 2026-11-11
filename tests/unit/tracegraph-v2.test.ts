@@ -177,7 +177,9 @@ describe('parcours contextualisés (store partagé)', () => {
         M("OrderStore#dispatch⟨type='VALIDATE'⟩"),
         M('OrderStore#validate'),
         M("OrderStore#dispatch⟨type='SAVE'⟩"),
-        S('OrderStore.actions'),
+        // L'émission SAVE arrive sur le canal SAVE du flux d'actions : seuls les traitements qui acceptent
+        // ce type (saved$) en partent.
+        S("OrderStore.actions⟨type='SAVE'⟩"),
         S('OrderStore.saved$'),
         M('OrderApi#create'),
         M('OrdersComponent#onSaved'),

@@ -36,10 +36,40 @@ Avec l'orientation par `flowOf` (voir `tracegraph-engine-v2.md`), sur la fixture
 - l'aval de `reload` (LOAD) n'atteint ni `saved$`, ni `create`, ni `validate` ;
 - la provenance de l'état (`state$` → `onState` → condition → conteneur) se lit vers l'amont.
 
+## Canaux d'un flux d'actions partagé
+
+Un même `Subject` d'actions alimente souvent plusieurs traitements filtrés par type :
+
+```ts
+saved$ = this.actions.pipe(filter((a) => a.type === 'SAVE'), mergeMap(…create…));
+loaded$ = this.actions.pipe(filter((a) => a.type === 'LOAD'), switchMap(…list…));
+```
+
+**Traitement filtré par type.** Quand le **premier** opérateur d'un flux calculé garde un type, ce flux
+est noté comme filtré sur ce type. Les formes reconnues :
+
+- `filter((a) => a.type === 'X')`, éventuellement avec plusieurs valeurs réunies par `||` ;
+- `ofType('X', …)` avec des littéraux.
+
+**Valeur émise.** La valeur poussée par `next(valeur)` est évaluée dans le contexte de l'appel :
+
+- un littéral `{ type: 'SAVE' }` ;
+- ou le paramètre `action` d'un `dispatch⟨type='VALIDATE'⟩`.
+
+**Routage.**
+
+- Quand le type émis est connu, l'émission arrive sur un canal `actions⟨type='SAVE'⟩`. Ce canal reprend les
+  suites du flux, sauf les traitements filtrés qui n'acceptent pas ce type.
+- Un type inconnu arrive sur le flux entier : toutes ses suites restent possibles, rien n'est écarté sans
+  preuve.
+
+**Conditions composées.** Une condition `if (action.type === 'VALIDATE' && action.title.length > 0)` est
+évaluée terme par terme ; elle reste affichée entière.
+
 ## Limites
 
-- Les conditions d'un `filter(a => a.type === 'SAVE')` ne sont pas évaluées contre le contexte
-  d'émission (VRAI / FAUX / INCONNU) de façon générale ; le tri par branche ne vaut que pour les
-  contextes d'appel déjà reconnus.
+- Seul le premier opérateur d'un flux est lu comme garde de type. Une garde placée après un `map`, ou écrite
+  avec une fonction nommée, n'écarte rien : les suites restent toutes possibles.
+- Il n'y a pas d'évaluation générale VRAI / FAUX / INCONNU d'un prédicat quelconque.
 - Pas de TypeChecker : un flux référencé par un chemin que la lecture syntaxique ne suit pas reste
   non relié (et non inventé).

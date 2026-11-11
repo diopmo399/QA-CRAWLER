@@ -236,9 +236,14 @@ export async function runScan(
       // Les passerelles (routes, transformations, destinations) : suivies seulement là où un appel les désigne.
       const gateway = readGateways(read.files, config.entries.length > 0 ? config : undefined);
       if (gateway) sourceFacts.gateway = gateway;
-      if (read.limits.length > 0) {
+      // Un budget d'analyse épuisé (nœuds AST, durée, contextes) : une partie des fichiers lus n'est pas
+      // analysée. La source est dite partielle, jamais présentée comme complète.
+      const exhausted = (sourceFacts.ui?.warnings ?? []).filter((w) =>
+        /BUDGET_EXHAUSTED|limite d’analyse/.test(w),
+      );
+      if (read.limits.length > 0 || exhausted.length > 0) {
         scan.state = 'PARTIAL';
-        sourceFacts.partial = [...read.limits];
+        sourceFacts.partial = [...read.limits, ...new Set(exhausted)];
       }
       if (found.size === 0) scan.errors.push('aucune technologie reconnue dans cette source');
       facts.push(sourceFacts);

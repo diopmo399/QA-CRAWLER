@@ -345,8 +345,10 @@ export interface FieldConcept {
   status: MapConfidence | 'VALIDATED';
   /** Les étapes non démontrées (« lien non démontré : … »). */
   gaps: string[];
-  /** Des champs de même nom ailleurs, non reliés (homonymes), signalés et non fusionnés. */
+  /** Des champs de même nom ailleurs, non reliés (homonymes), signalés et non fusionnés (50 au plus). */
   homonyms: string[];
+  /** Le nombre total d'homonymes quand il dépasse la liste gardée. */
+  homonymCount?: number;
 }
 
 export const FIELD_ISSUE_KINDS = [

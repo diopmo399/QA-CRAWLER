@@ -20,7 +20,19 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 - L'installation d'un abonnement (`ngOnInit` qui souscrit un flux) est une relation distincte de la
   propagation à chaque émission.
 - Un `@RequestBody` scalaire (String, Long, Map…) ne tente plus de relation vers un DTO.
-- Version d'analyseur `cartography-11;rxjs-4` : les faits des scans antérieurs sont recalculés.
+- Éprouvé sur une application synthétique de 500 000 puis 840 000 lignes (cinq styles RxJS mélangés) :
+  1 200 / 1 200 puis 2 000 / 2 000 parcours justes, contre 355 / 1 200 avant. Corrections :
+  - un `Subject` d'actions partagé est découpé par type émis (`actions⟨type='SAVE'⟩` ne mène qu'aux pipes
+    filtrés sur SAVE) ;
+  - les conditions `a && b` sont évaluées terme par terme ;
+  - les contextes d'appel sont bornés par méthode (64), plus à 300 pour toute l'application ;
+  - le budget de syntaxe suit le volume lu, et un budget épuisé rend la source `PARTIAL` ;
+  - la limite passe à 20 000 fichiers par source ;
+  - un nom de classe long et chiffré n'est plus masqué comme un secret (les jetons le restent) ;
+  - la construction des concepts de champs n'est plus quadratique (scan de 500 000 lignes en 17 s au lieu
+    de 35 s, résultat identique) ;
+  - les homonymes d'un concept sont bornés à 50, avec leur total (`homonymCount`).
+- Version d'analyseur `cartography-11;rxjs-5` : les faits des scans antérieurs sont recalculés.
 - Documents : `docs/audits/tracegraph-baseline.md`, `docs/architecture/tracegraph-engine-v2.md`,
   `link-reconciliation.md`, `reactive-causality-resolver.md`, `targeted-verification.md` (conception),
   `docs/benchmarks/tracegraph-performance.md`, `docs/audits/tracegraph-final-report.md`.

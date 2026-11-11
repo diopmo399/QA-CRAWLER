@@ -15,7 +15,7 @@ import { ClassIdentity } from '../static-analysis/class-identity.js';
  * réponses qui alimentent un flux. Un Observable est paresseux : un appel dont le résultat n'est jamais
  * souscrit n'est pas présenté comme exécuté. Rien n'est exécuté ; une URL non résolue garde son expression.
  */
-export const RXJS_ANALYZER = 'rxjs-4';
+export const RXJS_ANALYZER = 'rxjs-5';
 
 const SUBJECTS = new Set(['Subject', 'BehaviorSubject', 'ReplaySubject', 'AsyncSubject']);
 const CREATION = new Set([
@@ -120,6 +120,11 @@ interface Guard {
   negated: boolean;
   /** Pour l'affichage : la branche est suivie quand la condition écrite est fausse (else, retour anticipé). */
   whenFalse?: boolean;
+  /**
+   * `if (a.type === 'X' && b)` : les termes de la conjonction, évalués un à un (la branche suivie les rend
+   * tous vrais). La condition reste affichée en entier.
+   */
+  terms?: Pick<Guard, 'text' | 'on' | 'values' | 'instance' | 'negated'>[];
 }
 /** Ce qui doit s'être produit avant l'appel : réponse attendue (await, subscribe, then), erreur, minuterie. */
 interface Continuation {
@@ -164,6 +169,8 @@ interface HttpSite {
 }
 interface Emit {
   ref: Ref;
+  /** La valeur émise (`next(valeur)`), pour choisir les traitements qu'elle traverse. */
+  value?: TS.Expression;
   guards?: Guard[];
   cont?: Continuation[];
   /** Les appels dont la réponse est poussée par cette émission (dans subscribe/tap). */
@@ -218,6 +225,11 @@ interface Stream {
   operators: string[];
   filters: string[];
   reads: string[];
+  /**
+   * Le premier opérateur du flux garde les valeurs d'un type (`filter((a) => a.type === 'SAVE')`,
+   * `ofType('SAVE')`) : seules les émissions de ce type le traversent.
+   */
+  typeFilter?: { field: string; values: TS.Expression[] };
   loc: Loc;
 }
 interface ClassInfo {
@@ -668,7 +680,11 @@ function classOf(
       reads: [],
       loc: loc(p.at),
     };
-    if (stream.kind === 'DERIVED' && !ts.isIdentifier(p.init)) readStream(ctx, p.init, stream);
+    if (stream.kind === 'DERIVED' && !ts.isIdentifier(p.init)) {
+      readStream(ctx, p.init, stream);
+      const typed = typeFilterOf(ts, p.init);
+      if (typed && stream.sources.length === 1) stream.typeFilter = typed;
+    }
     // Une propriété déclarée puis assignée : la seconde lecture complète la première.
     const known = info.streams.get(p.name);
     if (known && known.kind === 'SUBJECT') continue;
@@ -968,6 +984,72 @@ const short = (text: string, max = 80): string => {
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
 
+/**
+ * La garde par type d'un flux calculé : le PREMIER opérateur de `source.pipe(…)` garde les valeurs dont un
+ * champ vaut une constante — `filter((a) => a.type === 'SAVE')` (ou plusieurs valeurs réunies par ||), ou
+ * `ofType('SAVE', …)` avec des littéraux. Toute autre garde (fonction, opérateur placé après un map) est
+ * ignoré ici : il ne permet pas de dire quelles émissions passent.
+ */
+function typeFilterOf(
+  ts: TypeScriptModule,
+  init: TS.Expression,
+): { field: string; values: TS.Expression[] } | undefined {
+  const call = strip(ts, init);
+  if (!ts.isCallExpression(call) || !ts.isPropertyAccessExpression(call.expression)) return undefined;
+  if (call.expression.name.text !== 'pipe') return undefined;
+  const first = call.arguments[0];
+  if (!first || !ts.isCallExpression(first) || !ts.isIdentifier(first.expression)) return undefined;
+  const named = (e: TS.Expression): boolean =>
+    literalOf(ts, e) !== undefined || ts.isPropertyAccessExpression(e) || ts.isIdentifier(e);
+  if (first.expression.text === 'ofType') {
+    const values = first.arguments.filter((a) => literalOf(ts, a) !== undefined);
+    return values.length > 0 && values.length === first.arguments.length
+      ? { field: 'type', values }
+      : undefined;
+  }
+  if (first.expression.text !== 'filter') return undefined;
+  const fn = first.arguments[0];
+  if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) return undefined;
+  const param = fn.parameters[0];
+  if (!param || !ts.isIdentifier(param.name)) return undefined;
+  const name = param.name.text;
+  let body: TS.Node = fn.body;
+  if (ts.isBlock(body)) {
+    const only = body.statements.length === 1 ? body.statements[0] : undefined;
+    if (!only || !ts.isReturnStatement(only) || !only.expression) return undefined;
+    body = only.expression;
+  }
+  let field: string | undefined;
+  const values: TS.Expression[] = [];
+  const read = (e: TS.Expression): boolean => {
+    const x = strip(ts, e);
+    if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+      return read(x.left) && read(x.right);
+    if (
+      !ts.isBinaryExpression(x) ||
+      (x.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken &&
+        x.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsToken)
+    )
+      return false;
+    const side = (a: TS.Expression, b: TS.Expression): boolean => {
+      const p = strip(ts, a);
+      if (
+        !ts.isPropertyAccessExpression(p) ||
+        !ts.isIdentifier(p.expression) ||
+        p.expression.text !== name ||
+        !named(strip(ts, b))
+      )
+        return false;
+      if (field !== undefined && field !== p.name.text) return false;
+      field = p.name.text;
+      values.push(strip(ts, b));
+      return true;
+    };
+    return side(x.left, x.right) || side(x.right, x.left);
+  };
+  return read(body as TS.Expression) && field ? { field, values } : undefined;
+}
+
 const strip = (ts: TypeScriptModule, e: TS.Expression): TS.Expression => {
   let cur = e;
   while (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isNonNullExpression(cur))
@@ -1045,6 +1127,14 @@ function testOf(
       };
   }
   return { text, negated };
+}
+
+/** Les termes d'une conjonction (`a && (b && c)` → a, b, c) ; une autre expression est son seul terme. */
+function conjuncts(ts: TypeScriptModule, expr: TS.Expression): TS.Expression[] {
+  const x = strip(ts, expr);
+  if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
+    return [...conjuncts(ts, x.left), ...conjuncts(ts, x.right)];
+  return [expr];
 }
 
 /** Une instruction qui sort toujours de la méthode (return, throw, ou un bloc / if dont toutes les branches sortent). */
@@ -1196,9 +1286,16 @@ function controlOf(
     if (!p) break;
     if (ts.isIfStatement(p) && cur !== p.expression) {
       const t = testOf(ts, p.expression, method);
+      // `if (a.type === 'X' && b)` : dans la branche suivie, chaque terme est vrai ; la valeur transmise peut
+      // en écarter un. La branche else garde la condition entière (sa négation n'est pas une conjonction).
+      const terms = cur === p.thenStatement ? conjuncts(ts, p.expression) : [];
       guards.push(
         cur === p.thenStatement
-          ? { kind: 'IF', ...t }
+          ? {
+              kind: 'IF',
+              ...t,
+              ...(terms.length > 1 ? { terms: terms.map((x) => testOf(ts, x, method)) } : {}),
+            }
           : { kind: 'ELSE', ...t, negated: !t.negated, whenFalse: true },
       );
     } else if (ts.isCaseClause(p) && cur !== p.expression) {
@@ -1541,6 +1638,7 @@ function readMethod(
         if (fname === 'next' && isStreamRef(ctx, ref)) {
           const emit: Emit = {
             ref,
+            ...(node.arguments[0] ? { value: node.arguments[0] } : {}),
             fedBy: fedBy(ctx, node),
             ...controlOf(ctx, node, body, method),
             loc: ctx.loc(node),
@@ -2134,9 +2232,9 @@ function resolve(
    */
   const branched = new Map<string, { id: string; site: HttpSite }[]>();
   const paramGuarded = (m: Method, gs: Guard[] | undefined): boolean =>
-    (gs ?? []).some(
-      (g) => g.on && m.params.includes(g.on.split('.')[0] ?? '') && (g.values?.length || g.instance),
-    );
+    (gs ?? [])
+      .flatMap((g) => g.terms ?? [g])
+      .some((g) => g.on && m.params.includes(g.on.split('.')[0] ?? '') && (g.values?.length || g.instance));
   for (const c of classes.values())
     for (const m of c.methods.values()) {
       if (m.http.length < 2 || !m.http.some((h) => paramGuarded(m, h.guards))) continue;
@@ -2446,6 +2544,13 @@ function resolve(
   };
   /** Une condition dans un contexte : suivie (MATCH), écartée (NO), indéterminée, ou sans lien avec le contexte. */
   const verdictOf = (g: Guard, c: ClassInfo, m: Method, ctx: Ctxt): 'MATCH' | 'NO' | 'UNKNOWN' | 'FREE' => {
+    if (g.terms) {
+      // Une conjonction : un terme faux l'écarte ; tous vrais, elle est suivie ; sinon elle reste à afficher.
+      const verdicts = g.terms.map((t) => verdictOf({ kind: g.kind, ...t }, c, m, ctx));
+      if (verdicts.includes('NO')) return 'NO';
+      if (verdicts.includes('UNKNOWN')) return 'UNKNOWN';
+      return verdicts.every((v) => v === 'MATCH') ? 'MATCH' : 'FREE';
+    }
     if (!g.on || !m.params.includes(g.on.split('.')[0] ?? '')) return 'FREE';
     const v = valAt(g.on, ctx);
     let hit: boolean | undefined;
@@ -2484,7 +2589,7 @@ function resolve(
       ...m.http.map((h) => ({ guards: h.guards })),
     ];
     for (const site of sites)
-      for (const g of site.guards ?? [])
+      for (const g of (site.guards ?? []).flatMap((x) => x.terms ?? [x]))
         if (g.on && m.params.includes(g.on.split('.')[0] ?? '') && (g.values?.length || g.instance))
           paths.add(g.on);
     for (const cs of m.calls) {
@@ -2597,7 +2702,68 @@ function resolve(
   };
 
   let clones = 0;
-  const MAX_CLONES = 300;
+  // ── Canaux d'un flux d'actions : une émission de type connu ne traverse que les traitements qui
+  // l'acceptent (`actions.pipe(filter((a) => a.type === 'SAVE'))` n'est pas atteint par un LOAD). ─────
+  const emptyMethod = (name: string, at: Loc): Method => ({
+    name,
+    params: [],
+    locals: new Map(),
+    aliases: new Map(),
+    calls: [],
+    emits: [],
+    http: [],
+    pipelines: [],
+    outputs: [],
+    returnsObservable: false,
+    loc: at,
+  });
+  /** flux source → champ de type lu par ses traitements filtrés ; flux filtré → sa source et ses valeurs. */
+  const typedFields = new Map<string, string>();
+  const typedStreams = new Map<string, { source: string; field: string; keys: (string | undefined)[] }>();
+  for (const c of classes.values())
+    for (const st of c.streams.values()) {
+      const src = st.sources[0];
+      if (!st.typeFilter || !src) continue;
+      const r = resolveRef(c, src);
+      if (!r) continue;
+      const source = streamId(r.cls, r.stream.name);
+      const known = typedFields.get(source);
+      // Deux traitements qui trient la même source sur deux champs différents : aucun canal (indécidable).
+      typedFields.set(
+        source,
+        known === undefined || known === st.typeFilter.field ? st.typeFilter.field : '',
+      );
+      const frame = emptyMethod(st.name, st.loc);
+      typedStreams.set(streamId(c, st.name), {
+        source,
+        field: st.typeFilter.field,
+        keys: st.typeFilter.values.map((v) => keyOf(valOf(v, c, frame, undefined))),
+      });
+    }
+  const channels = new Map<string, { stream: string; key: string; label: string; loc: Loc }>();
+  /**
+   * Le flux (ou son canal) où arrive une émission : le canal du type émis quand la valeur émise a un type
+   * connu dans ce contexte et que des traitements de ce flux trient sur ce champ ; sinon le flux entier
+   * (toutes ses suites restent possibles).
+   */
+  const channelOf = (c: ClassInfo, m: Method, e: Emit, sid: string, ctx: Ctxt | undefined): string => {
+    const field = typedFields.get(sid);
+    if (!field || !e.value) return sid;
+    const value = valOf(e.value, c, m, ctx)?.obj?.get(field);
+    const key = keyOf(value);
+    if (!key || !value) return sid;
+    const label = `${field}=${value.lit !== undefined ? value.lit.replace(/^"(.*)"$/, "'$1'") : value.text}`;
+    const id = `${sid}⟨${label}⟩`;
+    if (!channels.has(id)) channels.set(id, { stream: sid, key, label, loc: e.loc });
+    return id;
+  };
+
+  // Des contextes bornés par méthode générique (une méthode aux mille valeurs ne prend pas tout) et, en
+  // dernier recours, pour toute l'application : la taille de l'application n'écarte pas les contextes.
+  const MAX_CLONES_PER_METHOD = 64;
+  const MAX_CLONES = 50_000;
+  const clonesOf = new Map<string, number>();
+  const limited = new Set<string>();
   const MAX_CONTEXT_DEPTH = 4;
   const specialized = new Map<string, string>();
   /**
@@ -2619,16 +2785,22 @@ function resolve(
       .join(',')}`;
     const known = specialized.get(key);
     if (known) return known;
-    if (depth > MAX_CONTEXT_DEPTH || clones >= MAX_CLONES) {
+    if (
+      depth > MAX_CONTEXT_DEPTH ||
+      clones >= MAX_CLONES ||
+      (clonesOf.get(id) ?? 0) >= MAX_CLONES_PER_METHOD
+    ) {
       problem(
         id,
         'LIMIT',
-        `${id.replace('#', '.')}() : limite d’analyse contextuelle atteinte (profondeur ${String(MAX_CONTEXT_DEPTH)}, ${String(MAX_CLONES)} contextes) ; les branches ne sont plus distinguées`,
+        `${id.replace('#', '.')}() : limite d’analyse contextuelle atteinte (profondeur ${String(MAX_CONTEXT_DEPTH)}, ${String(MAX_CLONES_PER_METHOD)} contextes par méthode, ${String(MAX_CLONES)} en tout) ; les branches ne sont plus distinguées`,
         m.loc,
       );
+      limited.add(id);
       return undefined;
     }
     clones += 1;
+    clonesOf.set(id, (clonesOf.get(id) ?? 0) + 1);
     const cloneId = `${id}⟨${label}⟩`;
     specialized.set(key, cloneId);
     const branches = { kept: 0, pruned: 0, unknown: 0 };
@@ -2679,7 +2851,7 @@ function resolve(
       if (v === 'NO') continue;
       const r = resolveRef(c, e.ref);
       if (!r) continue;
-      const sid = streamSymbol(r.cls, r.stream);
+      const sid = channelOf(c, m, e, streamSymbol(r.cls, r.stream), ctx);
       const condition = conditionText(e.guards?.filter((g) => verdictOf(g, c, m, ctx) !== 'MATCH'));
       const asyncNote = asyncText(e.cont);
       link({
@@ -2837,9 +3009,11 @@ function resolve(
     // Dans la méthode générique elle-même (aucun contexte), une branche choisie par un paramètre n'est
     // qu'une possibilité : elle n'est empruntée que pour certaines valeurs transmises.
     const chosenBy = !scope
-      ? cs.guards?.find(
-          (g) => g.on && m.params.includes(g.on.split('.')[0] ?? '') && (g.values?.length || g.instance),
-        )
+      ? cs.guards
+          ?.flatMap((g) => g.terms ?? [g])
+          .find(
+            (g) => g.on && m.params.includes(g.on.split('.')[0] ?? '') && (g.values?.length || g.instance),
+          )
       : undefined;
     if (chosenBy && confidence === 'CONFIRMED') {
       confidence = 'PROBABLE';
@@ -2956,7 +3130,8 @@ function resolve(
       for (const e of m.emits) {
         const r = resolveRef(c, e.ref);
         if (!r) continue;
-        const sid = streamSymbol(r.cls, r.stream);
+        const stream = streamSymbol(r.cls, r.stream);
+        const sid = channelOf(c, m, e, stream, undefined);
         link({
           from,
           to: sid,
@@ -2971,10 +3146,10 @@ function resolve(
             symbolOf(t.cls, t.method);
             link({
               from: t.id,
-              to: sid,
+              to: stream,
               kind: 'FEEDS',
               confidence: 'CONFIRMED',
-              reason: `la réponse de ${t.id.replace('#', '.')}() est poussée dans ${sid}`,
+              reason: `la réponse de ${t.id.replace('#', '.')}() est poussée dans ${stream}`,
               loc: e.loc,
             });
           }
@@ -3174,6 +3349,39 @@ function resolve(
     if (sym?.stream) {
       sym.stream.consumed = consumption(id).how;
       sym.stream.consumers = [...new Set(list.map((x) => x.by))].slice(0, 10);
+    }
+  }
+
+  // 3 bis. Canaux : un canal reprend les suites de son flux, sauf les traitements filtrés qui n'acceptent pas
+  // son type. Une garde dont une valeur n'est pas connue garde le traitement (jamais écarté sans preuve).
+  for (const [cid, ch] of channels) {
+    const parent = symbols.get(ch.stream);
+    if (parent)
+      symbols.set(cid, {
+        ...parent,
+        id: cid,
+        name: `${parent.name}⟨${ch.label}⟩`,
+        ...(parent.stream ? { stream: { ...parent.stream } } : {}),
+      });
+    link({
+      from: cid,
+      to: ch.stream,
+      kind: 'DERIVES',
+      confidence: 'CONFIRMED',
+      reason: `${cid} : les émissions ${ch.label} de ${ch.stream}`,
+      loc: ch.loc,
+    });
+    for (const l of [...links.values()]) {
+      if (l.from !== ch.stream || l.kind === 'DERIVES' || l.kind === 'FEEDS') continue;
+      const typed = typedStreams.get(l.to);
+      if (
+        typed &&
+        typed.source === ch.stream &&
+        !typed.keys.includes(undefined) &&
+        !typed.keys.includes(ch.key)
+      )
+        continue;
+      link({ ...l, from: cid, reason: `${l.reason} — émission ${ch.label}` });
     }
   }
 
@@ -3417,6 +3625,10 @@ function resolve(
     visit(sf);
     return out;
   };
+  if (limited.size > 0)
+    warnings.push(
+      `limite d’analyse contextuelle atteinte pour ${String(limited.size)} méthode(s) (${[...limited].slice(0, 3).join(', ')}${limited.size > 3 ? '…' : ''}) : leurs branches ne sont plus distinguées`,
+    );
   // Les symboles et les liens sont lus après streamOf et entryOf (qui peuvent en ajouter).
   return {
     get symbols() {
