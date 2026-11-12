@@ -50,7 +50,9 @@ import { resolveContracts, type MavenOptions } from './maven-resolve.js';
 // 8 : constantes Java entre fichiers (imports statiques, `Classe.CHAMP`), accès aux données hors Spring Data
 //     (EntityManager, JDBC, @Query classée), écritures des états du gabarit (signal, affectation), sources
 //     partielles (limites atteintes).
-export const ANALYZERS = `cartography-10;${RXJS_ANALYZER}`;
+// 11 : identité des classes (homonymes distingués, références et routes résolues par les imports), installation
+//      des abonnements (ngOnInit → flux) distincte de leur propagation.
+export const ANALYZERS = `cartography-11;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;
@@ -234,9 +236,14 @@ export async function runScan(
       // Les passerelles (routes, transformations, destinations) : suivies seulement là où un appel les désigne.
       const gateway = readGateways(read.files, config.entries.length > 0 ? config : undefined);
       if (gateway) sourceFacts.gateway = gateway;
-      if (read.limits.length > 0) {
+      // Un budget d'analyse épuisé (nœuds AST, durée, contextes) : une partie des fichiers lus n'est pas
+      // analysée. La source est dite partielle, jamais présentée comme complète.
+      const exhausted = (sourceFacts.ui?.warnings ?? []).filter((w) =>
+        /BUDGET_EXHAUSTED|limite d’analyse/.test(w),
+      );
+      if (read.limits.length > 0 || exhausted.length > 0) {
         scan.state = 'PARTIAL';
-        sourceFacts.partial = [...read.limits];
+        sourceFacts.partial = [...read.limits, ...new Set(exhausted)];
       }
       if (found.size === 0) scan.errors.push('aucune technologie reconnue dans cette source');
       facts.push(sourceFacts);

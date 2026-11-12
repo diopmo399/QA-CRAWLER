@@ -28,12 +28,14 @@ import type {
   MapListQuery,
   MapNode,
   MapPage,
+  UnresolvedPage,
   MapSubgraph,
   MapTrace,
   ScenarioLink,
   TraceDirection,
 } from '../sdk/core/cartography.js';
 import type { LastRun } from './coverage.js';
+import { flowOf, natureOf } from './investigate.js';
 
 /**
  * L'EXPLORATION PROGRESSIVE : un index du graphe d'un scan, construit une fois (puis gardé en cache par le
@@ -172,6 +174,29 @@ function paged<T>(items: T[], query: MapListQuery): MapPage<T> {
     page: current,
     size,
   };
+}
+
+/**
+ * Les relations lues mais non raccordées (« Liens non résolus ») : filtrées par type (`type`), cause
+ * (`status`) et texte (`q` : origine, cible, raison), paginées. Les comptes portent sur toutes, pas la page.
+ */
+export function unresolvedOf(index: MapIndex, query: MapListQuery = {}): UnresolvedPage {
+  const all = index.model.unresolved ?? [];
+  const q = query.q?.toLowerCase();
+  const items = all.filter(
+    (u) =>
+      (!query.type || u.kind === query.type) &&
+      (!query.status || u.cause === query.status) &&
+      (!q || `${u.from} ${u.to} ${u.reason}`.toLowerCase().includes(q)),
+  );
+  const byCause: UnresolvedPage['byCause'] = {};
+  const byKind: UnresolvedPage['byKind'] = {};
+  for (const u of all) {
+    byCause[u.cause] = (byCause[u.cause] ?? 0) + 1;
+    byKind[u.kind] = (byKind[u.kind] ?? 0) + 1;
+  }
+  const counted = Object.values(index.model.scan.unattached ?? {}).reduce((sum, n) => sum + n, 0);
+  return { ...paged(items, query), byCause, byKind, uncounted: Math.max(0, counted - all.length) };
 }
 
 const counted = (link: ScenarioLink): boolean =>
@@ -588,12 +613,23 @@ export function traceOf(
   const kinds = options.kinds?.length ? new Set(options.kinds) : undefined;
   const allowed = (edge: MapEdge): boolean => !NOT_JOURNEY.has(edge.kind) && (!kinds || kinds.has(edge.kind));
   const levels = new Map<string, number>([[start, 0]]);
+  // Le sens du flux de chaque relation (sa nature) : « A dépend de B » (donnée calculée à partir de B,
+  // condition qui lit B) fait circuler B vers A. L'aval suit le flux, l'amont le remonte ; une relation de
+  // provenance n'est donc jamais prise pour une étape d'exécution (un flux alimenté par une réponse ne
+  // ramène pas, en aval, à l'appel qui l'a alimenté).
+  const flowSteps = (id: string, sign: 1 | -1): string[] => {
+    const out: string[] = [];
+    for (const edge of [...(index.out.get(id) ?? []), ...(index.in.get(id) ?? [])]) {
+      if (!allowed(edge)) continue;
+      const [a, b] = flowOf(edge, natureOf(edge, index.nodes));
+      if (sign === 1 && a === id) out.push(b);
+      else if (sign === -1 && b === id) out.push(a);
+    }
+    return out;
+  };
   const frontier = new Map<string, MapTrace['frontier'][number]['reason']>();
   let truncated = false;
-  const steps = (id: string, sign: 1 | -1): string[] => {
-    const list = sign === 1 ? (index.out.get(id) ?? []) : (index.in.get(id) ?? []);
-    return list.filter(allowed).map((edge) => (sign === 1 ? edge.to : edge.from));
-  };
+  const steps = flowSteps;
   const signs: (1 | -1)[] = direction === 'UP' ? [-1] : direction === 'DOWN' ? [1] : [1, -1];
   let wave: { id: string; sign: 1 | -1 }[] = signs.map((sign) => ({ id: start, sign }));
   for (let level = 1; level <= depth && wave.length > 0; level += 1) {

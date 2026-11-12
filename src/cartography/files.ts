@@ -32,7 +32,8 @@ export interface ReadLimits {
 }
 
 export const DEFAULT_LIMITS: ReadLimits = {
-  maxFiles: 4_000,
+  // Une application Angular de 500 000 lignes compte près de 9 000 fichiers (gabarits et tests compris).
+  maxFiles: 20_000,
   maxFileBytes: 512 * 1024,
   maxDurationMs: 60_000,
 };

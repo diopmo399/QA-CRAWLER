@@ -18,6 +18,7 @@ import {
   type StaticValueSource,
 } from './model.js';
 import { sanitizeGraph } from './sanitize.js';
+import { ClassIdentity } from './class-identity.js';
 import type { SourceSet } from './source-set.js';
 import { buildRules, type RuleBuildComponent, type TemplateAction } from './rules/rule-builder.js';
 import type { ApplicationRule } from './rules/rule-model.js';
@@ -57,6 +58,11 @@ export interface GraphBuildOptions {
   maxAstNodes: number;
   maxDurationMs: number;
   now?: () => number;
+  /**
+   * L'identité des classes (homonymes distingués, références résolues par les imports), partagée avec les
+   * autres analyseurs de la même source pour qu'ils nomment les classes de la même façon.
+   */
+  classIdentity?: ClassIdentity;
 }
 
 /**
@@ -94,6 +100,18 @@ export function detectFramework(sources: SourceSet): StaticFramework {
  * appels HTTP, DTO, flux de données — en un graphe. Toute connaissance y est
  * STATIC_DISCOVERED : seule l'exploration la confirme.
  */
+/** Les types injectés d'une classe, résolus par les imports de son fichier (alias, homonymes). */
+function resolvedFact(fact: ClassFact, file: string, identity: ClassIdentity): ClassFact {
+  const injected: Record<string, string> = {};
+  let changed = false;
+  for (const [property, type] of Object.entries(fact.injected)) {
+    const resolved = identity.resolve(file, type) ?? type;
+    injected[property] = resolved;
+    if (resolved !== type) changed = true;
+  }
+  return changed ? { ...fact, injected } : fact;
+}
+
 export function buildStaticGraph(
   ts: TypeScriptModule,
   sources: SourceSet,
@@ -150,13 +168,22 @@ export function buildStaticGraph(
     }
   }
 
+  // Une classe par identité : deux classes de même nom dans deux fichiers sont gardées toutes les deux.
+  const identity = options.classIdentity ?? new ClassIdentity(sources.files);
   const classes = new Map<string, { fact: ClassFact; file: string }>();
   for (const fileFacts of facts)
-    for (const fact of fileFacts.classes)
-      if (!classes.has(fact.name)) classes.set(fact.name, { fact, file: fileFacts.file });
+    for (const fact of fileFacts.classes) {
+      const key = identity.key(fileFacts.file, fact.name);
+      if (!classes.has(key))
+        classes.set(key, { fact: resolvedFact(fact, fileFacts.file, identity), file: fileFacts.file });
+    }
 
-  // ---- routes
-  const routes = options.features.routes && angular ? flattenRoutes(facts) : [];
+  // ---- routes : le composant est le nom écrit dans le fichier des routes, résolu par ses imports (alias).
+  const routes = (options.features.routes && angular ? flattenRoutes(facts) : []).map((route) => {
+    if (!route.component) return route;
+    const resolved = identity.resolve(route.location.file, route.component);
+    return resolved && resolved !== route.component ? { ...route, component: resolved } : route;
+  });
 
   // ---- composants et gabarits
   const components: StaticComponentNode[] = [];

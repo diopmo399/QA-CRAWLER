@@ -1,0 +1,7 @@
+{
+  "name": "tracegraph-front",
+  "dependencies": {
+    "@angular/core": "17.0.0",
+    "rxjs": "7.8.0"
+  }
+}

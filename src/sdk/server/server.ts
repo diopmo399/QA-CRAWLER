@@ -234,6 +234,7 @@ import {
   listQuery,
   featureMapQuery,
   mapFeatureMap,
+  mapUnresolved,
   mapConcepts,
   mapFeature,
   mapFeatureFields,
@@ -4559,6 +4560,9 @@ async function handleCartography(
           return;
         case 'feature-map':
           json(await mapFeatureMap(project, id, featureMapQuery(params)));
+          return;
+        case 'unresolved':
+          json(await mapUnresolved(project, listQuery(params)));
           return;
         case 'field':
           json(

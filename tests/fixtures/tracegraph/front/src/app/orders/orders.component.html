@@ -1,0 +1,4 @@
+<button type="button" (click)="submit('Nouvelle')">Enregistrer</button>
+<button type="button" (click)="reload()">Recharger</button>
+<p *ngIf="status === 'INVALID'">Titre obligatoire</p>
+<p *ngIf="savedId">Commande enregistrée</p>

@@ -28,6 +28,7 @@ import {
 } from '../sdk/core/cartography.js';
 import { featureDetail, MAX_PAGE, outboundOf, type CoverageContext, type MapIndex } from './explorer.js';
 import { conditionRow } from './structure.js';
+import { flowOf, natureOf } from './investigate.js';
 
 /**
  * LA CARTE D'UNE FONCTIONNALITÉ (Parcours & Graphe) : ses éléments rangés en quatre couloirs dans un ordre
@@ -520,6 +521,25 @@ const EXPECTS_NEXT: ReadonlySet<FeatureGroup> = new Set([
  * ordonnée : l'arbre amont et l'arbre aval, chaque étape avec sa relation, son statut, sa preuve, et, au
  * bout de chaque branche, ce qui y est atteint (table, API externe, écran) ou la cause de l'arrêt.
  */
+/** La relation dans le sens de son flux : retournée quand sa nature fait circuler la cible vers l'origine. */
+function flowed(r: FeatureMapRelation, index: MapIndex): FeatureMapRelation {
+  if (r.kind === 'EXTERNAL_CALL') return r;
+  const edge = { kind: r.kind, from: r.from, to: r.to } as MapEdge;
+  const [a] = flowOf(edge, natureOf(edge, index.nodes));
+  if (a === r.from) return r;
+  return {
+    ...r,
+    from: r.to,
+    to: r.from,
+    fromName: r.toName,
+    toName: r.fromName,
+    fromLane: r.toLane,
+    toLane: r.fromLane,
+    fromGroup: r.toGroup,
+    toGroup: r.fromGroup,
+  };
+}
+
 function pathOf(
   index: MapIndex,
   items: ReadonlyMap<string, FeatureMapItem>,
@@ -536,7 +556,11 @@ function pathOf(
     if (list) list.push(r);
     else map.set(key, [r]);
   };
-  for (const r of unique) {
+  for (const unflowed of unique) {
+    // Le sens du flux (nature de la relation) : une provenance (« le flux dépend de la réponse ») ou une
+    // condition (« affiché si ») circule de la source vers ce qui en dépend. L'aval suit ce sens : un
+    // parcours ne remonte jamais, en aval, vers l'appel qui a alimenté un état partagé.
+    const r = flowed(unflowed, index);
     if (r.category !== 'CONTAINS') add(forward, r.from, r);
     // En amont, des flux de données on ne garde que « affiche » (la page qui affiche le composant).
     if (r.category !== 'DATA' || r.kind === 'DISPLAYS') add(backward, r.to, r);

@@ -567,6 +567,10 @@ export class CartographyController {
       await Promise.all([this.loadDetail(), this.loadFields()]);
       return;
     }
+    if (this.ui.tab === 'unresolved') {
+      await this.loadUnresolved();
+      return;
+    }
     if (this.ui.tab === 'journey') {
       if (!this.ui.features) await this.loadFeatures();
       if (!this.ui.feature && this.ui.features?.items[0]) this.ui.feature = this.ui.features.items[0].id;
@@ -579,6 +583,27 @@ export class CartographyController {
         this.ui.issues ? undefined : this.loadIssues(),
         this.ui.concept && !this.ui.conceptSheet ? this.loadConceptSheet() : undefined,
       ]);
+    }
+  }
+
+  /** Les liens non résolus du dernier scan (page, cause, recherche). */
+  private async loadUnresolved(): Promise<void> {
+    const ui = this.ui;
+    const page = await this.fetch('unresolved', (api, id, signal) =>
+      api.cartography.unresolved(
+        id,
+        {
+          page: ui.uPage,
+          size: ui.unresolved?.size ?? 20,
+          ...(ui.uCause ? { status: ui.uCause } : {}),
+          ...(ui.uQuery ? { q: ui.uQuery } : {}),
+        },
+        { signal },
+      ),
+    );
+    if (page) {
+      ui.unresolved = page;
+      ui.uPage = page.page;
     }
   }
 
@@ -1512,6 +1537,9 @@ export class CartographyController {
         } else if (list === 'actions') {
           ui.actCriteria.page = page;
           void this.run(() => this.loadActions());
+        } else if (list === 'unresolved') {
+          ui.uPage = page;
+          void this.run(() => this.loadUnresolved());
         }
         return true;
       }
@@ -1865,6 +1893,21 @@ export class CartographyController {
         setTimeout(() => {
           this.host.paint();
         }, 0);
+      return true;
+    }
+    if (name === 'u-cause' || name === 'u-q') {
+      if (name === 'u-cause') ui.uCause = value;
+      else ui.uQuery = value;
+      ui.uPage = 1;
+      if (name === 'u-q') this.searchLater(() => this.loadUnresolved());
+      else void this.run(() => this.loadUnresolved());
+      return true;
+    }
+    if (name === 'unresolved-size') {
+      ui.uPage = 1;
+      const size = Number(value) || 20;
+      if (ui.unresolved) ui.unresolved = { ...ui.unresolved, size };
+      void this.run(() => this.loadUnresolved());
       return true;
     }
     const criteria = (

@@ -345,8 +345,10 @@ export interface FieldConcept {
   status: MapConfidence | 'VALIDATED';
   /** Les étapes non démontrées (« lien non démontré : … »). */
   gaps: string[];
-  /** Des champs de même nom ailleurs, non reliés (homonymes), signalés et non fusionnés. */
+  /** Des champs de même nom ailleurs, non reliés (homonymes), signalés et non fusionnés (50 au plus). */
   homonyms: string[];
+  /** Le nombre total d'homonymes quand il dépasse la liste gardée. */
+  homonymCount?: number;
 }
 
 export const FIELD_ISSUE_KINDS = [
@@ -551,6 +553,47 @@ export interface CartographyModel {
   modules?: MapModule[];
   /** Le graphe de configuration : propriétés, profils, modules, générations, proxys, passerelles. */
   configGraph?: MapConfigGraph;
+  /**
+   * Les relations lues dans le code mais non raccordées au graphe (absent d'un scan antérieur) : jamais
+   * supprimées sans trace, consultables avec leur cause et leurs preuves (au plus MAX_UNRESOLVED_LINKS,
+   * le reste compté dans `scan.unattached`).
+   */
+  unresolved?: MapUnresolvedLink[];
+}
+
+/** Une page des relations non raccordées, et leurs comptes par cause et par type (toutes, pas la page). */
+export interface UnresolvedPage extends MapPage<MapUnresolvedLink> {
+  byCause: Partial<Record<UnresolvedCause, number>>;
+  byKind: Partial<Record<MapEdgeKind, number>>;
+  /** Relations non raccordées au-delà de celles qui sont gardées (seulement comptées). */
+  uncounted: number;
+}
+
+/** Au-delà, les relations non raccordées sont seulement comptées (par type, dans `scan.unattached`). */
+export const MAX_UNRESOLVED_LINKS = 5_000;
+
+/**
+ * Pourquoi une relation lue n'est pas dans le graphe : son origine ou sa cible n'y est pas représentée,
+ * sa cible n'a pas été trouvée par le résolveur, ou elle relie un élément à lui-même (récursion).
+ */
+export type UnresolvedCause =
+  'SOURCE_MISSING' | 'TARGET_MISSING' | 'BOTH_MISSING' | 'TARGET_UNKNOWN' | 'SELF';
+
+/**
+ * Une relation lue mais non raccordée : elle reste consultable (état UNRESOLVED) avec ce que le scan en
+ * sait, au lieu de disparaître. Elle n'est jamais présentée comme un lien du parcours.
+ */
+export interface MapUnresolvedLink {
+  /** `TYPE:origine->cible` (cible « ? » quand elle est inconnue). */
+  id: string;
+  kind: MapEdgeKind;
+  from: string;
+  to: string;
+  state: 'UNRESOLVED';
+  cause: UnresolvedCause;
+  /** Ce que le résolveur dit de la relation (mécanisme, raison de l'incertitude). */
+  reason: string;
+  evidence: Evidence[];
 }
 
 /** Les relations du graphe de configuration. */

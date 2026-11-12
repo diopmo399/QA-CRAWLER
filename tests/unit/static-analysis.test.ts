@@ -177,6 +177,24 @@ describe('static analysis: the Angular application graph (lots A–E)', () => {
     expect(sanitizeText('/api/x/ghp_1a2B3c4D5e6F7g8H9i0J1k2L3m4N')).toContain('[REDACTED]');
     expect(sanitizeText('https://h/api?api_key=secret123')).toContain('api_key=[REDACTED]');
   });
+
+  it('a long code name with digits is kept; a token stays masked', () => {
+    // 24 caractères et des chiffres : autrefois masqués, le composant disparaissait de l'analyse.
+    for (const name of [
+      'Contract125PageComponent',
+      'Oauth2AuthorizationCallbackComponent',
+      'Step3ConfirmationDialogComponent',
+      'HTTP2ConnectionPoolSettingsService',
+    ])
+      expect(sanitizeText(name)).toBe(name);
+    for (const token of [
+      'ghp_1a2B3c4D5e6F7g8H9i0J1k2L3m4N',
+      'x8Fq2LmZ9pQrT4vW1yBnC7kd',
+      'AKIAIOSFODNN7EXAMPLE1234',
+      'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6',
+    ])
+      expect(sanitizeText(`key ${token} end`)).toBe('key [REDACTED] end');
+  });
 });
 
 describe('static analysis: cache, budget, helpers', () => {

@@ -1062,8 +1062,9 @@ aucun fichier n'est exécuté ni modifié. Les liens symboliques ne sont pas sui
 et sorties de build (`node_modules`, `dist`, `target`…) ainsi que les fichiers lock
 (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`) sont ignorés ; les fichiers de secrets
 (`.env`, clés, `credentials*`, `secrets*`…) ne sont **jamais lus** et sont comptés. Des limites
-(4 000 fichiers, 512 Kio par fichier, 60 s par source) rendent un scan `PARTIAL`, jamais faux ; la note
-du scan nomme les premiers fichiers trop gros. Un scan
+(20 000 fichiers, 512 Kio par fichier, 60 s de lecture par source) rendent un scan `PARTIAL`, jamais faux ;
+un budget d'analyse épuisé (nœuds de syntaxe, durée, contextes d'appel) aussi. La note du scan nomme les
+premiers fichiers trop gros. Un scan
 est **incrémental** : une source dont l'empreinte n'a pas changé reprend ses faits. Un scan par projet
 à la fois, en arrière-plan, annulable ; une source en erreur n'arrête pas les autres.
 
@@ -1190,6 +1191,17 @@ clavier (flèches, + et −, 0 pour ajuster), plein écran (Échap pour sortir),
 réuni sur un nom). Sous le graphe, « Relations détectées » donne la source, la cible, le type, la
 confiance et la preuve de chaque lien de la vue (ou de l'étape, ou de la sélection), avec « Voir le
 code ». Les listes se parcourent au clavier (flèches haut et bas).
+
+### Liens non résolus
+
+Une relation lue dans le code mais non raccordée au graphe (extrémité absente des sources, cible non
+trouvée par le résolveur, relation d'un élément vers lui-même) n'est jamais supprimée sans trace.
+`GET /cartography/unresolved` (`client.cartography.unresolved(projectId, query)`) renvoie une page de
+ces liens : relation, origine, cible (`?` si inconnue), cause, raison et preuves ; `type` choisit le
+type de relation, `status` la cause, `q` cherche dans l'origine, la cible et la raison. La page donne
+aussi les totaux par cause (`byCause`) et par relation (`byKind`), et `uncounted` au-delà des 5 000
+liens gardés. L'onglet « Liens non résolus » de la Cartographie les affiche ; aucun n'entre dans un
+parcours. Voir `docs/architecture/link-reconciliation.md`.
 
 ### Parcours & Graphe
 

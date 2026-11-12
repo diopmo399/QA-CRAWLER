@@ -119,6 +119,7 @@ import type {
   MapStructure,
   ImpactReport,
   MapListQuery,
+  UnresolvedPage,
   MapPage,
   MapSubgraph,
   MapTrace,
@@ -565,6 +566,11 @@ export interface QaCrawlerClient {
       query?: FeatureMapQuery,
       options?: MapRequestOptions,
     ): Promise<FeatureMap>;
+    /**
+     * Les liens non résolus du dernier scan : relations lues mais non raccordées (cause, preuve), jamais
+     * présentées comme des liens du parcours. Critères : `type` (sorte de relation), `status` (cause), `q`.
+     */
+    unresolved(projectId: string, query?: MapListQuery, options?: MapRequestOptions): Promise<UnresolvedPage>;
     /** Une page des champs d'une seule fonctionnalité. */
     featureFields(
       projectId: string,
@@ -1430,6 +1436,13 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
         request(
           'GET',
           `${project(projectId)}/cartography/feature${queryString({ id })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      unresolved: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/unresolved${queryString({ ...query })}`,
           undefined,
           mapOptions.signal,
         ),

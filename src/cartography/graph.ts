@@ -19,7 +19,10 @@ import type {
   MapModule,
   CorrelationCause,
   CorrelationStep,
+  MapUnresolvedLink,
+  UnresolvedCause,
 } from '../sdk/core/cartography.js';
+import { MAX_UNRESOLVED_LINKS } from '../sdk/core/cartography.js';
 import type { CodeEndpoint } from '../sdk/core/incident-contracts.js';
 import { matchEndpoint, normalizePath } from '../incident/code/paths.js';
 import { membersOf } from './analyze-template.js';
@@ -132,6 +135,8 @@ export interface GraphOutput {
   configGraph?: MapConfigGraph;
   /** Les relations lues dans le code mais non raccordées (extrémité absente), par type. */
   unattached?: Partial<Record<MapEdgeKind, number>>;
+  /** Ces relations, consultables (au plus MAX_UNRESOLVED_LINKS). */
+  unresolved?: MapUnresolvedLink[];
 }
 
 /** Le type normalisé d'un champ, pour comparer les couches (text, number, date, boolean). */
@@ -177,11 +182,41 @@ const SUGGESTIONS: Partial<Record<CorrelationCause, string[]>> = {
   MULTIPLE_DESTINATIONS: ['préciser la destination (une seule source par adresse)'],
 };
 
+/** Les homonymes gardés par concept (le total est donné au-delà). */
+const MAX_HOMONYMS = 50;
+
+/** Les corps de requête qui ne sont pas des objets (aucun DTO à relier). */
+const SCALAR_BODY =
+  /^(String|CharSequence|Object|Integer|int|Long|long|Short|short|Double|double|Float|float|Boolean|boolean|BigDecimal|BigInteger|UUID|byte\[\]|Byte\[\]|Map(<.*>)?|JsonNode)$/;
+
 export function buildGraph(input: GraphInput): GraphOutput {
   const nodes = new Map<string, MapNode>();
   const edges = new Map<string, MapEdge>();
   /** Les relations lues mais non raccordables (extrémité non représentée), comptées par type. */
   const unattached: Partial<Record<MapEdgeKind, number>> = {};
+  /**
+   * Et gardées, consultables : une relation lue n'est jamais supprimée sans trace. Une même relation lue à
+   * plusieurs endroits garde toutes ses preuves.
+   */
+  const lost = new Map<string, MapUnresolvedLink>();
+  const lose = (
+    kind: MapEdgeKind,
+    from: string,
+    to: string,
+    cause: UnresolvedCause,
+    reason: string,
+    evidence: Evidence[],
+  ): void => {
+    const id = `${kind}:${from}->${to}`;
+    const existing = lost.get(id);
+    if (existing) {
+      existing.evidence.push(...evidence);
+      return;
+    }
+    unattached[kind] = (unattached[kind] ?? 0) + 1;
+    if (lost.size < MAX_UNRESOLVED_LINKS)
+      lost.set(id, { id, kind, from, to, state: 'UNRESOLVED', cause, reason, evidence: [...evidence] });
+  };
   const sourceById = new Map(input.sources.map((source) => [source.id, source]));
   const revisionOf = new Map(input.facts.map((facts) => [facts.sourceId, facts.revision]));
 
@@ -235,7 +270,19 @@ export function buildGraph(input: GraphInput): GraphOutput {
     evidence: Evidence[],
     detail?: MapEdge['detail'],
   ): void => {
-    if (!nodes.has(from) || !nodes.has(to) || from === to) return;
+    if (from === to) {
+      lose(kind, from, to, 'SELF', `${reason} (relation d’un élément vers lui-même : non tracée)`, evidence);
+      return;
+    }
+    if (!nodes.has(from) || !nodes.has(to)) {
+      const cause: UnresolvedCause = nodes.has(from)
+        ? 'TARGET_MISSING'
+        : nodes.has(to)
+          ? 'SOURCE_MISSING'
+          : 'BOTH_MISSING';
+      lose(kind, from, to, cause, reason, evidence);
+      return;
+    }
     const id = `${kind}:${from}->${to}`;
     const existing = edges.get(id);
     if (existing) {
@@ -738,7 +785,8 @@ export function buildGraph(input: GraphInput): GraphOutput {
           'méthode du contrôleur qui sert l’endpoint',
           [ev(src, endpoint.loc, 'STATIC_CODE', 'CONFIRMED')],
         );
-        if (endpoint.requestBody)
+        // Un corps scalaire (String, Long, byte[]…) n'est pas un DTO : aucune relation à chercher.
+        if (endpoint.requestBody && !SCALAR_BODY.test(endpoint.requestBody))
           edge(id, `DTO:${src}:${endpoint.requestBody}`, 'READS', 'CONFIRMED', '@RequestBody de l’endpoint', [
             ev(src, endpoint.loc, 'STATIC_CODE', 'CONFIRMED'),
           ]);
@@ -758,7 +806,18 @@ export function buildGraph(input: GraphInput): GraphOutput {
         });
       }
       for (const call of java.calls) {
-        if (!call.to) continue;
+        if (!call.to) {
+          // La cible n'a pas été résolue : la relation est gardée, consultable, sans destination inventée.
+          lose(
+            'CALLS',
+            `METHOD:${call.from}`,
+            '?',
+            'TARGET_UNKNOWN',
+            `appel dont la cible n’a pas été résolue (${call.status === 'UNKNOWN' ? 'type du receveur inconnu' : call.status})`,
+            [ev(src, call.loc, 'STATIC_CODE', 'UNKNOWN')],
+          );
+          continue;
+        }
         const from = `METHOD:${call.from}`;
         let to = `METHOD:${call.to}`;
         // Ambigu (plusieurs implémentations sans désignation) : chaque candidate est gardée, aucune confirmée.
@@ -781,16 +840,19 @@ export function buildGraph(input: GraphInput): GraphOutput {
           const target = owner.includes('.') ? undefined : classOfSymbol(call.to);
           const cls = target ? serviceId(target) : undefined;
           if (!cls || !nodes.has(cls) || !nodes.has(from)) {
-            unattached.CALLS = (unattached.CALLS ?? 0) + 1;
+            lose(
+              'CALLS',
+              from,
+              to,
+              nodes.has(from) ? 'TARGET_MISSING' : cls && nodes.has(cls) ? 'SOURCE_MISSING' : 'BOTH_MISSING',
+              `${reason} ; méthode cible absente des sources et classe non représentée`,
+              [ev(src, call.loc, 'STATIC_CODE', confidence)],
+            );
             continue;
           }
           to = cls;
           confidence = 'PROBABLE';
           reason = `méthode de ${owner} absente des sources (héritée d’une bibliothèque ou générée)`;
-        }
-        if (!nodes.has(from)) {
-          unattached.CALLS = (unattached.CALLS ?? 0) + 1;
-          continue;
         }
         edge(from, to, 'CALLS', confidence, reason, [ev(src, call.loc, 'STATIC_CODE', confidence)]);
       }
@@ -1973,6 +2035,9 @@ export function buildGraph(input: GraphInput): GraphOutput {
           edge(symbolNode(l.from), symbolNode(l.to), 'DEPENDS_ON', l.confidence, l.reason, evidence);
         else if (l.kind === 'FEEDS')
           edge(symbolNode(l.to), symbolNode(l.from), 'DEPENDS_ON', l.confidence, l.reason, evidence);
+        // L'installation d'un abonnement : la méthode lit le flux (une fois) ; ce n'est pas un appel.
+        else if (l.kind === 'SUBSCRIBES')
+          edge(symbolNode(l.from), symbolNode(l.to), 'READS', l.confidence, l.reason, evidence, flow);
         else edge(symbolNode(l.from), symbolNode(l.to), 'CALLS', l.confidence, l.reason, evidence, flow);
       }
       // L'écran fait ce que font ses méthodes : appelées par le gabarit ou le cycle de vie (sûr), sinon
@@ -3233,6 +3298,23 @@ export function buildGraph(input: GraphInput): GraphOutput {
           );
     }
   }
+  // Les relations par origine, lues une fois : les boucles des concepts et des anomalies ne parcourent plus
+  // toutes les relations pour chaque champ (coût quadratique mesuré sur une application de 500 000 lignes).
+  const outFrom = new Map<string, MapEdge[]>();
+  for (const e of edges.values()) {
+    const list = outFrom.get(e.from);
+    if (list) list.push(e);
+    else outFrom.set(e.from, [e]);
+  }
+  const hasColumn = [...nodes.values()].some((n) => n.kind === 'COLUMN');
+  const featureOrder = new Map(features.map((feature, i) => [feature.id, i]));
+  const featuresOfField = new Map<string, string[]>();
+  for (const feature of features)
+    for (const id of new Set(feature.fields)) {
+      const list = featuresOfField.get(id);
+      if (list) list.push(feature.id);
+      else featuresOfField.set(id, [feature.id]);
+    }
   const neighbours = new Map<string, Set<string>>();
   for (const e of edges.values()) {
     if (!FIELD_EDGES.has(e.kind) || !isField(e.from) || !isField(e.to)) continue;
@@ -3260,8 +3342,9 @@ export function buildGraph(input: GraphInput): GraphOutput {
         queue.push(next);
       }
     }
-    const inner = [...edges.values()].filter(
-      (e) => FIELD_EDGES.has(e.kind) && members.includes(e.from) && members.includes(e.to),
+    const memberSet = new Set(members);
+    const inner = members.flatMap((id) =>
+      (outFrom.get(id) ?? []).filter((e) => FIELD_EDGES.has(e.kind) && memberSet.has(e.to)),
     );
     const confidence: MapConfidence =
       inner.length === 0 ? 'CONFIRMED' : weakest(...inner.map((e) => e.confidence));
@@ -3270,9 +3353,9 @@ export function buildGraph(input: GraphInput): GraphOutput {
       id: `CONCEPT:${start.id}`,
       name: label ?? humanize(String(start.detail.javaField ?? start.detail.field ?? start.name)),
       fields: members,
-      features: features
-        .filter((feature) => feature.fields.some((id) => members.includes(id)))
-        .map((feature) => feature.id),
+      features: [...new Set(members.flatMap((id) => featuresOfField.get(id) ?? []))].sort(
+        (a, b) => (featureOrder.get(a) ?? 0) - (featureOrder.get(b) ?? 0),
+      ),
       layers: [
         ...new Set(members.map((id) => nodes.get(id)?.layer).filter((l): l is MapLayer => l !== undefined)),
       ],
@@ -3286,18 +3369,26 @@ export function buildGraph(input: GraphInput): GraphOutput {
     String(
       nodes.get(id)?.detail.javaField ?? nodes.get(id)?.detail.field ?? nodes.get(id)?.name ?? '',
     ).toLowerCase();
+  const conceptOrder = new Map(concepts.map((concept, i) => [concept.id, i]));
+  const conceptsOfKey = new Map<string, string[]>();
+  for (const concept of concepts)
+    for (const key of new Set(concept.fields.map(keyOf))) {
+      const list = conceptsOfKey.get(key);
+      if (list) list.push(concept.id);
+      else conceptsOfKey.set(key, [concept.id]);
+    }
   for (const concept of concepts) {
     const has = (layer: MapLayer): boolean => concept.fields.some((id) => nodes.get(id)?.layer === layer);
     const front = concept.fields.filter(
       (id) => nodes.get(id)?.layer === 'FRONTEND' && nodes.get(id)?.parent?.startsWith('COMPONENT:'),
     );
     for (const id of front) {
-      const sends = [...edges.values()].filter((e) => e.from === id && e.kind === 'SENDS');
+      const sends = (outFrom.get(id) ?? []).filter((e) => e.kind === 'SENDS');
       if (sends.length === 0)
         concept.gaps.push(`lien non démontré : ${nodes.get(id)?.name ?? id} n’est envoyé par aucun appel lu`);
       else if (!sends.some((e) => isField(e.to)) && sends.some((e) => !isField(e.to))) {
         const call = sends.find((e) => !isField(e.to))?.to ?? '';
-        const reached = [...edges.values()].some((e) => e.from === call && e.kind === 'CALLS');
+        const reached = (outFrom.get(call) ?? []).some((e) => e.kind === 'CALLS');
         concept.gaps.push(
           reached
             ? `lien non démontré : la propriété envoyée par ${nodes.get(id)?.name ?? id} n’existe pas dans le corps reçu`
@@ -3305,25 +3396,23 @@ export function buildGraph(input: GraphInput): GraphOutput {
         );
       }
     }
-    if (
-      (has('BACKEND') || has('BFF')) &&
-      !has('DATABASE') &&
-      [...nodes.values()].some((n) => n.kind === 'COLUMN')
-    )
+    if ((has('BACKEND') || has('BFF')) && !has('DATABASE') && hasColumn)
       concept.gaps.push('lien non démontré : aucune colonne persistée n’est reliée (mapping non lu)');
     const keys = new Set(concept.fields.map(keyOf));
-    concept.homonyms = concepts
-      .filter((other) => other.id !== concept.id && other.fields.some((id) => keys.has(keyOf(id))))
-      .map((other) => other.id);
+    const others = new Set<string>();
+    for (const key of keys)
+      for (const other of conceptsOfKey.get(key) ?? []) if (other !== concept.id) others.add(other);
+    const homonyms = [...others].sort((a, b) => (conceptOrder.get(a) ?? 0) - (conceptOrder.get(b) ?? 0));
+    // Une grande application a des centaines de champs « status » : la liste est bornée, le total est dit.
+    concept.homonyms = homonyms.slice(0, MAX_HOMONYMS);
+    if (homonyms.length > MAX_HOMONYMS) concept.homonymCount = homonyms.length;
   }
 
   // ── Anomalies des champs ──────────────────────────────────────────────────────────────────────
   const issues: FieldIssue[] = [];
   for (const n of nodes.values()) {
     if (n.kind !== 'FIELD' || n.layer !== 'FRONTEND' || !n.parent?.startsWith('COMPONENT:')) continue;
-    const sent = [...edges.values()].some(
-      (e) => e.from === n.id && (e.kind === 'SENDS' || e.kind === 'TRANSFORMS'),
-    );
+    const sent = (outFrom.get(n.id) ?? []).some((e) => e.kind === 'SENDS' || e.kind === 'TRANSFORMS');
     if (n.detail.bound === false && !sent)
       issues.push({
         kind: 'UNUSED',
@@ -3434,5 +3523,6 @@ export function buildGraph(input: GraphInput): GraphOutput {
     modules: contractIndex.moduleList(),
     configGraph: buildConfigGraph(input.facts),
     ...(Object.keys(unattached).length ? { unattached } : {}),
+    ...(lost.size ? { unresolved: [...lost.values()] } : {}),
   };
 }

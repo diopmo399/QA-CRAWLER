@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { ClassIdentity } from '../static-analysis/class-identity.js';
 import { buildStaticGraph } from '../static-analysis/graph-builder.js';
 import { sourceSetOf } from '../static-analysis/source-set.js';
 import { loadTypeScript, type TypeScriptModule } from '../static-analysis/typescript-loader.js';
@@ -86,7 +87,11 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
     root,
     relevant.map((file) => ({ path: file.path, text: file.text })),
   );
+  // Une identité des classes commune aux trois analyses (graphe statique, flux RxJS, gabarits) : elles
+  // désignent un composant ou un service homonyme de la même façon.
+  const identity = new ClassIdentity(relevant);
   const graph = buildStaticGraph(ts, sources, {
+    classIdentity: identity,
     applicationId: 'cartography',
     mode: 'SOURCE',
     features: {
@@ -99,8 +104,10 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
       rules: false,
     },
     analyzers: { angular: true, genericJs: false },
-    maxAstNodes: 2_000_000,
-    maxDurationMs: 60_000,
+    // Le budget suit le volume lu (environ un nœud pour deux caractères, jamais moins de 2 millions) : une
+    // grande application est analysée en entier ; un budget épuisé est signalé et rend la source partielle.
+    maxAstNodes: Math.max(2_000_000, Math.ceil(relevant.reduce((sum, f) => sum + f.text.length, 0) / 2)),
+    maxDurationMs: 120_000,
   });
   const texts = new Map(files.map((file) => [file.path, file.text]));
   const fields: UiField[] = graph.fields.map((field) => {
@@ -129,7 +136,7 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
     loc: call.location,
   }));
   // Les stores et flux RxJS : appels indirects (store → service → client HTTP), émissions, souscriptions.
-  const rx = analyzeRxjs(ts, relevant, new Map(direct.map((call) => [call.id, call])));
+  const rx = analyzeRxjs(ts, relevant, new Map(direct.map((call) => [call.id, call])), identity);
   // Une enveloppe (`ApiClient.post(url, body)`) n'est pas un appel : chacun de ses appelants en est un.
   // Une méthode générique aux appels HTTP distingués par branche : ses appels sont ceux de ses branches.
   const wrappers = new Set([...rx.wrappers, ...rx.branched]);
@@ -148,7 +155,7 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
       : call;
   });
   // La structure des gabarits (conteneurs, boutons, conditions) et l'origine des états lus.
-  const structure = analyzeTemplates(relevant, new Set(calls.map((call) => call.id)));
+  const structure = analyzeTemplates(relevant, new Set(calls.map((call) => call.id)), identity);
   // Chaque élément interactif est relié à ce que son expression déclenche (méthode, ou méthode vue dans le
   // contexte des valeurs écrites dans le gabarit) ; une expression qui ne mène à rien de résolu est dite.
   const uiDiagnostics: UiDiagnostic[] = [];
