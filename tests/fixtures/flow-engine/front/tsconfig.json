@@ -1,0 +1,7 @@
+{
+  // Les alias de chemin sont déclarés dans le fichier de base.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "strict": true /* commentaire toléré */
+  }
+}

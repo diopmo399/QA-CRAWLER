@@ -5,6 +5,7 @@ import type {
   CartographyModel,
   MapSource,
   ScanRecord,
+  ScanResolution,
   SourceScan,
 } from '../sdk/core/cartography.js';
 import { analyzeAngular } from './analyze-angular.js';
@@ -52,7 +53,8 @@ import { resolveContracts, type MavenOptions } from './maven-resolve.js';
 //     partielles (limites atteintes).
 // 11 : identité des classes (homonymes distingués, références et routes résolues par les imports), installation
 //      des abonnements (ngOnInit → flux) distincte de leur propagation.
-export const ANALYZERS = `cartography-11;${RXJS_ANALYZER}`;
+// 12 : imports par alias de chemin et fichiers barils, mesure de la reconstruction.
+export const ANALYZERS = `cartography-12;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;
@@ -73,6 +75,34 @@ export interface ScanOptions {
    * contrats absents des sources ; absente : aucune dépendance n'est lue.
    */
   maven?: MavenOptions;
+}
+
+/**
+ * La mesure d'un scan : liens par confiance, relations non raccordées par cause, interruptions de chaîne par
+ * code. Elle dit où la reconstruction perd des liens, sans rien citer du code analysé.
+ */
+export function resolutionOf(
+  graph: Pick<CartographyModel, 'edges' | 'unresolved'>,
+  unattached: ScanRecord['unattached'],
+  facts: readonly SourceFacts[],
+): ScanResolution {
+  const links: ScanResolution['links'] = { CONFIRMED: 0, PROBABLE: 0, UNKNOWN: 0 };
+  for (const edge of graph.edges) links[edge.confidence] += 1;
+  const unresolved: ScanResolution['unresolved'] = {};
+  for (const link of graph.unresolved ?? []) unresolved[link.cause] = (unresolved[link.cause] ?? 0) + 1;
+  const kept = graph.unresolved?.length ?? 0;
+  const all = Object.values(unattached ?? {}).reduce((sum, n) => sum + n, 0);
+  if (all > kept) unresolved.UNCOUNTED = all - kept;
+  const diagnostics: ScanResolution['diagnostics'] = {};
+  for (const source of facts)
+    for (const d of source.ui?.diagnostics ?? []) diagnostics[d.code] = (diagnostics[d.code] ?? 0) + 1;
+  const read = graph.edges.length + Math.max(all, kept);
+  return {
+    links,
+    unresolved,
+    diagnostics: Object.fromEntries(Object.entries(diagnostics).sort(([a], [b]) => (a < b ? -1 : 1))),
+    confirmedRate: read === 0 ? 0 : Math.round((links.CONFIRMED / read) * 10_000) / 10_000,
+  };
 }
 
 export const newScanId = (now: Date): string =>
@@ -298,6 +328,7 @@ export async function runScan(
     counts,
     edges: graph.edges.length,
     ...(unattached ? { unattached } : {}),
+    resolution: resolutionOf(graph, unattached, facts),
   };
   const base = { schema: 1 as const, scan: finished, ...graph };
   return { model: { ...base, apis: buildApis(base, facts) }, facts };

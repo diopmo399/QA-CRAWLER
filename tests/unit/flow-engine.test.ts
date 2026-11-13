@@ -295,6 +295,176 @@ describe('13 — inheritance and polymorphism', () => {
   });
 });
 
+describe('14 — imports through path aliases and barrel files', () => {
+  it('a homonymous class imported through a tsconfig alias is the one the alias designates', () => {
+    const reached = down('AdminPanelComponent#open');
+    expect(reached).toContain('PanelStore(admin)#load');
+    expect(reached).toContain('AdminPanelApi#list');
+    expect(reached).not.toContain('PanelStore(catalog)#load');
+    expect(reached).not.toContain('CatalogPanelApi#list');
+  });
+
+  it('a class renamed by a barrel (`export { A as B } from`) is followed to the file that declares it', () => {
+    const reached = down('CatalogPanelComponent#open');
+    expect(reached).toContain('PanelStore(catalog)#load');
+    expect(reached).toContain('CatalogPanelApi#list');
+    expect(reached).not.toContain('AdminPanelApi#list');
+  });
+
+  it('two constants of the same name: each call reads the one its import designates (alias, barrel)', () => {
+    const pathOf = (name: string): unknown => model.nodes.find((n) => short(n.id) === name)?.detail.path;
+    expect(pathOf('AdminPanelApi#list')).toBe('/api/c14/admin');
+    expect(pathOf('CatalogPanelApi#list')).toBe('/api/c14/catalog');
+  });
+
+  it('negative: an alias that no tsconfig declares chooses neither class, and says so', () => {
+    expect(edgesFrom('GhostPanelComponent#open')).toEqual([]);
+    expect(diagnostics('GhostPanelComponent#open').join(' ')).toContain(
+      'plusieurs classes s’appellent PanelStore',
+    );
+  });
+});
+
+describe('15 — negative and combined gates, values bounded by their written type', () => {
+  it('`!==` lets everything pass but the excluded type', () => {
+    expect(down('GateComponent#save')).toContain('GateApi#audit');
+    expect(down('GateComponent#load')).not.toContain('GateApi#audit');
+  });
+
+  it('a conjunction restricts by the term it can read; the negation of a list excludes its members', () => {
+    const save = down('GateComponent#save');
+    expect(save).toContain('GateStore.urgentSave$');
+    expect(save).not.toContain('GateStore.others$');
+    const load = down('GateComponent#load');
+    expect(load).toContain('GateStore.others$');
+    expect(load).not.toContain('GateStore.urgentSave$');
+    expect(load).not.toContain('GateApi#save');
+  });
+
+  it('an unknown value of a literal union follows each admitted value, as a possibility only', () => {
+    const reached = down('GateComponent#forward');
+    expect(reached).toContain("GateStore#dispatch⟨type='SAVE'⟩");
+    expect(reached).toContain("GateStore#dispatch⟨type='REJECT'⟩");
+    expect(reached).toContain('GateApi#audit');
+    // LOAD n'est pas admis par le type : le traitement des « autres » n'est jamais atteint.
+    expect(reached).not.toContain('GateStore.others$');
+    expect(reached).not.toContain('GateApi#list');
+    const link = edge('GateComponent#forward', "GateStore#dispatch⟨type='SAVE'⟩");
+    expect(link?.confidence).toBe('PROBABLE');
+    expect(link?.reason).toContain('le type écrit de action.type n’admet que 2 valeurs');
+  });
+
+  it('two members of an enum: the third branch is never followed', () => {
+    const reached = down('GateComponent#apply');
+    expect(reached).toContain('GateApi#save');
+    expect(reached).toContain('GateApi#list');
+    expect(reached).not.toContain('GateApi#remove');
+  });
+
+  it('a type that fixes the field gives one value, still only probable (a type is not a literal)', () => {
+    const link = edge('GateComponent#resend', "GateStore#dispatch⟨type='SAVE'⟩");
+    expect(link?.confidence).toBe('PROBABLE');
+    expect(link?.reason).toContain('valeur déduite du type écrit');
+    expect(down('GateComponent#resend')).not.toContain('GateApi#list');
+  });
+
+  it('negative: a type that admits anything excludes nothing, and the break is said', () => {
+    const reached = down('GateComponent#replay');
+    for (const api of ['GateApi#audit', 'GateApi#save', 'GateApi#list']) expect(reached).toContain(api);
+    expect(diagnostics('GateComponent#replay').join(' ')).toContain('n’est pas déterminable statiquement');
+  });
+});
+
+describe('16 — NgRx: actions, effects, reducers, selectors', () => {
+  it('a dispatched action reaches the effect that accepts its creator, and only that one', () => {
+    const reached = down('OrderPageComponent#refresh');
+    expect(reached).toContain("Store#dispatch⟨type='[Orders] Load'⟩");
+    expect(reached).toContain('OrderEffects.load$');
+    expect(reached).toContain('OrderApi#list');
+    expect(reached).not.toContain('OrderEffects.save$');
+    expect(reached).not.toContain('OrderApi#save');
+    expect(reached).not.toContain('OrderApi#remove');
+  });
+
+  it('the action an effect returns goes back to the store: an effect starts another, then the reducer', () => {
+    const reached = down('OrderPageComponent#save');
+    expect(reached).toContain('OrderEffects.save$');
+    expect(reached).toContain('OrderApi#save');
+    // save$ rend loadOrders() : load$ repart, puis son action de succès atteint le réducteur.
+    expect(reached).toContain("Store.actions⟨type='[Orders] Load'⟩");
+    expect(reached).toContain('OrderEffects.load$');
+    expect(reached).toContain("Store.actions⟨type='[Orders] Load Success'⟩");
+    expect(reached).toContain('ordersReducer.state');
+    expect(reached).not.toContain('OrderApi#remove');
+  });
+
+  it('a member of an action group is matched by its generated name; `dispatch: false` returns nothing', () => {
+    const reached = down('OrderPageComponent#remove');
+    expect(reached).toContain("Store#dispatch⟨type='[Order Page] Remove Order'⟩");
+    expect(reached).toContain('OrderEffects.remove$');
+    expect(reached).toContain('OrderEffects.audit$');
+    expect(reached).toContain('OrderApi#audit');
+    // Aucune action ne repart de audit$ (aucun canal du store atteint depuis lui).
+    expect(edgesFrom('OrderEffects.audit$').some((e) => /Store\.actions⟨/.test(e.to))).toBe(false);
+    expect(edgesFrom('OrderEffects.remove$').some((e) => /Store\.actions⟨/.test(e.to))).toBe(true);
+  });
+
+  it('a reducer only receives the types of its `on`', () => {
+    const into = model.edges.filter((e) => short(e.to) === 'ordersReducer.state').map((e) => short(e.from));
+    expect(into).toContain("Store.actions⟨type='[Orders] Save'⟩");
+    expect(into).toContain("Store.actions⟨type='[Orders] Load Success'⟩");
+    expect(into).not.toContain("Store.actions⟨type='[Orders] Load'⟩");
+    expect(into).not.toContain("Store.actions⟨type='[Order Page] Opened'⟩");
+  });
+
+  it('a selector reads the state of the reducer registered under its feature key', () => {
+    expect(edge('OrderPageComponent.items$', 'ordersReducer.state')?.confidence).toBe('CONFIRMED');
+    expect(edge('OrderPageComponent.busy', 'ordersReducer.state')).toBeDefined();
+    // Du bouton à l'écran : l'action enregistrée finit par mettre à jour ce que le composant affiche.
+    expect(down('OrderPageComponent#save')).toContain('OrderPageComponent.items$');
+  });
+
+  it('negative: an action nobody handles reaches nothing; a selector of an unregistered key reads no reducer', () => {
+    const reached = down('OrderPageComponent#open');
+    expect(reached.filter((n) => /Effects|Api|Reducer/.test(n))).toEqual([]);
+    expect(diagnostics('OrderPageComponent#open').join(' ')).toContain('ni souscrit ni traité');
+    expect(edge('OrderPageComponent.ghost$', 'ordersReducer.state')).toBeUndefined();
+  });
+});
+
+describe('17 — NgRx component store', () => {
+  it('calling an effect runs its pipeline: the store subscribes it, nothing is left to the caller', () => {
+    const reached = down('TodoComponent#ngOnInit');
+    expect(reached).toContain('TodoStore#load');
+    expect(reached).toContain('TodoApi#list');
+    expect(reached).toContain('TodoStore#setItems');
+    expect(reached).not.toContain('TodoApi#remove');
+    expect(edge('TodoComponent#ngOnInit', 'TodoStore#load')?.confidence).toBe('CONFIRMED');
+    expect(edge('TodoStore#load', 'TodoApi#list')?.confidence).toBe('CONFIRMED');
+    expect(diagnostics('TodoComponent#ngOnInit')).toEqual([]);
+  });
+
+  it('each effect keeps its own call', () => {
+    const reached = down('TodoComponent#remove');
+    expect(reached).toContain('TodoApi#remove');
+    expect(reached).not.toContain('TodoApi#list');
+  });
+});
+
+describe('0 — the measure of a scan', () => {
+  it('counts the links by confidence and the breaks by cause, without any code', () => {
+    const resolution = model.scan.resolution;
+    expect(resolution).toBeDefined();
+    const links = resolution?.links ?? { CONFIRMED: 0, PROBABLE: 0, UNKNOWN: 0 };
+    expect(links.CONFIRMED + links.PROBABLE + links.UNKNOWN).toBe(model.edges.length);
+    expect(links.PROBABLE).toBeGreaterThan(0);
+    expect(resolution?.diagnostics.CLASS_AMBIGUOUS).toBe(1);
+    expect(resolution?.diagnostics.SERVICE_NOT_FOUND).toBe(1);
+    expect(resolution?.confirmedRate).toBeCloseTo(links.CONFIRMED / model.edges.length, 3);
+    expect(JSON.stringify(resolution)).not.toMatch(/Component|Store|\.ts/);
+  });
+});
+
 describe('12 — cache and invalidation', () => {
   let work: string;
   afterAll(async () => {

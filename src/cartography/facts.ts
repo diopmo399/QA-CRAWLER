@@ -145,6 +145,7 @@ export interface UiDiagnostic {
   at: string;
   code:
     | 'SERVICE_NOT_FOUND'
+    | 'CLASS_AMBIGUOUS'
     | 'METHOD_NOT_FOUND'
     | 'SUBJECT_NO_CONSUMER'
     | 'STREAM_NOT_SUBSCRIBED'

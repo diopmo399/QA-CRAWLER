@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { ClassIdentity } from '../static-analysis/class-identity.js';
 import { buildStaticGraph } from '../static-analysis/graph-builder.js';
+import { isTsConfig } from '../static-analysis/module-resolution.js';
 import { sourceSetOf } from '../static-analysis/source-set.js';
 import { loadTypeScript, type TypeScriptModule } from '../static-analysis/typescript-loader.js';
 import { analyzeRxjs } from './analyze-rxjs.js';
@@ -89,7 +90,10 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
   );
   // Une identité des classes commune aux trois analyses (graphe statique, flux RxJS, gabarits) : elles
   // désignent un composant ou un service homonyme de la même façon.
-  const identity = new ClassIdentity(relevant);
+  const identity = new ClassIdentity(
+    relevant,
+    files.filter((file) => isTsConfig(file.path)),
+  );
   const graph = buildStaticGraph(ts, sources, {
     classIdentity: identity,
     applicationId: 'cartography',

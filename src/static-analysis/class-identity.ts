@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { ModuleResolver, type SourceText } from './module-resolution.js';
 
 /**
  * L'IDENTITÉ DES CLASSES d'une source TypeScript. Une classe est d'abord désignée par son nom ; deux classes
@@ -6,12 +7,14 @@ import path from 'node:path';
  * chacune une identité distincte, « ListComponent(admin/list) », au lieu que la seconde soit ignorée. Une
  * référence (type injecté, classe de base, composant d'une route) est résolue par les imports du fichier
  * qui l'écrit, alias compris (`import { ListComponent as AdminList }`), jamais par le nom seul quand il est
- * ambigu : une référence ambiguë reste non résolue plutôt que d'être attribuée au hasard.
+ * ambigu : une référence ambiguë reste non résolue plutôt que d'être attribuée au hasard. Un import par alias
+ * de chemin (`@app/…`, déclaré dans un `tsconfig` de la source) ou par un fichier baril (`export * from`) est
+ * suivi jusqu'au fichier qui déclare la classe.
  */
 export interface ImportBinding {
   /** Le nom exporté par le module (`ListComponent` dans `ListComponent as AdminList`). */
   name: string;
-  /** Le fichier du dépôt qui l'exporte (chemin relatif à la source), quand l'import est relatif et trouvé. */
+  /** Le fichier du dépôt qui l'exporte (chemin relatif à la source), quand l'import mène à un fichier lu. */
   file?: string;
   /** Le module tel qu'écrit (`./admin/list/list.component`, `@angular/core`). */
   specifier: string;
@@ -36,12 +39,14 @@ export function importBindingsOf(
   file: string,
   text: string,
   known: ReadonlySet<string>,
+  resolver?: ModuleResolver,
 ): Map<string, ImportBinding> {
   const out = new Map<string, ImportBinding>();
   for (const m of withoutComments(text).matchAll(IMPORT)) {
     const specifier = m[2] ?? '';
     let target: string | undefined;
-    if (specifier.startsWith('.')) {
+    if (resolver) target = resolver.resolve(file, specifier);
+    else if (specifier.startsWith('.')) {
       const base = path.posix
         .normalize(path.posix.join(path.posix.dirname(file), specifier))
         .replace(/\.js$/, '');
@@ -69,10 +74,14 @@ export class ClassIdentity {
   private readonly imports = new Map<string, Map<string, ImportBinding>>();
   private readonly texts: ReadonlyMap<string, string>;
   private readonly known: ReadonlySet<string>;
+  /** Les imports de la source : relatifs, par alias de chemin, à travers les fichiers barils. */
+  readonly modules: ModuleResolver;
 
-  constructor(files: readonly { path: string; text: string }[]) {
+  /** `configs` : les `tsconfig*.json` de la source, quand ils ne sont pas parmi `files`. */
+  constructor(files: readonly SourceText[], configs?: readonly SourceText[]) {
     this.texts = new Map(files.map((f) => [f.path, f.text]));
     this.known = new Set(files.map((f) => f.path));
+    this.modules = new ModuleResolver(files, configs ?? files);
     for (const f of files) {
       if (!isAnalyzed(f.path)) continue;
       for (const name of new Set(declaredClasses(f.text))) {
@@ -120,7 +129,7 @@ export class ClassIdentity {
   importsOf(file: string): Map<string, ImportBinding> {
     let found = this.imports.get(file);
     if (!found) {
-      found = importBindingsOf(file, this.texts.get(file) ?? '', this.known);
+      found = importBindingsOf(file, this.texts.get(file) ?? '', this.known, this.modules);
       this.imports.set(file, found);
     }
     return found;
@@ -138,9 +147,22 @@ export class ClassIdentity {
     if (imported) {
       if (imported.file && this.declarations.get(imported.name)?.includes(imported.file))
         return this.key(imported.file, imported.name);
-      // Un module hors du dépôt, ou un fichier qui ne déclare pas la classe (réexport) : le nom exporté.
+      // Un fichier qui ne déclare pas la classe (baril) : ses réexports sont suivis jusqu'à la déclaration.
+      const origin = imported.file ? this.modules.origin(imported.file, imported.name) : undefined;
+      if (origin && this.declarations.get(origin.name)?.includes(origin.file))
+        return this.key(origin.file, origin.name);
+      // Un module hors du dépôt, ou une classe que rien de lu ne déclare : le nom exporté.
       return this.duplicated(imported.name) ? undefined : imported.name;
     }
     return this.duplicated(ref) ? undefined : ref;
+  }
+
+  /**
+   * Le fichier de la source qui déclare `local`, importé par `fromFile` (alias et barils suivis), et le nom
+   * qu'il y porte ; undefined : `local` n'est pas importé, ou vient d'un module hors de la source.
+   */
+  originOf(fromFile: string, local: string): { file: string; name: string } | undefined {
+    const imported = this.importsOf(fromFile).get(local);
+    return imported?.file ? this.modules.origin(imported.file, imported.name) : undefined;
   }
 }
