@@ -186,7 +186,8 @@ describe('Correction manager — a table row is bound to the run data, never to 
     expect(String(seen.history)).toMatch(/Correction\s[\s\S]*Ligne\s*:?\s+(contient\s+)?[\w.-]+/);
     expect(String(seen.history).split('Correction').pop()).not.toContain('3024');
     expect(outcome.result.files.yaml).toContain('${testData:');
-    expect(outcome.result.files.yaml).not.toContain('3024');
+    // Les commentaires citent l'identifiant de session, qui porte la date et l'heure : seules les étapes comptent.
+    expect(outcome.result.files.yaml.replace(/^\s*#.*$/gm, '')).not.toContain('3024');
     expect(String(seen.secondReplay)).toContain('Rejeu réussi');
   });
 });
