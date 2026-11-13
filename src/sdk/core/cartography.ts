@@ -288,6 +288,18 @@ export interface ScanRecord {
    * extrémité n'y est pas représentée. Elles ne sont jamais perdues sans être comptées.
    */
   unattached?: Partial<Record<MapEdgeKind, number>>;
+  /**
+   * La mesure de la reconstruction (absent d'un scan antérieur) : ce qui est démontré, ce qui reste
+   * candidat, ce qui n'est pas raccordé et pourquoi. Des compteurs seulement, jamais de code.
+   */
+  resolution?: ScanResolution;
+  /**
+   * L'empreinte de ce que le scan a reçu (sources configurées, version des analyseurs) : deux scans de même
+   * empreinte dont aucune source n'a changé donnent le même graphe.
+   */
+  inputs?: string;
+  /** Le graphe est celui du scan précédent, repris tel quel : rien n'avait changé (ni source, ni analyseur). */
+  graphReused?: boolean;
   edges: number;
   errors: string[];
   /** Les racines de métadonnées lues (locales, autorisées) : état, fichiers lus, éléments ignorés. */
@@ -298,6 +310,23 @@ export interface ScanRecord {
     files: number;
     notes: string[];
   }[];
+}
+
+/** Ce qu'un scan a démontré, laissé candidat ou perdu, en nombres. */
+export interface ScanResolution {
+  /** Les liens du graphe, par confiance. */
+  links: Record<MapConfidence, number>;
+  /** Les relations lues mais non raccordées, par cause (toutes, y compris au-delà du plafond gardé). */
+  unresolved: Partial<Record<UnresolvedCause | 'UNCOUNTED', number>>;
+  /** Les interruptions de chaîne relevées par l'analyse du frontal, par code de diagnostic. */
+  diagnostics: Record<string, number>;
+  /** La part des relations lues (liens + non raccordées) qui sont des liens confirmés, de 0 à 1. */
+  confirmedRate: number;
+  /**
+   * Les récepteurs d'appel que la lecture du code ne nommait pas et qui ont été soumis au vérificateur de
+   * types TypeScript, et ceux qu'il a rattachés à une classe de la source (absent : aucune question posée).
+   */
+  typeQueries?: { asked: number; answered: number };
 }
 
 /** Un maillon de la chaîne d'une fonctionnalité, couche par couche. */

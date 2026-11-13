@@ -449,6 +449,8 @@ export function buildGraph(input: GraphInput): GraphOutput {
             ...(call.via ? { via: call.via } : {}),
             ...(call.expression ? { urlExpression: call.expression } : {}),
             ...(call.unresolved ? { unresolved: call.unresolved } : {}),
+            // Les intercepteurs enregistrés voient passer cette requête (en-têtes, erreurs, reprises).
+            ...(ui.interceptors?.length ? { interceptors: ui.interceptors.map((i) => i.name) } : {}),
           },
         );
       // Les stores et flux RxJS : méthodes traversées (composant, store, service) et flux.

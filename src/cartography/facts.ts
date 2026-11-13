@@ -145,6 +145,7 @@ export interface UiDiagnostic {
   at: string;
   code:
     | 'SERVICE_NOT_FOUND'
+    | 'CLASS_AMBIGUOUS'
     | 'METHOD_NOT_FOUND'
     | 'SUBJECT_NO_CONSUMER'
     | 'STREAM_NOT_SUBSCRIBED'
@@ -300,6 +301,13 @@ export interface UiFacts {
   symbols?: UiSymbol[];
   links?: UiLink[];
   diagnostics?: UiDiagnostic[];
+  /**
+   * Les intercepteurs HTTP enregistrés (`HTTP_INTERCEPTORS`, `withInterceptors`) : chaque requête de la
+   * source les traverse. Ils sont listés sur chaque appel HTTP, pas reliés un à un.
+   */
+  interceptors?: { name: string; functional: boolean; loc: Loc }[];
+  /** Les récepteurs soumis au vérificateur de types TypeScript, et ceux qu'il a rattachés à une classe. */
+  inference?: { asked: number; answered: number };
   /**
    * Les règles du proxy de développement (proxy.conf.json) : préfixe, cible, réécriture du chemin. Une
    * réécriture (`"^/api": ""`) est la seule preuve qui permet de retirer un préfixe pour comparer les routes.

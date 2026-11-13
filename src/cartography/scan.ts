@@ -1,10 +1,11 @@
 import { buildApis } from './apis.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type {
   CartographyConfig,
   CartographyModel,
   MapSource,
   ScanRecord,
+  ScanResolution,
   SourceScan,
 } from '../sdk/core/cartography.js';
 import { analyzeAngular } from './analyze-angular.js';
@@ -52,13 +53,19 @@ import { resolveContracts, type MavenOptions } from './maven-resolve.js';
 //     partielles (limites atteintes).
 // 11 : identité des classes (homonymes distingués, références et routes résolues par les imports), installation
 //      des abonnements (ngOnInit → flux) distincte de leur propagation.
-export const ANALYZERS = `cartography-11;${RXJS_ANALYZER}`;
+// 12 : imports par alias de chemin et fichiers barils, mesure de la reconstruction.
+// 13 : câblage Spring (@Qualifier, nom de bean écrit, @Profile), fournisseurs Angular et intercepteurs.
+export const ANALYZERS = `cartography-13;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;
   allowedRoots: readonly string[];
   incremental: boolean;
-  previous?: { facts: readonly SourceFacts[]; sources: readonly SourceScan[] };
+  /**
+   * Le scan précédent : ses faits et l'état de ses sources (une source inchangée reprend ses faits) ; et son
+   * modèle, pour reprendre le graphe tel quel quand rien n'a changé du tout.
+   */
+  previous?: { facts: readonly SourceFacts[]; sources: readonly SourceScan[]; model?: CartographyModel };
   limits?: ReadLimits;
   signal?: AbortSignal;
   now?: () => Date;
@@ -73,6 +80,60 @@ export interface ScanOptions {
    * contrats absents des sources ; absente : aucune dépendance n'est lue.
    */
   maven?: MavenOptions;
+}
+
+/**
+ * La mesure d'un scan : liens par confiance, relations non raccordées par cause, interruptions de chaîne par
+ * code. Elle dit où la reconstruction perd des liens, sans rien citer du code analysé.
+ */
+export function resolutionOf(
+  graph: Pick<CartographyModel, 'edges' | 'unresolved'>,
+  unattached: ScanRecord['unattached'],
+  facts: readonly SourceFacts[],
+): ScanResolution {
+  const links: ScanResolution['links'] = { CONFIRMED: 0, PROBABLE: 0, UNKNOWN: 0 };
+  for (const edge of graph.edges) links[edge.confidence] += 1;
+  const unresolved: ScanResolution['unresolved'] = {};
+  for (const link of graph.unresolved ?? []) unresolved[link.cause] = (unresolved[link.cause] ?? 0) + 1;
+  const kept = graph.unresolved?.length ?? 0;
+  const all = Object.values(unattached ?? {}).reduce((sum, n) => sum + n, 0);
+  if (all > kept) unresolved.UNCOUNTED = all - kept;
+  const diagnostics: ScanResolution['diagnostics'] = {};
+  for (const source of facts)
+    for (const d of source.ui?.diagnostics ?? []) diagnostics[d.code] = (diagnostics[d.code] ?? 0) + 1;
+  const read = graph.edges.length + Math.max(all, kept);
+  const typeQueries = { asked: 0, answered: 0 };
+  for (const source of facts) {
+    typeQueries.asked += source.ui?.inference?.asked ?? 0;
+    typeQueries.answered += source.ui?.inference?.answered ?? 0;
+  }
+  return {
+    ...(typeQueries.asked > 0 ? { typeQueries } : {}),
+    links,
+    unresolved,
+    diagnostics: Object.fromEntries(Object.entries(diagnostics).sort(([a], [b]) => (a < b ? -1 : 1))),
+    confirmedRate: read === 0 ? 0 : Math.round((links.CONFIRMED / read) * 10_000) / 10_000,
+  };
+}
+
+/** L'empreinte des entrées d'un scan : les sources configurées et la version des analyseurs. */
+export function inputsOf(config: CartographyConfig): string {
+  const sources = config.sources.map((s) => [
+    s.id,
+    s.layer,
+    s.kind ?? 'LOCAL',
+    s.path,
+    s.repoUrl ?? '',
+    s.branch ?? '',
+    s.commit ?? '',
+    s.include,
+    s.enabled,
+  ]);
+  const metadata = (config.metadata ?? []).map((m) => [m.id, m.path, m.enabled]);
+  return createHash('sha256')
+    .update(JSON.stringify({ analyzers: ANALYZERS, sources, metadata }))
+    .digest('hex')
+    .slice(0, 16);
 }
 
 export const newScanId = (now: Date): string =>
@@ -279,7 +340,38 @@ export async function runScan(
       entry.notes.push(error instanceof Error ? error.message : String(error));
     }
   }
-  const { unattached, ...graph } = buildGraph({ sources: options.config.sources, facts });
+  // Rien n'a changé depuis le scan précédent (mêmes entrées, chaque source reprise à la même révision, aucune
+  // métadonnée relue) : son graphe est repris tel quel au lieu d'être reconstruit à l'identique.
+  const inputs = inputsOf(options.config);
+  const before = options.incremental ? options.previous?.model : undefined;
+  const active = record.sources.filter((entry) => entry.state !== 'DISABLED');
+  const unchanged =
+    before !== undefined &&
+    before.scan.inputs === inputs &&
+    !options.signal?.aborted &&
+    (record.metadata ?? []).every((entry) => entry.state === 'DISABLED') &&
+    active.length > 0 &&
+    active.every(
+      (entry) =>
+        entry.state === 'REUSED' &&
+        entry.revision === before.scan.sources.find((s) => s.sourceId === entry.sourceId)?.revision,
+    );
+  const { unattached, ...graph } = unchanged
+    ? {
+        unattached: before.scan.unattached,
+        nodes: before.nodes,
+        edges: before.edges,
+        features: before.features,
+        concepts: before.concepts,
+        issues: before.issues,
+        ...(before.correlations ? { correlations: before.correlations } : {}),
+        ...(before.contracts ? { contracts: before.contracts } : {}),
+        ...(before.contractDiffs ? { contractDiffs: before.contractDiffs } : {}),
+        ...(before.modules ? { modules: before.modules } : {}),
+        ...(before.configGraph ? { configGraph: before.configGraph } : {}),
+        ...(before.unresolved ? { unresolved: before.unresolved } : {}),
+      }
+    : buildGraph({ sources: options.config.sources, facts });
   const counts: ScanRecord['counts'] = {};
   for (const node of graph.nodes) counts[node.kind] = (counts[node.kind] ?? 0) + 1;
   counts.FEATURE = graph.features.length;
@@ -298,7 +390,11 @@ export async function runScan(
     counts,
     edges: graph.edges.length,
     ...(unattached ? { unattached } : {}),
+    resolution: resolutionOf(graph, unattached, facts),
+    inputs,
+    ...(unchanged ? { graphReused: true } : {}),
   };
   const base = { schema: 1 as const, scan: finished, ...graph };
-  return { model: { ...base, apis: buildApis(base, facts) }, facts };
+  const apis = unchanged && before.apis ? before.apis : buildApis(base, facts);
+  return { model: { ...base, apis }, facts };
 }

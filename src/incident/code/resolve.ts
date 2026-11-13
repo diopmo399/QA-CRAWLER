@@ -260,7 +260,10 @@ function executedIn(
 }
 
 /** Le type statique du receveur d'un appel Java (`champ.m()`, `Type.m()`), s'il est indexé. */
-function receiverOf(ctx: ResolveContext, call: CodeCall): { type: CodeSymbol; field?: string } | undefined {
+function receiverOf(
+  ctx: ResolveContext,
+  call: CodeCall,
+): { type: CodeSymbol; field?: string; qualifier?: string } | undefined {
   const from = ctx.byId.get(call.from);
   if (!from || from.layer === 'FRONTEND') return undefined;
   const match = /^(?:this\s*\.\s*)?([A-Za-z_$][\w$]*)\s*(?:\.|::)/.exec(call.text);
@@ -270,11 +273,23 @@ function receiverOf(ctx: ResolveContext, call: CodeCall): { type: CodeSymbol; fi
   const declared = fieldType(owner, receiver);
   const typeName = declared ?? (/^[A-Z]/.test(receiver) ? receiver : undefined);
   const type = typeName ? pickJavaType(ctx, from.applicationId, typeName, owner) : undefined;
-  return type ? { type, ...(declared ? { field: receiver } : {}) } : undefined;
+  // `@Qualifier("nom")` sur le champ (ou le paramètre de constructeur qui l'alimente).
+  const qualifier = declared
+    ? list(owner, 'qualifiers')
+        .find((entry) => entry.startsWith(`${receiver}:`))
+        ?.slice(receiver.length + 1)
+    : undefined;
+  return type
+    ? { type, ...(declared ? { field: receiver } : {}), ...(qualifier ? { qualifier } : {}) }
+    : undefined;
 }
 
-/** Le nom de bean Spring par défaut d'une classe (`MailNotifier` → `mailNotifier`, `URLReader` inchangé). */
+/**
+ * Le nom de bean Spring d'une classe : celui que son annotation écrit (`@Service("mail")`), sinon le nom par
+ * défaut (`MailNotifier` → `mailNotifier`, `URLReader` inchangé).
+ */
 function beanName(cls: CodeSymbol): string {
+  if (typeof cls.detail?.bean === 'string') return cls.detail.bean;
   const simple = cls.name.split('.').pop() ?? cls.name;
   return /^[A-Z]{2}/.test(simple) ? simple : simple.charAt(0).toLowerCase() + simple.slice(1);
 }
@@ -283,10 +298,12 @@ function beanName(cls: CodeSymbol): string {
  * L'EXÉCUTION D'UN APPEL SUR UNE INTERFACE OU UNE CLASSE ABSTRAITE : les classes concrètes de la source qui
  * en sont un sous-type (même par une classe abstraite intermédiaire), et la méthode que chacune exécute
  * (même nom, même arité, la plus dérivée qui a un corps, méthode `default` comprise). INFERRED toujours : un
- * bean d'une bibliothèque pourrait aussi exister. Une seule candidate : elle ; plusieurs : `@Primary`, sinon
- * le bean nommé comme le champ injecté (règle de Spring) ; sinon toutes, marquées ambiguës (`candidates`),
- * jamais une choisie au hasard. La relation part de la déclaration quand le choix vaut pour tous les
- * appelants ; de l'appelant quand il dépend de lui (nom du champ, méthode héritée d'un type parent).
+ * bean d'une bibliothèque pourrait aussi exister. Une seule candidate : elle ; plusieurs : le bean que le
+ * point d'injection demande (`@Qualifier`, `@Named`), sinon `@Primary`, sinon le bean nommé comme le champ
+ * injecté (règle de Spring) ; sinon toutes, marquées ambiguës (`candidates`), jamais une choisie au hasard,
+ * avec les profils (`@Profile`) qui les distinguent quand ils sont écrits. La relation part de la déclaration
+ * quand le choix vaut pour tous les appelants ; de l'appelant quand il dépend de lui (qualificateur, nom du
+ * champ, méthode héritée d'un type parent).
  */
 function dispatchOf(ctx: ResolveContext, call: CodeCall): CodeCall[] {
   const target = call.to ? ctx.byId.get(call.to) : undefined;
@@ -319,15 +336,30 @@ function dispatchOf(ctx: ResolveContext, call: CodeCall): CodeCall[] {
   else {
     const primary = all.filter((c) => list(c.cls, 'annotations').includes('Primary'));
     const named = receiver?.field ? all.filter((c) => beanName(c.cls) === receiver.field) : [];
-    if (primary.length === 1) {
+    const asked = receiver?.qualifier ? all.filter((c) => beanName(c.cls) === receiver.qualifier) : [];
+    if (asked.length === 1) {
+      // Le point d'injection nomme son bean : il l'emporte sur @Primary.
+      chosen = asked;
+      perCaller = true;
+      why = `@Qualifier("${receiver?.qualifier ?? ''}") sur « ${receiver?.field ?? ''} » parmi ${String(all.length)} implémentations de ${target.name}`;
+    } else if (primary.length === 1) {
       chosen = primary;
       why = `@Primary parmi ${String(all.length)} implémentations de ${target.name}`;
     } else if (named.length === 1) {
       chosen = named;
       perCaller = true;
       why = `bean nommé comme le champ « ${receiver?.field ?? ''} » parmi ${String(all.length)} implémentations de ${target.name}`;
-    } else
-      why = `une des ${String(all.length)} implémentations de ${target.name} ; aucune n’est désignée (@Primary, nom du champ)`;
+    } else {
+      why = `une des ${String(all.length)} implémentations de ${target.name} ; aucune n’est désignée (@Qualifier, @Primary, nom du champ)`;
+      // Des profils écrits distinguent les candidates : le profil actif à l'exécution choisit, pas le scan.
+      const byProfile = all
+        .filter((c) => list(c.cls, 'profiles').length > 0)
+        .map(
+          (c) =>
+            `${c.cls.name.split('.').pop() ?? c.cls.name} sous @Profile(${list(c.cls, 'profiles').join(', ')})`,
+        );
+      if (byProfile.length > 0) why += ` ; selon le profil actif : ${byProfile.join(' ; ')}`;
+    }
   }
   const from = perCaller || type.id !== declaring.id ? call.from : target.id;
   const candidates = chosen.length > 1 ? chosen.map((c) => c.method.id) : undefined;

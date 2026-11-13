@@ -1,4 +1,3 @@
-import path from 'node:path';
 import type * as TS from 'typescript';
 import type { TypeScriptModule } from '../static-analysis/typescript-loader.js';
 import type { ReadFile } from './files.js';
@@ -15,7 +14,7 @@ import { ClassIdentity } from '../static-analysis/class-identity.js';
  * réponses qui alimentent un flux. Un Observable est paresseux : un appel dont le résultat n'est jamais
  * souscrit n'est pas présenté comme exécuté. Rien n'est exécuté ; une URL non résolue garde son expression.
  */
-export const RXJS_ANALYZER = 'rxjs-5';
+export const RXJS_ANALYZER = 'rxjs-8';
 
 const SUBJECTS = new Set(['Subject', 'BehaviorSubject', 'ReplaySubject', 'AsyncSubject']);
 const CREATION = new Set([
@@ -72,7 +71,46 @@ const OPERATORS = new Set([
   'combineLatestWith',
   'mergeWith',
 ]);
+/** Les opérateurs qui laissent la valeur telle quelle : ils la retardent, l'écartent ou l'observent. */
+const KEEPS_VALUE = new Set([
+  'tap',
+  'debounceTime',
+  'throttleTime',
+  'auditTime',
+  'sampleTime',
+  'delay',
+  'distinctUntilChanged',
+  'distinctUntilKeyChanged',
+  'takeUntil',
+  'takeUntilDestroyed',
+  'takeWhile',
+  'take',
+  'skip',
+  'first',
+  'share',
+  'shareReplay',
+  'observeOn',
+  'subscribeOn',
+  'finalize',
+  'retry',
+  'catchError',
+  'timeout',
+  'startWith',
+]);
 const SUBSCRIBERS = new Set(['firstValueFrom', 'lastValueFrom', 'toSignal']);
+/** Les appels dont les arguments sont déjà lus autrement (rappels de flux, liaisons de méthode). */
+const PASSES_HANDLED = new Set([
+  'subscribe',
+  'then',
+  'catch',
+  'finally',
+  'pipe',
+  'next',
+  'emit',
+  'bind',
+  'call',
+  'apply',
+]);
 const HTTP_VERBS: Record<string, string> = {
   get: 'GET',
   post: 'POST',
@@ -93,9 +131,472 @@ const LIFECYCLE = new Set([
 /** Les types de bibliothèques injectés couramment : leurs appels ne sont pas des ruptures de chaîne. */
 const LIBRARY =
   /^(HttpClient|Router|ActivatedRoute|FormBuilder|NonNullableFormBuilder|ChangeDetectorRef|ElementRef|Renderer2|NgZone|DestroyRef|Injector|Location|DomSanitizer|Title|Meta|MatDialog|MatSnackBar|TranslateService|Store|Actions|DOCUMENT)$/;
+/** Les types qui ne désignent jamais une classe de service à suivre (langage, RxJS, signaux, formulaires). */
+const NOT_A_SERVICE =
+  /^(Date|Map|Set|WeakMap|WeakSet|Array|ReadonlyArray|Record|Partial|Required|Readonly|Pick|Omit|Promise|RegExp|Error|Function|Object|String|Number|Boolean|Observable|Subscription|EventEmitter|Signal|WritableSignal|InputSignal|ModelSignal|OutputEmitterRef|TemplateRef|ViewContainerRef|QueryList|FormGroup|FormControl|FormArray|AbstractControl|HTMLElement|Element|Event|File|Blob|URL)$/;
 /** Bornes : une classe analysée au plus une fois, une exploration de chaîne bornée. */
 const MAX_FILE_BYTES = 400_000;
 const MAX_VISITS = 20_000;
+
+/**
+ * NgRx : le store d'actions de la bibliothèque, vu comme un store maison au flux d'actions partagé. Il n'est
+ * ajouté que si la source importe `@ngrx/` et ne déclare pas elle-même une classe `Store` ; `dispatch(action)`
+ * y émet l'action, que les effets (`createEffect` + `ofType`) et les réducteurs (`on`) trient par type.
+ */
+const NGRX_STORE = 'Store';
+const NGRX_ACTIONS = 'actions';
+/** La dépendance (cachée) par laquelle une classe d'effets ou un réducteur atteint le store d'actions. */
+const NGRX_DEP = 'ngrx:store';
+const NGRX_FILE = '@ngrx/store';
+const NGRX_SOURCE = `export class ${NGRX_STORE} {
+  readonly ${NGRX_ACTIONS} = new Subject();
+  dispatch(action: unknown): void {
+    this.${NGRX_ACTIONS}.next(action);
+  }
+  select(selector: unknown): unknown {
+    return selector;
+  }
+  selectSignal(selector: unknown): unknown {
+    return selector;
+  }
+}
+`;
+/** Les créations NgRx dont la valeur est lue à travers un import (créateurs d'actions, groupes). */
+const NGRX_CREATORS = new Set(['createAction', 'createActionGroup']);
+/** La source analysée emploie-t-elle NgRx ? (posé le temps d'une analyse) */
+let ngrx = false;
+/**
+ * L'état NgRx de la source : la clé d'état que lit chaque sélecteur, et le réducteur enregistré sous chaque
+ * clé. Un nom ou une clé qui désigne deux choses différentes vaut null : il n'est jamais choisi.
+ */
+interface NgrxState {
+  selectors: Map<string, string | null>;
+  features: Map<string, string | null>;
+  reducers: Map<string, string | null>;
+}
+let ngrxState: NgrxState | undefined;
+
+/** Le réducteur dont un sélecteur lit l'état (`selectItems`, `ordersFeature.selectItems`), s'il est démontré. */
+const reducerOfSelector = (text: string): string | undefined => {
+  if (!ngrxState) return undefined;
+  const owner = text.includes('.') ? text.slice(0, text.lastIndexOf('.')) : undefined;
+  const key = ngrxState.selectors.get(text) ?? (owner ? ngrxState.features.get(owner) : undefined);
+  return key ? (ngrxState.reducers.get(key) ?? undefined) : undefined;
+};
+
+function ngrxStateOf(ts: TypeScriptModule, files: readonly ReadFile[]): NgrxState {
+  const state: NgrxState = { selectors: new Map(), features: new Map(), reducers: new Map() };
+  const put = (map: Map<string, string | null>, key: string, value: string): void => {
+    const known = map.get(key);
+    map.set(key, known === undefined || known === value ? value : null);
+  };
+  const derived: { name: string; inputs: string[] }[] = [];
+  const named = (call: TS.CallExpression): string =>
+    ts.isIdentifier(call.expression)
+      ? call.expression.text
+      : ts.isPropertyAccessExpression(call.expression)
+        ? call.expression.name.text
+        : '';
+  /** `{ orders: ordersReducer }` : chaque clé et le réducteur nommé qu'elle reçoit. */
+  const mapOf = (node: TS.Expression | undefined): void => {
+    if (!node || !ts.isObjectLiteralExpression(node)) return;
+    for (const prop of node.properties)
+      if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.initializer))
+        put(state.reducers, prop.name.getText().replace(/^['"]|['"]$/g, ''), prop.initializer.text);
+      else if (ts.isShorthandPropertyAssignment(prop)) put(state.reducers, prop.name.text, prop.name.text);
+  };
+  /** `{ name: 'orders', reducer }` : la clé et le réducteur (nommé, ou écrit sur place sous le nom `holder`). */
+  const featureOf = (node: TS.Expression | undefined, holder?: string): string | undefined => {
+    if (!node || !ts.isObjectLiteralExpression(node)) return undefined;
+    let key: string | undefined;
+    let reducer: string | undefined;
+    for (const prop of node.properties) {
+      if (ts.isShorthandPropertyAssignment(prop) && prop.name.text === 'reducer') reducer = 'reducer';
+      if (!ts.isPropertyAssignment(prop)) continue;
+      if (prop.name.getText() === 'name') key = textOf(ts, prop.initializer);
+      if (prop.name.getText() === 'reducer')
+        reducer = ts.isIdentifier(prop.initializer) ? prop.initializer.text : holder;
+    }
+    if (key && reducer) put(state.reducers, key, reducer);
+    return key;
+  };
+  for (const file of files) {
+    if (!/\.ts$/.test(file.path) || /\.(spec|test|d)\.ts$/.test(file.path)) continue;
+    if (!/createFeature|createSelector|provideState|provideStore|forFeature|forRoot/.test(file.text))
+      continue;
+    if (file.text.length > MAX_FILE_BYTES) continue;
+    const sf = sourceOf(ts, file);
+    const visit = (node: TS.Node): void => {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+        const init = node.initializer;
+        if (ts.isCallExpression(init)) {
+          const fn = named(init);
+          const first = textOf(ts, init.arguments[0]);
+          if (fn === 'createFeatureSelector' && first) put(state.selectors, node.name.text, first);
+          if (fn === 'createSelector')
+            derived.push({
+              name: node.name.text,
+              inputs: init.arguments.slice(0, -1).map((a) => a.getText()),
+            });
+          if (fn === 'createFeature') {
+            const key = featureOf(init.arguments[0], node.name.text);
+            if (key) put(state.features, node.name.text, key);
+          }
+        }
+      }
+      if (ts.isCallExpression(node)) {
+        const fn = named(node);
+        const first = node.arguments[0];
+        if (fn === 'forFeature' || fn === 'provideState') {
+          const key = textOf(ts, first);
+          const reducer = node.arguments[1];
+          if (key && reducer && ts.isIdentifier(reducer)) put(state.reducers, key, reducer.text);
+          else featureOf(first);
+        }
+        if (fn === 'provideStore' || fn === 'forRoot') mapOf(first);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  // Un sélecteur composé lit l'état de son premier sélecteur d'entrée connu (point fixe borné).
+  for (let round = 0; round < 8; round += 1) {
+    let changed = false;
+    for (const entry of derived) {
+      if (state.selectors.has(entry.name)) continue;
+      for (const input of entry.inputs) {
+        const owner = input.includes('.') ? input.slice(0, input.lastIndexOf('.')) : undefined;
+        const key = state.selectors.get(input) ?? (owner ? state.features.get(owner) : undefined);
+        if (!key) continue;
+        put(state.selectors, entry.name, key);
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) break;
+  }
+  return state;
+}
+
+const textOf = (ts: TypeScriptModule, e: TS.Expression | undefined): string | undefined =>
+  e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) ? e.text : undefined;
+
+/** `Load Success` → `loadSuccess` : le nom que `createActionGroup` donne au créateur d'un événement. */
+const eventMember = (event: string): string =>
+  event
+    .trim()
+    .split(/\s+/)
+    .map((word, i) =>
+      i === 0 ? word.charAt(0).toLowerCase() + word.slice(1) : word.charAt(0).toUpperCase() + word.slice(1),
+    )
+    .join('');
+
+/**
+ * Le type d'action que désigne une expression : un littéral, un créateur (`save`, `save.type`), un créateur
+ * importé par espace de noms (`OrderActions.save`), un membre d'un groupe (`createActionGroup`). Lu dans les
+ * constantes du fichier et ses imports ; undefined : rien de lu ne le dit.
+ */
+function actionTypeOf(
+  ts: TypeScriptModule,
+  expr: TS.Expression,
+  module: ReadonlyMap<string, TS.Expression>,
+  depth = 0,
+): string | undefined {
+  if (depth > 3) return undefined;
+  let x = expr;
+  while (ts.isParenthesizedExpression(x) || ts.isAsExpression(x) || ts.isNonNullExpression(x))
+    x = x.expression;
+  const literal = textOf(ts, x);
+  if (literal !== undefined) return literal;
+  const callOf = (init: TS.Expression | undefined, name: string): TS.CallExpression | undefined =>
+    init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === name
+      ? init
+      : undefined;
+  const created = (init: TS.Expression | undefined): string | undefined =>
+    textOf(ts, callOf(init, 'createAction')?.arguments[0]);
+  if (ts.isIdentifier(x)) return created(module.get(x.text));
+  if (!ts.isPropertyAccessExpression(x)) return undefined;
+  if (x.name.text === 'type') return actionTypeOf(ts, x.expression, module, depth + 1);
+  const direct = created(module.get(x.getText()));
+  if (direct !== undefined) return direct;
+  const group = callOf(module.get(x.expression.getText()), 'createActionGroup')?.arguments[0];
+  if (!group || !ts.isObjectLiteralExpression(group)) return undefined;
+  let source: string | undefined;
+  let events: TS.ObjectLiteralExpression | undefined;
+  for (const prop of group.properties) {
+    if (!ts.isPropertyAssignment(prop)) continue;
+    const key = prop.name.getText();
+    if (key === 'source') source = textOf(ts, prop.initializer);
+    if (key === 'events' && ts.isObjectLiteralExpression(prop.initializer)) events = prop.initializer;
+  }
+  if (source === undefined || !events) return undefined;
+  for (const event of events.properties) {
+    if (!ts.isPropertyAssignment(event) && !ts.isShorthandPropertyAssignment(event)) continue;
+    const name =
+      ts.isStringLiteral(event.name) || ts.isNoSubstitutionTemplateLiteral(event.name)
+        ? event.name.text
+        : event.name.getText();
+    if (eventMember(name) === x.name.text) return `[${source}] ${name}`;
+  }
+  return undefined;
+}
+
+/** Les fichiers déjà lus pendant une analyse : un seul AST par fichier, partagé avec le vérificateur de types. */
+let parsed: Map<string, TS.SourceFile> | undefined;
+function sourceOf(ts: TypeScriptModule, file: { path: string; text: string }): TS.SourceFile {
+  const known = parsed?.get(file.path);
+  if (known) return known;
+  const sf = ts.createSourceFile(file.path, file.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  parsed?.set(file.path, sf);
+  return sf;
+}
+
+/**
+ * LE SECOND AVIS DU COMPILATEUR : quand la lecture syntaxique ne dit pas de quelle classe est le récepteur
+ * d'un appel (variable sans type écrit, retour inféré, élément d'une collection), le vérificateur de types de
+ * TypeScript est interrogé sur les fichiers de la source, sans ses dépendances (un type d'une bibliothèque
+ * reste inconnu) et sans rien exécuter. Créé à la première question seulement ; borné en nombre de questions
+ * et en durée. Il ne répond que par une classe déclarée dans la source, jamais par un nom ressemblant.
+ */
+const MAX_TYPE_QUERIES = 50_000;
+const MAX_TYPE_MS = 20_000;
+/**
+ * Les types du langage dont l'inférence a le strict nécessaire (tableaux, itération, promesses) : les
+ * bibliothèques de la source ne sont jamais chargées, ni celles de TypeScript. Un élément d'un tableau, le
+ * résultat d'un `find` ou d'un `await` gardent ainsi leur classe.
+ */
+const TYPE_LIB = `
+interface Object {} interface Function {} interface CallableFunction extends Function {}
+interface NewableFunction extends Function {} interface IArguments {} interface String {}
+interface Number {} interface Boolean {} interface RegExp {}
+interface SymbolConstructor { readonly iterator: unique symbol }
+declare var Symbol: SymbolConstructor;
+interface IteratorResult<T> { done: boolean; value: T }
+interface Iterator<T> { next(): IteratorResult<T> }
+interface Iterable<T> { [Symbol.iterator](): Iterator<T> }
+interface IterableIterator<T> extends Iterator<T> { [Symbol.iterator](): IterableIterator<T> }
+interface ReadonlyArray<T> {
+  readonly length: number; readonly [n: number]: T; [Symbol.iterator](): IterableIterator<T>;
+  find(predicate: (value: T, index: number) => unknown): T | undefined;
+  filter(predicate: (value: T, index: number) => unknown): T[];
+  forEach(callback: (value: T, index: number) => void): void;
+  map<U>(callback: (value: T, index: number) => U): U[];
+  slice(start?: number, end?: number): T[]; at(index: number): T | undefined;
+}
+interface Array<T> {
+  length: number; [n: number]: T; [Symbol.iterator](): IterableIterator<T>;
+  find(predicate: (value: T, index: number) => unknown): T | undefined;
+  filter(predicate: (value: T, index: number) => unknown): T[];
+  forEach(callback: (value: T, index: number) => void): void;
+  map<U>(callback: (value: T, index: number) => U): U[];
+  slice(start?: number, end?: number): T[]; at(index: number): T | undefined;
+  push(...items: T[]): number; pop(): T | undefined; values(): IterableIterator<T>;
+}
+interface PromiseLike<T> { then<R>(onfulfilled: (value: T) => R | PromiseLike<R>): PromiseLike<R> }
+interface Promise<T> { then<R>(onfulfilled: (value: T) => R | PromiseLike<R>): Promise<R> }
+interface Map<K, V> { get(key: K): V | undefined; values(): IterableIterator<V>; forEach(callback: (value: V, key: K) => void): void }
+interface Set<T> { values(): IterableIterator<T>; forEach(callback: (value: T) => void): void; [Symbol.iterator](): IterableIterator<T> }
+type Awaited<T> = T extends PromiseLike<infer U> ? Awaited<U> : T;
+type Partial<T> = { [P in keyof T]?: T[P] }; type Readonly<T> = { readonly [P in keyof T]: T[P] };
+type Record<K extends keyof any, T> = { [P in K]: T };
+`;
+const TYPE_LIB_FILE = '/qa-crawler-lib.d.ts';
+interface Inference {
+  typeOf: (node: TS.Expression) => string | undefined;
+  asked: number;
+  answered: number;
+}
+function inferenceOf(
+  ts: TypeScriptModule,
+  files: readonly ReadFile[],
+  byPath: ReadonlyMap<string, ReadFile>,
+  identity: ClassIdentity,
+  warnings: string[],
+): Inference {
+  let checker: TS.TypeChecker | undefined;
+  let failed = false;
+  let spent = 0;
+  const create = (): TS.TypeChecker => {
+    const roots = files
+      .filter(
+        (f) =>
+          /\.ts$/.test(f.path) && !/\.(spec|test|d)\.ts$/.test(f.path) && f.text.length <= MAX_FILE_BYTES,
+      )
+      .map((f) => f.path);
+    // Le programme veut des chemins absolus : ceux de la source, sous une racine virtuelle « / ».
+    const inSource = (name: string): ReadFile | undefined => byPath.get(name.replace(/^\/+/, ''));
+    const lib = ts.createSourceFile(TYPE_LIB_FILE, TYPE_LIB, ts.ScriptTarget.Latest, true);
+    const host: TS.CompilerHost = {
+      getSourceFile: (name) => {
+        if (name === TYPE_LIB_FILE) return lib;
+        const file = inSource(name);
+        return file ? sourceOf(ts, file) : undefined;
+      },
+      getDefaultLibFileName: () => TYPE_LIB_FILE,
+      writeFile: () => undefined,
+      getCurrentDirectory: () => '/',
+      getCanonicalFileName: (name) => name,
+      useCaseSensitiveFileNames: () => true,
+      getNewLine: () => '\n',
+      fileExists: (name) => name === TYPE_LIB_FILE || inSource(name) !== undefined,
+      readFile: (name) => (name === TYPE_LIB_FILE ? TYPE_LIB : inSource(name)?.text),
+      // Les imports suivent la résolution de la source (relatifs, alias de chemin) ; jamais node_modules.
+      resolveModuleNameLiterals: (literals, containing) =>
+        literals.map((literal) => {
+          const hit = identity.modules.resolve(containing.replace(/^\/+/, ''), literal.text);
+          return {
+            resolvedModule: hit
+              ? {
+                  resolvedFileName: `/${hit}`,
+                  extension: hit.endsWith('.tsx') ? ts.Extension.Tsx : ts.Extension.Ts,
+                }
+              : undefined,
+          };
+        }),
+    };
+    return ts
+      .createProgram(
+        roots.map((root) => `/${root}`),
+        {
+          target: ts.ScriptTarget.ES2022,
+          skipLibCheck: true,
+          experimentalDecorators: true,
+          strictNullChecks: false,
+          types: [],
+        },
+        host,
+      )
+      .getTypeChecker();
+  };
+  const out: Inference = {
+    asked: 0,
+    answered: 0,
+    typeOf: (node) => {
+      if (failed || out.asked >= MAX_TYPE_QUERIES || spent > MAX_TYPE_MS) return undefined;
+      out.asked += 1;
+      const started = Date.now();
+      try {
+        checker ??= create();
+        const declaration = checker
+          .getTypeAtLocation(node)
+          .getSymbol()
+          ?.declarations?.find((d): d is TS.ClassDeclaration => ts.isClassDeclaration(d));
+        const from = declaration?.getSourceFile().fileName.replace(/^\/+/, '');
+        if (!declaration?.name || !from || !byPath.has(from)) return undefined;
+        out.answered += 1;
+        return identity.key(from, declaration.name.text);
+      } catch (error) {
+        failed = true;
+        warnings.push(`type inference unavailable: ${(error as Error).message}`);
+        return undefined;
+      } finally {
+        spent += Date.now() - started;
+      }
+    },
+  };
+  return out;
+}
+let inference: Inference | undefined;
+
+/** Les récepteurs qu'il est inutile de soumettre au compilateur : objets du langage et du navigateur. */
+const NOT_WORTH_ASKING =
+  /^(console|window|document|navigator|history|location|localStorage|sessionStorage|JSON|Math|Object|Array|Promise|Number|String|Date|Reflect|Symbol|performance|crypto|globalThis)$/;
+
+/**
+ * Les fournisseurs Angular de la source (`{ provide: X, useClass: Y }`, `useExisting`, `useFactory` qui
+ * construit ou injecte une classe) : ce qu'une injection de X reçoit réellement. `owner` : la classe dont le
+ * décorateur porte le fournisseur (ses propres injections le voient en premier). Et les intercepteurs HTTP
+ * enregistrés (`HTTP_INTERCEPTORS`, `withInterceptors([…])`), qui voient passer chaque requête.
+ */
+interface Provider {
+  token: string;
+  impl: string;
+  how: 'useClass' | 'useExisting' | 'useFactory';
+  owner?: string;
+  loc: Loc;
+}
+interface Providing {
+  byToken: Map<string, Provider[]>;
+  interceptors: { name: string; functional: boolean; loc: Loc }[];
+}
+let providing: Providing | undefined;
+
+function providingOf(ts: TypeScriptModule, files: readonly ReadFile[], identity: ClassIdentity): Providing {
+  const out: Providing = { byToken: new Map(), interceptors: [] };
+  for (const file of files) {
+    if (!/\.ts$/.test(file.path) || /\.(spec|test|d)\.ts$/.test(file.path)) continue;
+    if (!/\bprovide\s*:|withInterceptors/.test(file.text) || file.text.length > MAX_FILE_BYTES) continue;
+    const sf = sourceOf(ts, file);
+    const loc = (node: TS.Node): Loc => ({
+      file: file.path,
+      line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+    });
+    const named = (name: string): string => identity.resolve(file.path, name) ?? name;
+    /** La classe qu'une fabrique rend : `() => new Y(…)`, `() => inject(Y)`. */
+    const made = (factory: TS.Expression): string | undefined => {
+      if (!ts.isArrowFunction(factory) && !ts.isFunctionExpression(factory)) return undefined;
+      const returned = returnsOf(ts, factory.body);
+      const only = returned.length === 1 ? returned[0] : undefined;
+      if (only && ts.isNewExpression(only) && ts.isIdentifier(only.expression)) return only.expression.text;
+      return only &&
+        ts.isCallExpression(only) &&
+        only.expression.getText() === 'inject' &&
+        only.arguments[0] &&
+        ts.isIdentifier(only.arguments[0])
+        ? only.arguments[0].text
+        : undefined;
+    };
+    const visit = (node: TS.Node, owner: string | undefined): void => {
+      const here = ts.isClassDeclaration(node) && node.name ? identity.key(file.path, node.name.text) : owner;
+      if (ts.isObjectLiteralExpression(node)) {
+        let token: string | undefined;
+        let impl: string | undefined;
+        let how: Provider['how'] | undefined;
+        for (const prop of node.properties) {
+          if (!ts.isPropertyAssignment(prop)) continue;
+          const key = prop.name.getText();
+          const value = prop.initializer;
+          if (key === 'provide' && ts.isIdentifier(value)) token = value.text;
+          if ((key === 'useClass' || key === 'useExisting') && ts.isIdentifier(value)) {
+            impl = value.text;
+            how = key;
+          }
+          if (key === 'useFactory') {
+            const built = made(value);
+            if (built) {
+              impl = built;
+              how = 'useFactory';
+            }
+          }
+        }
+        if (token === 'HTTP_INTERCEPTORS' && impl)
+          out.interceptors.push({ name: named(impl), functional: false, loc: loc(node) });
+        else if (token && impl && how) {
+          const key = named(token);
+          const list = out.byToken.get(key) ?? [];
+          list.push({ token: key, impl: named(impl), how, ...(here ? { owner: here } : {}), loc: loc(node) });
+          out.byToken.set(key, list);
+        }
+      }
+      // `provideHttpClient(withInterceptors([auth, log]))` : des intercepteurs fonctionnels.
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'withInterceptors' &&
+        node.arguments[0] &&
+        ts.isArrayLiteralExpression(node.arguments[0])
+      )
+        for (const element of node.arguments[0].elements)
+          if (ts.isIdentifier(element))
+            out.interceptors.push({ name: element.text, functional: true, loc: loc(element) });
+      ts.forEachChild(node, (child) => {
+        visit(child, here);
+      });
+    };
+    visit(sf, undefined);
+  }
+  return out;
+}
 
 /** Comment le résultat (Observable) d'un appel est employé là où il est fait. */
 type Use = 'SUBSCRIBED' | 'RETURNED' | 'STORED' | 'LOCAL' | 'DROPPED';
@@ -156,6 +657,22 @@ interface CallSite {
   partial?: boolean;
   /** Une méthode détachée de son objet (`const { dispatch } = this.store`) : `this` n'est pas garanti. */
   unbound?: boolean;
+  /** L'appel est fait par une fonction utilitaire qui reçoit l'objet (`emitOn(this.store, …)`). */
+  viaFn?: string;
+  /** La classe du récepteur n'est pas écrite : elle vient du vérificateur de types de TypeScript. */
+  inferred?: boolean;
+  /**
+   * Le récepteur est le retour d'une méthode : si rien d'écrit ne dit ce qu'elle rend (ni dépendance rendue,
+   * ni type de retour), la classe que le vérificateur de types lui donne.
+   */
+  fallback?: string;
+  /** Une méthode passée en référence à un appel (`this.runNow(this.doSave)`) : la méthode qui la reçoit. */
+  passedTo?: { target: string; method: string; index: number };
+  /**
+   * La méthode appelée est abstraite (ou absente) dans la classe du récepteur : une de ses implémentations.
+   * `provided` : les candidates sont les classes que des fournisseurs Angular donnent pour ce type.
+   */
+  virtual?: { of: string; count: number; provided?: boolean };
   loc: Loc;
 }
 interface HttpSite {
@@ -175,6 +692,8 @@ interface Emit {
   cont?: Continuation[];
   /** Les appels dont la réponse est poussée par cette émission (dans subscribe/tap). */
   fedBy: CallSite[];
+  /** Comment la valeur est poussée, quand ce n'est pas `next` (`set`, `update` d'un signal). */
+  how?: string;
   loc: Loc;
 }
 interface Pipeline {
@@ -182,6 +701,8 @@ interface Pipeline {
   calls: CallSite[];
   /** Les next() faits dans le traitement (tap, subscribe) : la réponse alimente ce flux. */
   emits: Emit[];
+  /** La source n'est un signal que si la classe de la dépendance le confirme ; sinon le traitement est ignoré. */
+  maybe?: boolean;
   operators: string[];
   /** Les rappels de filter() du traitement (condition de passage). */
   filters?: string[];
@@ -198,12 +719,24 @@ interface Method {
   assigns?: Map<string, TS.Expression[]>;
   /** Le type écrit des paramètres (`store: OrderStore`). */
   paramTypes?: Map<string, string>;
+  /** Le type écrit des paramètres, tel quel (`kind: 'SAVE' | 'LOAD'`) : il borne une valeur inconnue. */
+  paramNodes?: Map<string, TS.TypeNode>;
   /** Les expressions rendues au premier niveau du corps (return, ou corps d'une fonction fléchée). */
   returns?: TS.Expression[];
   /** La dépendance rendue telle quelle (`getStore() { return this.store; }`). */
   returnRef?: string;
+  /** Le type de retour écrit (`create(): OrderApi`), quand il nomme une classe. */
+  returnType?: string;
+  /** Le type écrit des variables locales (`const api: OrderApi = …`). */
+  localTypes?: Map<string, string>;
   /** Une propriété fléchée (`run = () => …`) garde son `this` même détachée. */
   arrow?: boolean;
+  /** Les appels d'une fonction (`emitOn(this.store, action)`) : résolus quand toutes les fonctions sont lues. */
+  fnCalls?: { name: string; callee: TS.Expression; site: CallSite }[];
+  /** Les paramètres que la méthode appelle (`fn()` dans `runNow(fn)`) : un rappel reçu est exécuté. */
+  invokes?: Set<number>;
+  /** `watcher = effect(() => …)` : une propriété dont le rappel s'exécute à la création de la classe. */
+  atCreation?: boolean;
   calls: CallSite[];
   emits: Emit[];
   http: HttpSite[];
@@ -225,11 +758,12 @@ interface Stream {
   operators: string[];
   filters: string[];
   reads: string[];
-  /**
-   * Le premier opérateur du flux garde les valeurs d'un type (`filter((a) => a.type === 'SAVE')`,
-   * `ofType('SAVE')`) : seules les émissions de ce type le traversent.
-   */
-  typeFilter?: { field: string; values: TS.Expression[] };
+  /** Les next() faits par le traitement même du flux (`tap(() => this.actions.next(…))`) : un effet qui en relance un autre. */
+  emits: Emit[];
+  /** Le flux n'est qu'un autre nom d'un flux d'une dépendance (`actions$ = inject(Actions)`). */
+  alias?: Ref;
+  /** Une garde connue sans pipe à lire (réducteur : les types de ses `on`). */
+  gate?: { field: string; allow: string[] };
   loc: Loc;
 }
 interface ClassInfo {
@@ -249,6 +783,13 @@ interface ClassInfo {
   outputs: Set<string>;
   /** Les flux souscrits par une propriété (`data = toSignal(this.store.data$)`). */
   consumes: Ref[];
+  /** Les types écrits que plusieurs classes portent et que l'import ne départage pas : jamais choisis. */
+  ambiguous?: Set<string>;
+  /**
+   * Les dépendances déduites d'un type écrit ou d'un `new` (propriété typée, accesseur typé, `x = new X()`),
+   * pas d'une injection : si leur classe n'est pas dans les sources, rien n'est signalé (bibliothèque).
+   */
+  soft?: Set<string>;
   loc: Loc;
 }
 
@@ -266,6 +807,10 @@ export interface RxjsFacts {
   bases: { id: string; path: string; base?: string; baseKey?: string }[];
   /** Les clés des fichiers environment, valeur par fichier. */
   environment: { key: string; values: { file: string; value?: string }[] }[];
+  /** Les intercepteurs HTTP enregistrés : chaque requête de la source les traverse. */
+  interceptors: { name: string; functional: boolean; loc: Loc }[];
+  /** Les récepteurs soumis au vérificateur de types, et ceux pour lesquels il a nommé une classe de la source. */
+  inference: { asked: number; answered: number };
   /** Le flux lu par un membre d'un composant (`canActivate$`, ou `store` + `status$`). */
   streamOf: (component: string, member: string, path: readonly string[]) => string | undefined;
   /**
@@ -299,7 +844,13 @@ export function analyzeRxjs(
   const classes = new Map<string, ClassInfo>();
   const constants = new Map<string, string | null>();
   const functions = new Map<string, ModuleFn | null>();
+  const types = new Map<string, TS.Node | null>();
   externals = externalsOf(ts, files);
+  ngrx = files.some((f) => /\.ts$/.test(f.path) && /from\s*['"]@ngrx\//.test(f.text));
+  ngrxState = ngrx ? ngrxStateOf(ts, files) : undefined;
+  parsed = new Map();
+  providing = providingOf(ts, files, identity);
+  inference = inferenceOf(ts, files, byPath, identity, warnings);
   for (const file of files) {
     if (!/\.ts$/.test(file.path) || /\.(spec|test|d)\.ts$/.test(file.path)) continue;
     if (file.text.length > MAX_FILE_BYTES) {
@@ -309,13 +860,60 @@ export function analyzeRxjs(
     try {
       // Une classe par identité : deux classes de même nom dans deux fichiers sont gardées toutes les deux
       // (« ListComponent(admin/list) ») ; leurs types référencés sont résolus par les imports de leur fichier.
-      for (const info of classesOf(ts, file, byPath, constants, functions)) {
+      for (const info of classesOf(ts, file, byPath, constants, functions, identity, undefined, types)) {
         identify(info, identity);
         if (classes.has(info.name)) warnings.push(`class ${info.name} declared twice: the first one is kept`);
         else classes.set(info.name, info);
       }
     } catch (error) {
       // Un fichier illisible n'arrête pas l'analyse des autres.
+      warnings.push(`${file.path}: RxJS analysis failed (${(error as Error).message})`);
+    }
+  }
+  // NgRx : le store d'actions de la bibliothèque, sauf si la source déclare sa propre classe `Store`.
+  if (ngrx && !classes.has(NGRX_STORE))
+    for (const info of classesOf(
+      ts,
+      { path: NGRX_FILE, text: NGRX_SOURCE, hash: '', bytes: NGRX_SOURCE.length },
+      byPath,
+      new Map(),
+      new Map(),
+      identity,
+    )) {
+      info.role = 'STORE';
+      classes.set(info.name, info);
+    }
+  // Les membres hérités : une sous-classe dont une classe de base fournit des dépendances, un client HTTP ou
+  // des flux est relue avec eux (son fichier seulement), pour que ses méthodes les reconnaissent.
+  const rereads = new Map<string, Map<string, Inherited>>();
+  for (const info of classes.values()) {
+    const got: Inherited = { deps: new Map(), http: new Set(), streams: new Set() };
+    const seen = new Set<string>([info.name]);
+    let cur = info.base ? classes.get(info.base) : undefined;
+    while (cur && !seen.has(cur.name)) {
+      seen.add(cur.name);
+      for (const [name, type] of cur.deps)
+        if (!info.deps.has(name) && !got.deps.has(name)) got.deps.set(name, type);
+      for (const name of cur.http) if (!info.http.has(name)) got.http.add(name);
+      for (const name of cur.streams.keys()) if (!info.streams.has(name)) got.streams.add(name);
+      cur = cur.base ? classes.get(cur.base) : undefined;
+    }
+    if (got.deps.size + got.http.size + got.streams.size === 0) continue;
+    const byClass = rereads.get(info.file) ?? new Map<string, Inherited>();
+    byClass.set(info.name, got);
+    rereads.set(info.file, byClass);
+  }
+  for (const [filePath, byClass] of rereads) {
+    const file = byPath.get(filePath);
+    if (!file) continue;
+    try {
+      for (const info of classesOf(ts, file, byPath, constants, functions, identity, (name) =>
+        byClass.get(identity.key(file.path, name)),
+      )) {
+        identify(info, identity);
+        if (byClass.has(info.name)) classes.set(info.name, info);
+      }
+    } catch (error) {
       warnings.push(`${file.path}: RxJS analysis failed (${(error as Error).message})`);
     }
   }
@@ -328,11 +926,17 @@ export function analyzeRxjs(
   }));
   try {
     // Pas d'étalement : symbols et links sont des accesseurs lus après coup (entryOf peut en ajouter).
-    const facts = resolve(ts, classes, knownCalls, warnings, constants, functions);
+    const facts = resolve(ts, classes, knownCalls, warnings, constants, functions, types);
     facts.environment = environment;
+    facts.inference = { asked: inference.asked, answered: inference.answered };
     return facts;
   } finally {
     externals = undefined;
+    ngrx = false;
+    ngrxState = undefined;
+    providing = undefined;
+    inference = undefined;
+    parsed = undefined;
   }
 }
 
@@ -343,7 +947,11 @@ export function analyzeRxjs(
  * alors aucune classe, et la chaîne s'arrête avec un diagnostic au lieu d'aller vers une classe au hasard.
  */
 function identify(info: ClassInfo, identity: ClassIdentity): void {
-  const resolve = (type: string): string => identity.resolve(info.file, type) ?? type;
+  const resolve = (type: string): string => {
+    const found = identity.resolve(info.file, type);
+    if (found === undefined) (info.ambiguous ??= new Set()).add(type);
+    return found ?? type;
+  };
   info.name = identity.key(info.file, info.name);
   for (const [property, type] of info.deps) info.deps.set(property, resolve(type));
   if (info.base) info.base = resolve(info.base);
@@ -353,6 +961,8 @@ function identify(info: ClassInfo, identity: ClassIdentity): void {
   };
   for (const method of info.methods.values()) {
     for (const [param, type] of method.paramTypes ?? []) method.paramTypes?.set(param, resolve(type));
+    if (method.returnType)
+      method.returnType = identity.resolve(info.file, method.returnType) ?? method.returnType;
     method.calls.forEach(retarget);
     for (const pipeline of method.pipelines) pipeline.calls.forEach(retarget);
   }
@@ -360,11 +970,20 @@ function identify(info: ClassInfo, identity: ClassIdentity): void {
 }
 
 /** Une fonction de module (déclarée ou fléchée) : ses paramètres, ses retours, ses constantes locales. */
+/** Les membres qu'une classe reçoit de ses classes de base : dépendances injectées, clients HTTP, flux. */
+interface Inherited {
+  deps: Map<string, string>;
+  http: Set<string>;
+  streams: Set<string>;
+}
+
 interface ModuleFn {
   params: string[];
   returns: TS.Expression[];
   locals: Map<string, TS.Expression>;
   module: Map<string, TS.Expression>;
+  /** Les appels faits sur un paramètre (`store.dispatch(action)` dans `emitOn(store, action)`). */
+  calls: { param: number; method: string; args: TS.Expression[] }[];
 }
 
 /** La forme comparable d'une valeur littérale : chaîne JSON, nombre, booléen ou null. */
@@ -388,7 +1007,13 @@ function collectConstants(
   sf: TS.SourceFile,
   out: Map<string, string | null>,
   fns?: Map<string, ModuleFn | null>,
+  types?: Map<string, TS.Node | null>,
 ): void {
+  // Les types nommés du fichier (alias, interface, enum) : un même nom déclaré deux fois n'est jamais choisi.
+  if (types)
+    for (const st of sf.statements)
+      if (ts.isTypeAliasDeclaration(st) || ts.isInterfaceDeclaration(st) || ts.isEnumDeclaration(st))
+        types.set(st.name.text, types.has(st.name.text) ? null : st);
   if (fns) {
     const module = new Map<string, TS.Expression>();
     for (const st of sf.statements)
@@ -405,12 +1030,25 @@ function collectConstants(
         ts.forEachChild(n, visit);
       };
       if (ts.isBlock(fn.body)) ts.forEachChild(fn.body, visit);
-      const entry: ModuleFn = {
-        params: fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : '')),
-        returns: returnsOf(ts, fn.body),
-        locals,
-        module,
+      const params = fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : ''));
+      const onParams: ModuleFn['calls'] = [];
+      const seek = (n: TS.Node): void => {
+        if (
+          ts.isCallExpression(n) &&
+          ts.isPropertyAccessExpression(n.expression) &&
+          ts.isIdentifier(n.expression.expression) &&
+          params.includes(n.expression.expression.text) &&
+          onParams.length < 20
+        )
+          onParams.push({
+            param: params.indexOf(n.expression.expression.text),
+            method: n.expression.name.text,
+            args: [...n.arguments],
+          });
+        ts.forEachChild(n, seek);
       };
+      seek(fn.body);
+      const entry: ModuleFn = { params, returns: returnsOf(ts, fn.body), locals, module, calls: onParams };
       // Un même nom défini deux fois n'est jamais choisi.
       fns.set(name, fns.has(name) ? null : entry);
     };
@@ -459,45 +1097,67 @@ function collectConstants(
 
 // ── Lecture d'une classe ─────────────────────────────────────────────────────────────────────────
 
-const IMPORT_EXTENSIONS = ['', '.ts', '/index.ts'];
 /** La provenance d'une constante importée (preuve citée quand elle forme une URL). */
 const importedFrom = new WeakMap<TS.Expression, string>();
+/** Les constantes texte exportées d'un fichier, lues une fois par fichier. */
+const exportedLiterals = new WeakMap<ReadFile, Map<string, TS.Expression>>();
 
-/** Les constantes exportées (texte littéral) des modules relatifs importés par un fichier, sous leur nom local. */
+function exportedLiteralsOf(ts: TypeScriptModule, target: ReadFile): Map<string, TS.Expression> {
+  let exported = exportedLiterals.get(target);
+  if (exported) return exported;
+  exported = new Map<string, TS.Expression>();
+  const tsf = sourceOf(ts, target);
+  for (const node of tsf.statements)
+    if (
+      ts.isVariableStatement(node) &&
+      node.declarationList.flags & ts.NodeFlags.Const &&
+      node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+    )
+      for (const d of node.declarationList.declarations)
+        if (!ts.isIdentifier(d.name) || !d.initializer) continue;
+        else if (ts.isStringLiteral(d.initializer) || ts.isNoSubstitutionTemplateLiteral(d.initializer)) {
+          exported.set(d.name.text, d.initializer);
+          importedFrom.set(d.initializer, `${d.name.text} = '${d.initializer.text}' (${target.path})`);
+        } else if (
+          // Un créateur d'action ou un groupe d'actions : son type est lu là où il est importé.
+          ts.isCallExpression(d.initializer) &&
+          ts.isIdentifier(d.initializer.expression) &&
+          NGRX_CREATORS.has(d.initializer.expression.text)
+        )
+          exported.set(d.name.text, d.initializer);
+  exportedLiterals.set(target, exported);
+  return exported;
+}
+
+/**
+ * Les constantes exportées (texte littéral) des fichiers de la source importés par un fichier, sous leur nom
+ * local : import relatif, alias de chemin d'un `tsconfig`, ou fichier baril suivi jusqu'à la déclaration.
+ */
 function importedLiterals(
   ts: TypeScriptModule,
   sf: TS.SourceFile,
   from: string,
   byPath: ReadonlyMap<string, ReadFile>,
+  identity: ClassIdentity,
 ): Map<string, TS.Expression> {
   const out = new Map<string, TS.Expression>();
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
-    const spec = st.moduleSpecifier.text;
     const named = st.importClause?.namedBindings;
-    if (!spec.startsWith('.') || !named || !ts.isNamedImports(named)) continue;
-    const base = path.posix.normalize(path.posix.join(path.posix.dirname(from), spec)).replace(/\.js$/, '');
-    const target = IMPORT_EXTENSIONS.map((ext) => byPath.get(base + ext)).find((f) => f !== undefined);
-    if (!target) continue;
-    const exported = new Map<string, TS.Expression>();
-    const tsf = ts.createSourceFile(target.path, target.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    for (const node of tsf.statements)
-      if (
-        ts.isVariableStatement(node) &&
-        node.declarationList.flags & ts.NodeFlags.Const &&
-        node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
-      )
-        for (const d of node.declarationList.declarations)
-          if (
-            ts.isIdentifier(d.name) &&
-            d.initializer &&
-            (ts.isStringLiteral(d.initializer) || ts.isNoSubstitutionTemplateLiteral(d.initializer))
-          ) {
-            exported.set(d.name.text, d.initializer);
-            importedFrom.set(d.initializer, `${d.name.text} = '${d.initializer.text}' (${target.path})`);
-          }
+    // Un module hors de la source (bibliothèque) ne désigne aucun fichier lu : rien à suivre.
+    const resolved = named ? identity.modules.resolve(from, st.moduleSpecifier.text) : undefined;
+    if (!named || !resolved) continue;
+    if (ts.isNamespaceImport(named)) {
+      // `import * as OrderActions from './order.actions'` : chaque constante lue, sous `OrderActions.nom`.
+      const target = byPath.get(resolved);
+      for (const [name, value] of target ? exportedLiteralsOf(ts, target) : [])
+        out.set(`${named.name.text}.${name}`, value);
+      continue;
+    }
     for (const element of named.elements) {
-      const value = exported.get((element.propertyName ?? element.name).text);
+      const origin = identity.originOf(from, element.name.text);
+      const target = origin ? byPath.get(origin.file) : undefined;
+      const value = target && origin ? exportedLiteralsOf(ts, target).get(origin.name) : undefined;
       if (value) out.set(element.name.text, value);
     }
   }
@@ -510,9 +1170,13 @@ function classesOf(
   byPath: ReadonlyMap<string, ReadFile>,
   constants: Map<string, string | null>,
   functions: Map<string, ModuleFn | null>,
+  identity: ClassIdentity,
+  inherited?: (className: string) => Inherited | undefined,
+  types?: Map<string, TS.Node | null>,
 ): ClassInfo[] {
-  const sf = ts.createSourceFile(file.path, file.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  collectConstants(ts, sf, constants, functions);
+  const sf = sourceOf(ts, file);
+  // Une seconde lecture (membres hérités connus) ne recompte pas les constantes ni les fonctions du fichier.
+  if (!inherited) collectConstants(ts, sf, constants, functions, types);
   const loc = (node: TS.Node): Loc => ({
     file: file.path,
     line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
@@ -524,12 +1188,97 @@ function classesOf(
         if (ts.isIdentifier(d.name) && d.initializer) module.set(d.name.text, d.initializer);
   // Les constantes texte importées d'un fichier du dépôt (`import { URL } from './urls'`) : lues dans le
   // fichier désigné par l'import, jamais devinées par leur nom ; une définition locale l'emporte.
-  for (const [name, value] of importedLiterals(ts, sf, file.path, byPath))
+  for (const [name, value] of importedLiterals(ts, sf, file.path, byPath, identity))
     if (!module.has(name)) module.set(name, value);
   const out: ClassInfo[] = [];
   for (const statement of sf.statements) {
     if (!ts.isClassDeclaration(statement) || !statement.name) continue;
-    out.push(classOf(ts, statement, file, byPath, module, loc));
+    out.push(classOf(ts, statement, file, byPath, module, loc, inherited?.(statement.name.text)));
+  }
+  if (ngrx && !inherited) out.push(...reducersOf(ts, sf, file, module, loc));
+  return out;
+}
+
+/**
+ * Les réducteurs NgRx d'un fichier (`createReducer(initial, on(a, …), on(b, c, …))`, seul ou dans un
+ * `createFeature`) : chacun est un consommateur du store d'actions, qui n'écrit son état que pour les types
+ * de ses `on`. Un `on` dont un créateur n'est pas lu laisse le réducteur sans garde (il reçoit tout).
+ */
+function reducersOf(
+  ts: TypeScriptModule,
+  sf: TS.SourceFile,
+  file: ReadFile,
+  module: Map<string, TS.Expression>,
+  loc: (node: TS.Node) => Loc,
+): ClassInfo[] {
+  const out: ClassInfo[] = [];
+  const base = (file.path.split('/').pop() ?? '').replace(/\.(reducer|feature|state)?\.?ts$/, '');
+  const fallback = `${base.replace(/[-.](\w)/g, (_, ch: string) => ch.toUpperCase())}Reducer`;
+  const find = (node: TS.Node): TS.CallExpression | undefined => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'createReducer'
+    )
+      return node;
+    return ts.forEachChild(node, find);
+  };
+  for (const statement of sf.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const d of statement.declarationList.declarations) {
+      const call = ts.isIdentifier(d.name) && d.initializer ? find(d.initializer) : undefined;
+      if (!call || !ts.isIdentifier(d.name)) continue;
+      const allow: string[] = [];
+      let readable = true;
+      for (const arg of call.arguments.slice(1)) {
+        if (!ts.isCallExpression(arg) || !ts.isIdentifier(arg.expression) || arg.expression.text !== 'on') {
+          readable = false;
+          continue;
+        }
+        for (const creator of arg.arguments.slice(0, -1)) {
+          const type = actionTypeOf(ts, creator, module);
+          if (type === undefined) readable = false;
+          else allow.push(`L:${JSON.stringify(type)}`);
+        }
+      }
+      const name = /^reducer$/i.test(d.name.text) ? fallback : d.name.text;
+      const at = loc(call);
+      out.push({
+        name,
+        file: file.path,
+        role: 'STORE',
+        component: false,
+        deps: new Map([[NGRX_DEP, NGRX_STORE]]),
+        http: new Set(),
+        values: new Map(),
+        module,
+        streams: new Map([
+          [
+            'state',
+            {
+              name: 'state',
+              kind: 'DERIVED',
+              sources: [{ via: NGRX_DEP, name: NGRX_ACTIONS }],
+              calls: [],
+              http: [],
+              operators: ['on'],
+              filters: [],
+              reads: [],
+              emits: [],
+              ...(readable && allow.length > 0
+                ? { gate: { field: 'type', allow: [...new Set(allow)] } }
+                : {}),
+              loc: at,
+            },
+          ],
+        ]),
+        methods: new Map(),
+        outputs: new Set(),
+        // Le store exécute ses réducteurs à chaque action : l'état est toujours tenu à jour.
+        consumes: [{ via: 'this', name: 'state' }],
+        loc: at,
+      });
+    }
   }
   return out;
 }
@@ -541,6 +1290,7 @@ function classOf(
   byPath: ReadonlyMap<string, ReadFile>,
   module: Map<string, TS.Expression>,
   loc: (node: TS.Node) => Loc,
+  fromBase?: Inherited,
 ): ClassInfo {
   const info: ClassInfo = {
     name: node.name?.text ?? '',
@@ -599,7 +1349,12 @@ function classOf(
   for (const member of node.members) {
     if (ts.isConstructorDeclaration(member)) {
       for (const parameter of member.parameters) {
-        const type = typeNameOf(ts, parameter.type);
+        // `@Inject(JETON) private api: Api` : c'est le jeton qui dit ce qui est injecté, pas le type écrit.
+        const injected = (ts.getDecorators(parameter) ?? [])
+          .map((d) => d.expression)
+          .find((e): e is TS.CallExpression => ts.isCallExpression(e) && e.expression.getText() === 'Inject');
+        const token = injected?.arguments[0];
+        const type = token && ts.isIdentifier(token) ? token.text : typeNameOf(ts, parameter.type);
         if (ts.isIdentifier(parameter.name) && type) info.deps.set(parameter.name.text, type);
       }
       for (const statement of member.body?.statements ?? [])
@@ -638,21 +1393,93 @@ function classOf(
         pending.push({ name, init: member.name, type, at: member });
     }
   }
+  // Les dépendances déduites, sans injection : une propriété construite (`api = new OrderApi()`), une propriété
+  // ou un accesseur au type écrit (`private api!: OrderApi`, `get api(): OrderApi`). Jamais un flux, jamais un
+  // type de base du langage ; une injection du même nom l'emporte.
+  const soften = (name: string, type: string | undefined): void => {
+    if (!type || info.deps.has(name) || NOT_A_SERVICE.test(type) || SUBJECTS.has(type)) return;
+    info.deps.set(name, type);
+    (info.soft ??= new Set()).add(name);
+  };
+  for (const member of node.members) {
+    if (ts.isGetAccessorDeclaration(member) && ts.isIdentifier(member.name))
+      soften(member.name.text, typeNameOf(ts, member.type));
+    if (!ts.isPropertyDeclaration(member) || !ts.isIdentifier(member.name)) continue;
+    const init = member.initializer;
+    if (init && ts.isNewExpression(init) && ts.isIdentifier(init.expression))
+      soften(member.name.text, init.expression.text);
+    else if (!init && !member.name.text.endsWith('$')) soften(member.name.text, typeNameOf(ts, member.type));
+  }
+  // Ce que les classes de base fournissent (dépendances injectées, client HTTP, flux) est connu des méthodes
+  // de la sous-classe : `this.api.save()` y est un appel, `this.state.next()` une émission.
+  for (const [name, type] of fromBase?.deps ?? []) if (!info.deps.has(name)) info.deps.set(name, type);
+  for (const name of fromBase?.http ?? []) info.http.add(name);
   for (const [name, type] of info.deps)
     if (type === 'HttpClient' || /^(http|httpClient)$/i.test(name)) info.http.add(name);
   // Les flux : Subject créé, ou propriété observable (nom en $, type Observable, pipe/combineLatest…).
-  const streamNames = new Set<string>();
+  const streamNames = new Set<string>(fromBase?.streams ?? []);
+  /** `createEffect(() => flux, { dispatch })` : le flux rendu, et s'il renvoie ses actions au store. */
+  const effectOf = (init: TS.Expression): { body: TS.Expression; dispatch: boolean } | undefined => {
+    if (!ngrx || !ts.isCallExpression(init) || init.expression.getText() !== 'createEffect') return undefined;
+    const fn = init.arguments[0];
+    const returned =
+      fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) ? returnsOf(ts, fn.body) : [];
+    const body = returned.length === 1 ? returned[0] : undefined;
+    if (!body) return undefined;
+    const options = init.arguments[1];
+    const silent =
+      options !== undefined &&
+      ts.isObjectLiteralExpression(options) &&
+      options.properties.some(
+        (prop) =>
+          ts.isPropertyAssignment(prop) &&
+          prop.name.getText() === 'dispatch' &&
+          prop.initializer.kind === ts.SyntaxKind.FalseKeyword,
+      );
+    return { body, dispatch: !silent };
+  };
+  if (ngrx) {
+    // `actions$ = inject(Actions)` : le flux des actions du store, sous un autre nom.
+    for (const [name, type] of [...info.deps])
+      if (type === 'Actions') {
+        // Ce n'est plus une dépendance appelée, mais un flux lu (`this.actions$.pipe(…)`).
+        info.deps.delete(name);
+        info.deps.set(NGRX_DEP, NGRX_STORE);
+        streamNames.add(name);
+        info.streams.set(name, {
+          name,
+          kind: 'DERIVED',
+          sources: [],
+          calls: [],
+          http: [],
+          operators: [],
+          filters: [],
+          reads: [],
+          emits: [],
+          alias: { via: NGRX_DEP, name: NGRX_ACTIONS },
+          loc: info.loc,
+        });
+      }
+  }
+  const signals = new Set<string>();
   for (const p of pending) {
     const created =
       ts.isNewExpression(p.init) && SUBJECTS.has(p.init.expression.getText().split('.').pop() ?? '');
+    if (signalKindOf(ts, p.init)) signals.add(p.name);
     if (
       created ||
+      signalKindOf(ts, p.init) !== undefined ||
+      effectOf(p.init) !== undefined ||
+      (ngrxState !== undefined && /\.(select|selectSignal)\(/.test(p.init.getText())) ||
       p.name.endsWith('$') ||
       (p.type && /\b(Observable|Subject)\b/.test(p.type)) ||
       isObservable(ts, p.init)
     )
       streamNames.add(p.name);
     else info.values.set(p.name, p.init);
+    // `store.selectSignal(…)` : un signal, tenu à jour sans souscription écrite.
+    if (ngrxState && /\.selectSignal\(/.test(p.init.getText()))
+      info.consumes.push({ via: 'this', name: p.name });
     // toSignal(this.x$) / firstValueFrom(…) dans une propriété : le flux est souscrit.
     if (
       ts.isCallExpression(p.init) &&
@@ -664,26 +1491,51 @@ function classOf(
       if (ref) info.consumes.push(ref);
     }
   }
-  const ctx = { ts, info, loc, streamNames };
+  const ctx: Ctx = { ts, info, loc, streamNames, signals };
   for (const p of pending) {
     if (!streamNames.has(p.name)) continue;
     const created = ts.isNewExpression(p.init) ? p.init.expression.getText().split('.').pop() : undefined;
+    const signal = signalKindOf(ts, p.init);
     const stream: Stream = {
       name: p.name,
-      kind: created && SUBJECTS.has(created) ? 'SUBJECT' : 'DERIVED',
-      ...(created && SUBJECTS.has(created) ? { type: created } : {}),
+      kind: (created && SUBJECTS.has(created)) || signal === 'SOURCE' ? 'SUBJECT' : 'DERIVED',
+      ...(created && SUBJECTS.has(created)
+        ? { type: created }
+        : signal
+          ? { type: signal === 'SOURCE' ? 'signal' : signal === 'COMPUTED' ? 'computed' : 'toSignal' }
+          : {}),
       sources: [],
       calls: [],
       http: [],
       operators: [],
       filters: [],
       reads: [],
+      emits: [],
       loc: loc(p.at),
     };
-    if (stream.kind === 'DERIVED' && !ts.isIdentifier(p.init)) {
+    const effect = effectOf(p.init);
+    if (effect) {
+      // Un effet : le flux rendu par son rappel ; les actions qu'il fabrique repartent dans le store, sauf
+      // `dispatch: false`. Le module d'effets le souscrit dès son enregistrement.
+      info.deps.set(NGRX_DEP, NGRX_STORE);
+      stream.init = effect.body;
+      readStream(
+        effect.dispatch ? { ...ctx, emitsTo: { via: NGRX_DEP, name: NGRX_ACTIONS } } : ctx,
+        effect.body,
+        stream,
+      );
+      info.consumes.push({ via: 'this', name: p.name });
+    } else if (signal === 'COMPUTED' && ts.isCallExpression(p.init) && p.init.arguments[0]) {
+      // Un signal calculé : il dépend des signaux que son calcul lit.
+      const reads = signalReadsOf(ctx, p.init.arguments[0]);
+      stream.sources.push(...reads.own, ...reads.maybe);
+    } else if (signal === 'BRIDGE' && ts.isCallExpression(p.init) && p.init.arguments[0]) {
+      // `toSignal(flux)` : le signal suit le flux, et le souscrit dès sa création.
+      readStream(ctx, p.init.arguments[0], stream);
+      info.consumes.push({ via: 'this', name: p.name });
+    } else if (stream.kind === 'DERIVED' && !ts.isIdentifier(p.init)) {
+      stream.init = p.init;
       readStream(ctx, p.init, stream);
-      const typed = typeFilterOf(ts, p.init);
-      if (typed && stream.sources.length === 1) stream.typeFilter = typed;
     }
     // Une propriété déclarée puis assignée : la seconde lecture complète la première.
     const known = info.streams.get(p.name);
@@ -703,6 +1555,8 @@ function classOf(
           operators: [],
           filters: [],
           reads: [],
+          emits: [],
+          init: ret,
           loc: loc(member),
         };
         readStream(ctx, ret, stream);
@@ -710,31 +1564,71 @@ function classOf(
         continue;
       }
     }
-    const body =
-      (ts.isMethodDeclaration(member) ||
-        ts.isConstructorDeclaration(member) ||
-        ts.isGetAccessorDeclaration(member)) &&
-      member.body
-        ? member.body
-        : ts.isPropertyDeclaration(member) &&
-            member.initializer &&
-            (ts.isArrowFunction(member.initializer) || ts.isFunctionExpression(member.initializer))
-          ? member.initializer.body
-          : undefined;
+    // Un store de composant NgRx : `load = this.effect((trigger$) => …)` et `set = this.updater((state, v) =>
+    // …)` sont des méthodes appelées (`store.load()`), dont le corps est celui du rappel.
+    const storeFn = info.base === 'ComponentStore' ? componentStoreFn(ts, member) : undefined;
+    const reaction =
+      ts.isPropertyDeclaration(member) &&
+      member.initializer &&
+      ts.isCallExpression(member.initializer) &&
+      member.initializer.expression.getText() === 'effect'
+        ? member.initializer
+        : undefined;
+    const body = storeFn
+      ? storeFn.fn.body
+      : reaction
+        ? reaction
+        : (ts.isMethodDeclaration(member) ||
+              ts.isConstructorDeclaration(member) ||
+              ts.isGetAccessorDeclaration(member)) &&
+            member.body
+          ? member.body
+          : ts.isPropertyDeclaration(member) &&
+              member.initializer &&
+              (ts.isArrowFunction(member.initializer) || ts.isFunctionExpression(member.initializer))
+            ? member.initializer.body
+            : undefined;
     if (!body) continue;
     const name = ts.isConstructorDeclaration(member) ? 'constructor' : member.name?.getText();
     if (!name) continue;
-    const parameters =
-      ts.isConstructorDeclaration(member) ||
-      ts.isMethodDeclaration(member) ||
-      ts.isGetAccessorDeclaration(member)
-        ? member.parameters
-        : ((member as TS.PropertyDeclaration).initializer as TS.ArrowFunction).parameters;
+    const parameters: readonly TS.ParameterDeclaration[] = storeFn
+      ? // L'effet reçoit le flux de ses déclenchements ; l'updater, l'état puis la valeur transmise.
+        storeFn.kind === 'updater'
+        ? storeFn.fn.parameters.slice(1)
+        : []
+      : reaction
+        ? []
+        : ts.isConstructorDeclaration(member) ||
+            ts.isMethodDeclaration(member) ||
+            ts.isGetAccessorDeclaration(member)
+          ? member.parameters
+          : ((member as TS.PropertyDeclaration).initializer as TS.ArrowFunction).parameters;
     const arrow =
       ts.isPropertyDeclaration(member) &&
       member.initializer !== undefined &&
       ts.isArrowFunction(member.initializer);
-    info.methods.set(name, readMethod(ctx, name, parameters, body, loc(member), arrow));
+    const method = readMethod(ctx, name, parameters, body, loc(member), arrow);
+    if (storeFn?.kind === 'effect') {
+      // Le store de composant souscrit lui-même la chaîne rendue par le rappel : l'appeler l'exécute, et
+      // l'appelant n'a rien à souscrire.
+      method.returnsObservable = false;
+      method.returns = [];
+      const run = (site: { use?: Use; cont?: Continuation[] }): void => {
+        // Un résultat laissé de côté (`this.setItems(x)` dans un tap) n'a rien à souscrire.
+        if (site.use !== undefined && site.use !== 'DROPPED') site.use = 'SUBSCRIBED';
+        for (const k of site.cont ?? []) k.run = 'SUBSCRIBED';
+      };
+      method.calls.forEach(run);
+      method.http.forEach(run);
+      method.emits.forEach(run);
+    }
+    if (reaction) method.atCreation = true;
+    const returned =
+      ts.isMethodDeclaration(member) || ts.isGetAccessorDeclaration(member)
+        ? typeNameOf(ts, member.type)
+        : undefined;
+    if (returned && !NOT_A_SERVICE.test(returned)) method.returnType = returned;
+    info.methods.set(name, method);
   }
   info.role = info.component
     ? 'COMPONENT'
@@ -746,11 +1640,66 @@ function classOf(
   return info;
 }
 
+/**
+ * Un signal Angular, d'après la fonction qui le crée : écrit ou reçu (`signal`, `model`, `input`,
+ * `linkedSignal`), calculé (`computed`), ou tiré d'un Observable (`toSignal`).
+ */
+function signalKindOf(
+  ts: TypeScriptModule,
+  init: TS.Expression,
+): 'SOURCE' | 'COMPUTED' | 'BRIDGE' | undefined {
+  if (!ts.isCallExpression(init)) return undefined;
+  const head = init.expression.getText().split('.')[0] ?? '';
+  if (['signal', 'model', 'input', 'linkedSignal'].includes(head)) return 'SOURCE';
+  return head === 'computed' ? 'COMPUTED' : head === 'toSignal' ? 'BRIDGE' : undefined;
+}
+
+/**
+ * Les signaux lus dans un corps (`this.count()`, `this.store.total()`) : un appel sans argument sur une
+ * propriété. Ceux de la classe sont sûrs ; ceux d'une dépendance ne le sont qu'une fois sa classe lue (un
+ * appel de méthode sans argument s'écrit pareil) : ils sont rendus à part.
+ */
+function signalReadsOf(ctx: Ctx, body: TS.Node): { own: Ref[]; maybe: Ref[] } {
+  const { ts } = ctx;
+  const own = new Map<string, Ref>();
+  const maybe = new Map<string, Ref>();
+  const visit = (node: TS.Node): void => {
+    if (ts.isCallExpression(node) && node.arguments.length === 0) {
+      const ref = refOf(ts, node.expression);
+      if (ref?.via === 'this' && ctx.signals?.has(ref.name)) own.set(ref.name, ref);
+      else if (ref && ref.via !== 'this' && ctx.info.deps.has(ref.via) && !ctx.info.http.has(ref.via))
+        maybe.set(`${ref.via}.${ref.name}`, ref);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return { own: [...own.values()], maybe: [...maybe.values()] };
+}
+
+/** `x = this.effect(fn)` / `x = this.updater(fn)` d'un store de composant : le rappel et sa nature. */
+function componentStoreFn(
+  ts: TypeScriptModule,
+  member: TS.ClassElement,
+): { fn: TS.ArrowFunction | TS.FunctionExpression; kind: 'effect' | 'updater' } | undefined {
+  const init = ts.isPropertyDeclaration(member) ? member.initializer : undefined;
+  if (!init || !ts.isCallExpression(init) || !ts.isPropertyAccessExpression(init.expression))
+    return undefined;
+  const kind = init.expression.name.text;
+  const fn = init.arguments[0];
+  if (init.expression.expression.kind !== ts.SyntaxKind.ThisKeyword || !fn) return undefined;
+  if (kind !== 'effect' && kind !== 'updater') return undefined;
+  return ts.isArrowFunction(fn) || ts.isFunctionExpression(fn) ? { fn, kind } : undefined;
+}
+
 interface Ctx {
   ts: TypeScriptModule;
   info: ClassInfo;
   loc: (node: TS.Node) => Loc;
   streamNames: Set<string>;
+  /** Dans un effet NgRx : le flux où repartent les actions fabriquées par son traitement. */
+  emitsTo?: Ref;
+  /** Les signaux de la classe (`count = signal(0)`, `total = computed(…)`). */
+  signals?: Set<string>;
 }
 
 /** Une expression qui rend un Observable : pipe, asObservable, création RxJS. */
@@ -796,9 +1745,44 @@ function readStream(ctx: Ctx, init: TS.Expression, stream: Stream): void {
         return;
       }
       if (ts.isIdentifier(callee) && CREATION.has(callee.text)) stream.operators.push(callee.text);
+      // `store.select(sélecteur)`, `select(sélecteur)` dans un pipe : l'état du réducteur que le sélecteur lit.
+      if (ngrxState) {
+        const selecting =
+          (ts.isIdentifier(callee) && callee.text === 'select') ||
+          (ts.isPropertyAccessExpression(callee) &&
+            ['select', 'selectSignal'].includes(callee.name.text) &&
+            ts.isPropertyAccessExpression(callee.expression) &&
+            ctx.info.deps.get(callee.expression.name.text) === NGRX_STORE);
+        const reducer =
+          selecting && node.arguments[0] ? reducerOfSelector(node.arguments[0].getText()) : undefined;
+        if (reducer) {
+          const dep = `ngrx:state:${reducer}`;
+          ctx.info.deps.set(dep, reducer);
+          stream.sources.push({ via: dep, name: 'state' });
+          return;
+        }
+      }
+      // Dans un effet, une action fabriquée (`saveSuccess()`) est rendue au store : une émission.
+      if (ctx.emitsTo && actionTypeOf(ts, callee, ctx.info.module) !== undefined) {
+        stream.emits.push({ ref: ctx.emitsTo, value: node, fedBy: [], loc: ctx.loc(node) });
+        return;
+      }
       if (ts.isPropertyAccessExpression(callee)) {
         const recv = callee.expression;
         const method = callee.name.text;
+        const emitted = method === 'next' ? refOf(ts, recv) : undefined;
+        if (emitted && isStreamRef(ctx, emitted)) {
+          // Le traitement pousse une valeur dans un flux : une émission (un effet qui en relance un autre),
+          // jamais une source de ce flux.
+          stream.emits.push({
+            ref: emitted,
+            ...(node.arguments[0] ? { value: node.arguments[0] } : {}),
+            fedBy: [],
+            loc: ctx.loc(node),
+          });
+          for (const arg of node.arguments) visit(arg, operator);
+          return;
+        }
         if (recv.kind === ts.SyntaxKind.ThisKeyword && !ctx.streamNames.has(method))
           stream.calls.push(site(ctx, node, 'this', method, 'STORED', operator));
         else if (
@@ -983,72 +1967,6 @@ const short = (text: string, max = 80): string => {
   const one = text.replace(/\s+/g, ' ').trim();
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
-
-/**
- * La garde par type d'un flux calculé : le PREMIER opérateur de `source.pipe(…)` garde les valeurs dont un
- * champ vaut une constante — `filter((a) => a.type === 'SAVE')` (ou plusieurs valeurs réunies par ||), ou
- * `ofType('SAVE', …)` avec des littéraux. Toute autre garde (fonction, opérateur placé après un map) est
- * ignoré ici : il ne permet pas de dire quelles émissions passent.
- */
-function typeFilterOf(
-  ts: TypeScriptModule,
-  init: TS.Expression,
-): { field: string; values: TS.Expression[] } | undefined {
-  const call = strip(ts, init);
-  if (!ts.isCallExpression(call) || !ts.isPropertyAccessExpression(call.expression)) return undefined;
-  if (call.expression.name.text !== 'pipe') return undefined;
-  const first = call.arguments[0];
-  if (!first || !ts.isCallExpression(first) || !ts.isIdentifier(first.expression)) return undefined;
-  const named = (e: TS.Expression): boolean =>
-    literalOf(ts, e) !== undefined || ts.isPropertyAccessExpression(e) || ts.isIdentifier(e);
-  if (first.expression.text === 'ofType') {
-    const values = first.arguments.filter((a) => literalOf(ts, a) !== undefined);
-    return values.length > 0 && values.length === first.arguments.length
-      ? { field: 'type', values }
-      : undefined;
-  }
-  if (first.expression.text !== 'filter') return undefined;
-  const fn = first.arguments[0];
-  if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) return undefined;
-  const param = fn.parameters[0];
-  if (!param || !ts.isIdentifier(param.name)) return undefined;
-  const name = param.name.text;
-  let body: TS.Node = fn.body;
-  if (ts.isBlock(body)) {
-    const only = body.statements.length === 1 ? body.statements[0] : undefined;
-    if (!only || !ts.isReturnStatement(only) || !only.expression) return undefined;
-    body = only.expression;
-  }
-  let field: string | undefined;
-  const values: TS.Expression[] = [];
-  const read = (e: TS.Expression): boolean => {
-    const x = strip(ts, e);
-    if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.BarBarToken)
-      return read(x.left) && read(x.right);
-    if (
-      !ts.isBinaryExpression(x) ||
-      (x.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken &&
-        x.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsToken)
-    )
-      return false;
-    const side = (a: TS.Expression, b: TS.Expression): boolean => {
-      const p = strip(ts, a);
-      if (
-        !ts.isPropertyAccessExpression(p) ||
-        !ts.isIdentifier(p.expression) ||
-        p.expression.text !== name ||
-        !named(strip(ts, b))
-      )
-        return false;
-      if (field !== undefined && field !== p.name.text) return false;
-      field = p.name.text;
-      values.push(strip(ts, b));
-      return true;
-    };
-    return side(x.left, x.right) || side(x.right, x.left);
-  };
-  return read(body as TS.Expression) && field ? { field, values } : undefined;
-}
 
 const strip = (ts: TypeScriptModule, e: TS.Expression): TS.Expression => {
   let cur = e;
@@ -1483,16 +2401,18 @@ function assignsOf(ts: TypeScriptModule, body: TS.Node): Map<string, TS.Expressi
 function readMethod(
   ctx: Ctx,
   name: string,
-  parameters: TS.NodeArray<TS.ParameterDeclaration>,
+  parameters: readonly TS.ParameterDeclaration[],
   body: TS.Node,
   at: Loc,
   arrow = false,
 ): Method {
   const { ts, info } = ctx;
   const paramTypes = new Map<string, string>();
+  const paramNodes = new Map<string, TS.TypeNode>();
   for (const p of parameters) {
     const type = typeNameOf(ts, p.type);
     if (ts.isIdentifier(p.name) && type) paramTypes.set(p.name.text, type);
+    if (ts.isIdentifier(p.name) && p.type) paramNodes.set(p.name.text, p.type);
   }
   const returned = returnsOf(ts, body);
   const refs = returned.map((r) => {
@@ -1508,6 +2428,7 @@ function readMethod(
     aliases: new Map(),
     assigns: assignsOf(ts, body),
     paramTypes,
+    paramNodes,
     returns: returned,
     ...(refs.length > 0 && refs.every((r) => r && r === refs[0]) ? { returnRef: refs[0] } : {}),
     ...(arrow ? { arrow: true } : {}),
@@ -1544,10 +2465,39 @@ function readMethod(
       const path = base.startsWith('@path:') ? base.slice(6) : base.startsWith('@') ? undefined : base;
       return path ? { targets: [`@path:${path}.${x.name.text}`], partial: head.partial } : undefined;
     }
-    if (ts.isCallExpression(x) && x.arguments.length === 0) {
+    // Un objet construit ou injecté sur place : sa classe est écrite.
+    if (ts.isNewExpression(x) && ts.isIdentifier(x.expression) && !NOT_A_SERVICE.test(x.expression.text))
+      return SUBJECTS.has(x.expression.text)
+        ? undefined
+        : { targets: [`@type:${x.expression.text}`], partial: false };
+    if (ts.isCallExpression(x)) {
       const callee = x.expression;
-      if (ts.isPropertyAccessExpression(callee) && callee.expression.kind === ts.SyntaxKind.ThisKeyword)
-        return { targets: [`@ret:${callee.name.text}`], partial: false };
+      const asked = x.arguments[0];
+      // `inject(X)`, `this.injector.get(X)` : la classe demandée.
+      if (
+        asked &&
+        ts.isIdentifier(asked) &&
+        /^[A-Z]/.test(asked.text) &&
+        ((ts.isIdentifier(callee) && callee.text === 'inject') ||
+          (ts.isPropertyAccessExpression(callee) &&
+            callee.name.text === 'get' &&
+            ts.isPropertyAccessExpression(callee.expression) &&
+            info.deps.get(callee.expression.name.text) === 'Injector'))
+      )
+        return { targets: [`@type:${asked.text}`], partial: false };
+      // Le retour d'une méthode de la classe ou d'une dépendance : la dépendance qu'elle rend, ou son type écrit.
+      if (ts.isPropertyAccessExpression(callee)) {
+        if (callee.expression.kind === ts.SyntaxKind.ThisKeyword)
+          return { targets: [`@ret:${callee.name.text}`], partial: false };
+        const owner = callee.expression;
+        if (
+          ts.isPropertyAccessExpression(owner) &&
+          owner.expression.kind === ts.SyntaxKind.ThisKeyword &&
+          info.deps.has(owner.name.text) &&
+          !info.http.has(owner.name.text)
+        )
+          return { targets: [`@ret:${owner.name.text}.${callee.name.text}`], partial: false };
+      }
       return undefined;
     }
     if (ts.isIdentifier(x)) {
@@ -1556,6 +2506,9 @@ function readMethod(
       const type = method.paramTypes?.get(x.text);
       if (method.params.includes(x.text))
         return type && !LIBRARY.test(type) ? { targets: [`@type:${type}`], partial: false } : undefined;
+      // Une variable locale au type écrit (`const api: OrderApi = …`).
+      const written = method.localTypes?.get(x.text);
+      if (written) return { targets: [`@type:${written}`], partial: false };
       const values = method.assigns?.get(x.text) ?? [];
       if (values.length === 0) return undefined;
       const targets = new Set<string>();
@@ -1577,6 +2530,9 @@ function readMethod(
     if (ts.isVariableDeclarationList(node) && node.flags & ts.NodeFlags.Const)
       for (const d of node.declarations) {
         if (ts.isIdentifier(d.name) && d.initializer) method.locals.set(d.name.text, d.initializer);
+        const written = ts.isIdentifier(d.name) ? typeNameOf(ts, d.type) : undefined;
+        if (written && ts.isIdentifier(d.name) && !NOT_A_SERVICE.test(written) && !LIBRARY.test(written))
+          (method.localTypes ??= new Map()).set(d.name.text, written);
         if (ts.isObjectBindingPattern(d.name) && d.initializer)
           for (const element of d.name.elements)
             if (ts.isIdentifier(element.name))
@@ -1597,6 +2553,64 @@ function readMethod(
     }
     if (ts.isCallExpression(node)) {
       const callee = node.expression;
+      // Un paramètre appelé (`fn()` dans `runNow(fn)`) : le rappel reçu est exécuté par cette méthode.
+      if (ts.isIdentifier(callee) && method.params.includes(callee.text))
+        (method.invokes ??= new Set()).add(method.params.indexOf(callee.text));
+      // Une méthode de la classe passée en référence (`this.runNow(this.doSave)`, `setTimeout(this.tick)`) :
+      // un appel possible, dit comme tel ; confirmé si la méthode qui la reçoit appelle son paramètre.
+      const calleeName = ts.isPropertyAccessExpression(callee)
+        ? callee.name.text
+        : ts.isIdentifier(callee)
+          ? callee.text
+          : '';
+      if (calleeName && !PASSES_HANDLED.has(calleeName))
+        node.arguments.forEach((arg, index) => {
+          const a = strip(ts, arg);
+          if (
+            !ts.isPropertyAccessExpression(a) ||
+            a.expression.kind !== ts.SyntaxKind.ThisKeyword ||
+            ctx.streamNames.has(a.name.text) ||
+            info.deps.has(a.name.text)
+          )
+            return;
+          const owner = ts.isPropertyAccessExpression(callee) ? callee.expression : undefined;
+          const target = !owner
+            ? ''
+            : owner.kind === ts.SyntaxKind.ThisKeyword
+              ? 'this'
+              : ts.isPropertyAccessExpression(owner) && owner.expression.kind === ts.SyntaxKind.ThisKeyword
+                ? owner.name.text
+                : '';
+          (pipeline ? pipeline.calls : method.calls).push({
+            target: 'this',
+            method: a.name.text,
+            args: [],
+            use: 'LOCAL',
+            ...controlOf(ctx, node, body, method),
+            passedTo: { target, method: calleeName, index },
+            loc: ctx.loc(arg),
+          });
+        });
+      // `effect(() => …)` : le rappel est rejoué à chaque changement d'un signal qu'il lit. Un traitement par
+      // signal lu ; le rappel reste aussi lu comme le code de la méthode (il s'exécute une fois à sa création).
+      const reaction =
+        !pipeline && ts.isIdentifier(callee) && callee.text === 'effect' ? node.arguments[0] : undefined;
+      if (reaction && (ts.isArrowFunction(reaction) || ts.isFunctionExpression(reaction))) {
+        const reads = signalReadsOf(ctx, reaction.body);
+        const shared: Pipeline = {
+          source: { via: 'this', name: '' },
+          calls: [],
+          emits: [],
+          operators: ['effect'],
+          subscribed: true,
+          loc: ctx.loc(node),
+        };
+        if (reads.own.length + reads.maybe.length > 0) {
+          visit(reaction.body, shared);
+          for (const source of reads.own) method.pipelines.push({ ...shared, source });
+          for (const source of reads.maybe) method.pipelines.push({ ...shared, source, maybe: true });
+        }
+      }
       // Les créations qui souscrivent (toSignal, firstValueFrom) : un flux passé là est consommé.
       if (ts.isPropertyAccessExpression(callee)) {
         const recv = callee.expression;
@@ -1635,10 +2649,19 @@ function readMethod(
           if (useOf(ctx, top) === 'RETURNED') method.returnsObservable = true;
           return;
         }
-        if (fname === 'next' && isStreamRef(ctx, ref)) {
+        // `this.count.set(v)` / `.update(fn)` : l'écriture d'un signal, comme un next(). Sur le signal d'une
+        // dépendance, elle n'est gardée que si la classe de la dépendance déclare ce signal.
+        const writes =
+          (fname === 'set' || fname === 'update') &&
+          ref !== undefined &&
+          (ref.via === 'this'
+            ? (ctx.signals?.has(ref.name) ?? false)
+            : info.deps.has(ref.via) && !info.http.has(ref.via));
+        if (ref && ((fname === 'next' && isStreamRef(ctx, ref)) || writes)) {
           const emit: Emit = {
             ref,
-            ...(node.arguments[0] ? { value: node.arguments[0] } : {}),
+            ...(node.arguments[0] && fname !== 'update' ? { value: node.arguments[0] } : {}),
+            ...(fname !== 'next' ? { how: fname } : {}),
             fedBy: fedBy(ctx, node),
             ...controlOf(ctx, node, body, method),
             loc: ctx.loc(node),
@@ -1699,10 +2722,32 @@ function readMethod(
           !['pipe', 'subscribe', 'next', 'emit', 'bind', 'call', 'apply'].includes(fname)
         ) {
           // Un alias local, un chemin de dépendances, un paramètre typé ou le retour d'une méthode.
-          const r = receiverOf(recv);
+          let r = receiverOf(recv);
           const direct =
             ts.isPropertyAccessExpression(recv) && recv.expression.kind === ts.SyntaxKind.ThisKeyword;
-          if (r && !direct)
+          // Rien d'écrit ne dit la classe du récepteur : le compilateur est interrogé, en second avis.
+          let inferred = false;
+          if (!r && !(direct && ctx.streamNames.has(recv.name.text))) {
+            let root: TS.Expression = strip(ts, recv);
+            while (
+              ts.isPropertyAccessExpression(root) ||
+              ts.isCallExpression(root) ||
+              ts.isElementAccessExpression(root)
+            )
+              root = strip(ts, root.expression);
+            const name =
+              ts.isIdentifier(root) && (NOT_WORTH_ASKING.test(root.text) || /^[A-Z]/.test(root.text))
+                ? undefined
+                : inference?.typeOf(recv);
+            if (name) {
+              r = { targets: [`@type:${name}`], partial: false };
+              inferred = true;
+            }
+          }
+          // Le retour d'une méthode sans type écrit : l'avis du compilateur est gardé en réserve.
+          const viaReturn = !inferred && r?.targets.length === 1 && (r.targets[0] ?? '').startsWith('@ret:');
+          const fallback = viaReturn ? inference?.typeOf(recv) : undefined;
+          if (r && (!direct || inferred))
             for (const target of r.targets) {
               const s = site(
                 ctx,
@@ -1712,6 +2757,8 @@ function readMethod(
                 pipeline ? (pipeline.subscribed ? 'SUBSCRIBED' : 'LOCAL') : useOf(ctx, node),
               );
               Object.assign(s, controlOf(ctx, node, body, method), {
+                ...(inferred ? { inferred: true } : {}),
+                ...(fallback ? { fallback } : {}),
                 ...(ts.isIdentifier(strip(ts, recv)) ? { alias: recv.getText() } : {}),
                 ...(r.targets.length > 1 ? { alternatives: r.targets.length } : {}),
                 ...(r.partial ? { partial: true } : {}),
@@ -1754,6 +2801,33 @@ function readMethod(
           });
           (pipeline ? pipeline.calls : method.calls).push(s);
         }
+        // Une fonction utilitaire qui reçoit une dépendance (`emitOn(this.store, action)`) : ses appels sur ce
+        // paramètre sont ceux de cette méthode ; ils sont résolus quand toutes les fonctions sont lues.
+        if (
+          !m &&
+          !method.params.includes(callee.text) &&
+          node.arguments.some((arg) => {
+            const a = strip(ts, arg);
+            return (
+              ts.isPropertyAccessExpression(a) &&
+              a.expression.kind === ts.SyntaxKind.ThisKeyword &&
+              info.deps.has(a.name.text) &&
+              !info.http.has(a.name.text)
+            );
+          })
+        )
+          (method.fnCalls ??= []).push({
+            name: callee.text,
+            callee,
+            site: {
+              target: '',
+              method: '',
+              args: [...node.arguments],
+              use: 'LOCAL',
+              ...controlOf(ctx, node, body, method),
+              loc: ctx.loc(node),
+            },
+          });
         if (pipeline && OPERATORS.has(callee.text)) pipeline.operators.push(callee.text);
         if (pipeline && callee.text === 'filter' && node.arguments[0])
           (pipeline.filters ??= []).push(short(node.arguments[0].getText()));
@@ -2053,6 +3127,7 @@ function resolve(
   warnings: string[],
   constants: ReadonlyMap<string, string | null>,
   functions: ReadonlyMap<string, ModuleFn | null> = new Map(),
+  types: ReadonlyMap<string, TS.Node | null> = new Map(),
 ): RxjsFacts {
   const symbols = new Map<string, UiSymbol>();
   const links = new Map<string, UiLink>();
@@ -2061,8 +3136,68 @@ function resolve(
   const bases = new Map<string, { path: string; base?: string; baseKey?: string }>();
   const methodId = (c: ClassInfo, m: string): string => `${c.name}#${m}`;
   const streamId = (c: ClassInfo, s: string): string => `${c.name}.${s}`;
-  const classOfDep = (c: ClassInfo, via: string): ClassInfo | undefined =>
-    via === 'this' ? c : classes.get(c.deps.get(via) ?? '');
+  /** Les composants qu'un composant affiche (les balises de son gabarit), calculés à la première demande. */
+  let shown: Map<string, string[]> | undefined;
+  const shownBy = (): Map<string, string[]> => {
+    if (shown) return shown;
+    shown = new Map();
+    const bySelector = new Map<string, string>();
+    for (const k of classes.values()) if (k.component && k.selector) bySelector.set(k.selector, k.name);
+    for (const k of classes.values()) {
+      if (!k.component || !k.template) continue;
+      const tags = new Set([...k.template.matchAll(/<([a-z][\w-]*)/g)].map((t) => t[1] ?? ''));
+      const children = [...tags]
+        .map((tag) => bySelector.get(tag))
+        .filter((n): n is string => !!n && n !== k.name);
+      if (children.length > 0) shown.set(k.name, children);
+    }
+    return shown;
+  };
+  /** `c` est-il le composant `owner`, ou affiché (même indirectement) par lui ? */
+  const within = (owner: string, c: ClassInfo): boolean => {
+    if (owner === c.name) return true;
+    const seen = new Set<string>([owner]);
+    const queue = [...(shownBy().get(owner) ?? [])];
+    while (queue.length > 0 && seen.size < 500) {
+      const cur = queue.shift() ?? '';
+      if (cur === c.name) return true;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      queue.push(...(shownBy().get(cur) ?? []));
+    }
+    return false;
+  };
+  /**
+   * Les fournisseurs qui valent pour une injection de `type` dans la classe `c` : ceux de son propre
+   * décorateur ; sinon, pour un composant, ceux d'un composant qui l'affiche, puis ceux de l'application
+   * (hors de tout composant). Un service peut être créé n'importe où : tous les fournisseurs valent.
+   */
+  const providersFor = (c: ClassInfo, type: string | undefined): Provider[] => {
+    const list = (type ? providing?.byToken.get(type) : undefined) ?? [];
+    if (list.length === 0) return list;
+    const own = list.filter((p) => p.owner === c.name);
+    if (own.length > 0) return own;
+    if (!c.component) return list;
+    const byComponent = (p: Provider): boolean => !!p.owner && classes.get(p.owner)?.component === true;
+    const above = list.filter((p) => byComponent(p) && within(p.owner ?? '', c));
+    return above.length > 0 ? above : list.filter((p) => !byComponent(p));
+  };
+  /**
+   * Le fournisseur qui décide de ce qu'une injection de `type` reçoit dans la classe `c`. Plusieurs
+   * fournisseurs qui donnent des classes différentes, sans rien qui les départage : aucun n'est choisi.
+   */
+  const providerOf = (c: ClassInfo, type: string | undefined): Provider | undefined => {
+    const scoped = providersFor(c, type);
+    const impls = new Set(scoped.map((p) => p.impl));
+    const chosen = impls.size === 1 ? scoped[0] : undefined;
+    return chosen && classes.has(chosen.impl) ? chosen : undefined;
+  };
+  const classOfDep = (c: ClassInfo, via: string): ClassInfo | undefined => {
+    if (via === 'this') return c;
+    const type = c.deps.get(via);
+    const provided = providerOf(c, type);
+    return classes.get(provided?.impl ?? type ?? '');
+  };
   /** Une méthode, cherchée dans la classe puis ses classes de base. */
   const lookup = (c: ClassInfo, name: string): { cls: ClassInfo; method: Method } | undefined => {
     const seen = new Set<string>();
@@ -2081,6 +3216,11 @@ function resolve(
     while (cur && !seen.has(cur.name)) {
       seen.add(cur.name);
       const s = cur.streams.get(name);
+      if (s?.alias) {
+        // Un autre nom d'un flux d'une dépendance : c'est ce flux qui est désigné.
+        const owner = classOfDep(cur, s.alias.via);
+        return owner && owner !== cur ? streamLookup(owner, s.alias.name) : undefined;
+      }
       if (s) return { cls: cur, stream: s };
       cur = cur.base ? classes.get(cur.base) : undefined;
     }
@@ -2100,15 +3240,30 @@ function resolve(
       return cur;
     }
     if (target.startsWith('@ret:')) {
-      const found = lookup(c, target.slice(5));
-      const ref = found?.method.returnRef;
-      return found && ref ? targetClassOf(found.cls, ref, depth + 1) : undefined;
+      // `@ret:méthode` (de la classe) ou `@ret:dépendance.méthode` : la dépendance rendue, sinon le type écrit.
+      const [first = '', second] = target.slice(5).split('.');
+      const owner = second ? classOfDep(c, first) : c;
+      const found = owner ? lookup(owner, second ?? first) : undefined;
+      if (!found) return undefined;
+      const ref = found.method.returnRef;
+      if (ref) return targetClassOf(found.cls, ref, depth + 1);
+      return found.method.returnType ? classes.get(found.method.returnType) : undefined;
     }
     return classOfDep(c, target);
   };
   const resolveRef = (c: ClassInfo, ref: Ref): { cls: ClassInfo; stream: Stream } | undefined => {
     const target = classOfDep(c, ref.via);
     return target ? streamLookup(target, ref.name) : undefined;
+  };
+  const isSignal = (stream: Stream): boolean =>
+    ['signal', 'computed', 'toSignal'].includes(stream.type ?? '');
+  /**
+   * La source d'un traitement. Une lecture supposée d'un signal d'une dépendance (`this.store.total()`) n'en
+   * est une que si la classe de la dépendance déclare ce signal ; sinon le traitement n'existe pas.
+   */
+  const pipelineSource = (c: ClassInfo, p: Pipeline): { cls: ClassInfo; stream: Stream } | undefined => {
+    const r = resolveRef(c, p.source);
+    return p.maybe && r && !isSignal(r.stream) ? undefined : r;
   };
   const symbolOf = (c: ClassInfo, m: Method): string => {
     const id = methodId(c, m.name);
@@ -2146,6 +3301,8 @@ function resolve(
 
   // 1. Consommateurs des flux : souscriptions explicites, pipe async des gabarits, puis par dérivation.
   const consumed = new Map<string, { how: 'SUBSCRIBED' | 'ASYNC' | 'DERIVED'; by: string }[]>();
+  /** Les signaux lus par un gabarit : leur consommation n'est pas un pipe async. */
+  const shownSignals = new Set<string>();
   const consume = (id: string, how: 'SUBSCRIBED' | 'ASYNC' | 'DERIVED', by: string): void => {
     const list = consumed.get(id) ?? [];
     if (!list.some((x) => x.how === how && x.by === by)) list.push({ how, by });
@@ -2154,7 +3311,7 @@ function resolve(
   for (const c of classes.values()) {
     for (const m of c.methods.values())
       for (const p of m.pipelines) {
-        const r = resolveRef(c, p.source);
+        const r = pipelineSource(c, p);
         if (r && p.subscribed) consume(streamId(r.cls, r.stream.name), 'SUBSCRIBED', methodId(c, m.name));
       }
     for (const ref of c.consumes) {
@@ -2168,6 +3325,19 @@ function resolve(
           second && c.deps.has(root) ? resolveRef(c, { via: root, name: second }) : streamLookup(c, root);
         if (r) consume(streamId(r.cls, r.stream.name), 'ASYNC', c.name);
       }
+    // Un signal lu par le gabarit (`{{ total() }}`, `@if (visible())`) est tenu à jour tant qu'il est affiché.
+    if (c.component && c.template)
+      for (const a of c.template.matchAll(/(?<![\w$.])(?:([A-Za-z_$][\w$]*)\.)?([A-Za-z_$][\w$]*)\(\)/g)) {
+        const r = a[1]
+          ? c.deps.has(a[1])
+            ? resolveRef(c, { via: a[1], name: a[2] ?? '' })
+            : undefined
+          : streamLookup(c, a[2] ?? '');
+        if (!r || !isSignal(r.stream)) continue;
+        const id = streamId(r.cls, r.stream.name);
+        consume(id, 'ASYNC', c.name);
+        shownSignals.add(id);
+      }
   }
   // Un flux consommé consomme ses sources (point fixe borné).
   for (let round = 0; round < 50; round += 1) {
@@ -2175,7 +3345,7 @@ function resolve(
     for (const c of classes.values())
       for (const s of c.streams.values()) {
         const id = streamId(c, s.name);
-        if (!consumed.has(id)) continue;
+        if (s.alias || !consumed.has(id)) continue;
         for (const src of s.sources) {
           const r = resolveRef(c, src);
           if (!r) continue;
@@ -2199,7 +3369,9 @@ function resolve(
     if (viaAsync)
       return {
         confidence: 'PROBABLE',
-        why: `souscrit par le gabarit de ${viaAsync.by} (pipe async)`,
+        why: shownSignals.has(id)
+          ? `lu par le gabarit de ${viaAsync.by} (signal)`
+          : `souscrit par le gabarit de ${viaAsync.by} (pipe async)`,
         how: 'ASYNC',
       };
     const derived = list.find((x) => x.how === 'DERIVED');
@@ -2335,9 +3507,16 @@ function resolve(
     const target = targetClassOf(c, cs.target);
     if (!target) {
       // Un alias ou un chemin qui ne mène à aucune classe analysée (tableau, objet de bibliothèque) : rien à dire.
-      if (cs.target.startsWith('@')) return undefined;
+      if (cs.target.startsWith('@') || c.soft?.has(cs.target)) return undefined;
       const type = c.deps.get(cs.target) ?? cs.target;
-      if (!LIBRARY.test(type))
+      if (c.ambiguous?.has(type))
+        problem(
+          from,
+          'CLASS_AMBIGUOUS',
+          `${type}.${cs.method}() : plusieurs classes s’appellent ${type} et l’import de ${c.file} ne désigne aucun fichier lu ; aucune n’est choisie`,
+          cs.loc,
+        );
+      else if (!LIBRARY.test(type))
         problem(
           from,
           'SERVICE_NOT_FOUND',
@@ -2375,8 +3554,87 @@ function resolve(
     sym?: string;
     obj?: Map<string, Val>;
     inst?: string;
+    /** La valeur n'est pas connue, mais son type écrit n'en admet que quelques-unes (union, enum). */
+    oneOf?: Val[];
+    /** La valeur vient du type écrit d'un paramètre, pas d'un littéral transmis. */
+    typed?: boolean;
   }
   type Ctxt = ReadonlyMap<string, Val | undefined>;
+  /** Au-delà, un type n'aide plus à choisir : la valeur reste inconnue. */
+  const MAX_ALTERNATIVES = 12;
+  const scalar = (v: Val): Val[] | undefined => (v.lit !== undefined ? [v] : v.oneOf);
+  const unionVal = (parts: readonly Val[]): Val | undefined => {
+    if (parts.length === 0) return undefined;
+    if (parts.every((part) => scalar(part) !== undefined)) {
+      const byKey = new Map<string, Val>();
+      for (const part of parts) for (const v of scalar(part) ?? []) byKey.set(v.lit ?? '', v);
+      const all = [...byKey.values()];
+      if (all.length === 1) return all[0];
+      return all.length <= MAX_ALTERNATIVES
+        ? { text: all.map((v) => v.text).join(' | '), oneOf: all, typed: true }
+        : undefined;
+    }
+    if (!parts.every((part) => part.obj)) return undefined;
+    // Une union d'objets : seuls les champs que tous ses membres fixent sont connus (le discriminant).
+    const obj = new Map<string, Val>();
+    for (const name of parts[0]?.obj?.keys() ?? []) {
+      const values = parts.map((part) => part.obj?.get(name));
+      const merged = values.every((v): v is Val => v !== undefined) ? unionVal(values) : undefined;
+      if (merged) obj.set(name, merged);
+    }
+    return { text: '{…}', obj, typed: true };
+  };
+  /** Ce qu'un type écrit dit d'une valeur : littéral, union de littéraux, enum, objet au champ discriminant. */
+  const shapeOfType = (node: TS.Node | undefined, depth = 0): Val | undefined => {
+    if (!node || depth > 5) return undefined;
+    if (ts.isParenthesizedTypeNode(node)) return shapeOfType(node.type, depth);
+    if (ts.isLiteralTypeNode(node)) {
+      const lit = literalOf(ts, node.literal);
+      return lit !== undefined ? { text: lit.replace(/^"(.*)"$/, "'$1'"), lit, typed: true } : undefined;
+    }
+    if (ts.isUnionTypeNode(node)) {
+      const parts = node.types.map((t) => shapeOfType(t, depth + 1));
+      return parts.every((part): part is Val => part !== undefined) ? unionVal(parts) : undefined;
+    }
+    if (ts.isTypeReferenceNode(node)) {
+      // `Kind.Save` (membre d'enum employé comme type) ou un type nommé du dépôt.
+      const member = constants.get(node.typeName.getText());
+      if (member) return { text: node.typeName.getText(), lit: member, typed: true };
+      return shapeOfType(types.get(node.typeName.getText()) ?? undefined, depth + 1);
+    }
+    if (ts.isTypeAliasDeclaration(node)) return shapeOfType(node.type, depth + 1);
+    if (ts.isEnumDeclaration(node)) {
+      const members = node.members.map((member) => {
+        const name = `${node.name.text}.${member.name.getText()}`;
+        const lit = constants.get(name);
+        return lit ? ({ text: name, lit, typed: true } satisfies Val) : undefined;
+      });
+      return members.every((v): v is NonNullable<typeof v> => v !== undefined)
+        ? unionVal(members)
+        : undefined;
+    }
+    if (ts.isTypeLiteralNode(node) || ts.isInterfaceDeclaration(node)) {
+      const obj = new Map<string, Val>();
+      for (const member of node.members) {
+        if (!ts.isPropertySignature(member) || !member.type || member.questionToken) continue;
+        const v = shapeOfType(member.type, depth + 1);
+        if (v && scalar(v)) obj.set(member.name.getText(), v);
+      }
+      return { text: '{…}', obj, typed: true };
+    }
+    return undefined;
+  };
+  const declared = new WeakMap<TS.TypeNode, Val | null>();
+  const declaredVal = (m: Method, param: string): Val | undefined => {
+    const node = m.paramNodes?.get(param);
+    if (!node) return undefined;
+    let found = declared.get(node);
+    if (found === undefined) {
+      found = shapeOfType(node) ?? null;
+      declared.set(node, found);
+    }
+    return found ?? undefined;
+  };
   const keyOf = (v: Val | undefined): string | undefined => {
     if (!v) return undefined;
     if (v.lit !== undefined) return `L:${v.lit}`;
@@ -2401,7 +3659,8 @@ function resolve(
     const lit = literalOf(ts, x);
     if (lit !== undefined) return { text, lit };
     if (ts.isIdentifier(x)) {
-      if (m.params.includes(x.text)) return ctx?.get(x.text);
+      // Un paramètre : la valeur transmise par l'appelant ; à défaut, ce que son type écrit en dit.
+      if (m.params.includes(x.text)) return ctx?.get(x.text) ?? declaredVal(m, x.text);
       const local = m.locals.get(x.text);
       if (local) return valOf(local, c, m, ctx, depth + 1);
       const mod = c.module.get(x.text);
@@ -2446,6 +3705,14 @@ function resolve(
     // Une fonction qui fabrique la valeur (créateur d'action, méthode, fonction imbriquée) : son unique
     // retour est évalué avec les arguments transmis. Plusieurs retours, ou un corps introuvable : inconnu.
     if (ts.isCallExpression(x)) {
+      // Un créateur d'action NgRx (`save({ id })`) : l'action porte le type du créateur et ses propriétés.
+      const created = ngrx ? actionTypeOf(ts, x.expression, c.module) : undefined;
+      if (created !== undefined) {
+        const props = x.arguments[0] ? valOf(x.arguments[0], c, m, ctx, depth + 1) : undefined;
+        const obj = new Map<string, Val>(props?.obj ?? []);
+        obj.set('type', { text: `'${created}'`, lit: JSON.stringify(created) });
+        return { text, obj };
+      }
       const fn = factoryOf(x, c, m);
       if (!fn || fn.returns.length !== 1 || !fn.returns[0]) return undefined;
       const frame: Method = {
@@ -2533,6 +3800,20 @@ function resolve(
     for (const seg of rest) v = v?.obj?.get(seg);
     return v;
   };
+  /** Le même contexte, où le chemin prend une valeur donnée (une des valeurs admises par son type). */
+  const withValAt = (ctx: Ctxt, path: string, value: Val): Map<string, Val | undefined> => {
+    const [root = '', ...rest] = path.split('.');
+    const put = (v: Val | undefined, segs: readonly string[]): Val => {
+      const [head, ...tail] = segs;
+      if (head === undefined) return value;
+      const obj = new Map(v?.obj ?? []);
+      obj.set(head, put(obj.get(head), tail));
+      return { text: v?.text ?? '{…}', obj };
+    };
+    const out = new Map(ctx);
+    out.set(root, put(ctx.get(root), rest));
+    return out;
+  };
   const basesOf = (name: string): string[] => {
     const out: string[] = [];
     let cur = classes.get(name);
@@ -2557,9 +3838,16 @@ function resolve(
     if (g.instance) hit = v?.inst ? v.inst === g.instance || basesOf(v.inst).includes(g.instance) : undefined;
     else {
       const k = keyOf(v);
-      if (k === undefined) return 'UNKNOWN';
       const keys = (g.values ?? []).map((e) => keyOf(valOf(e, c, m, undefined)));
-      hit = keys.includes(k) ? true : keys.some((x) => x === undefined) ? undefined : false;
+      if (k === undefined) {
+        // Inconnue, mais bornée par son type écrit : écartée si aucune valeur admise ne convient, suivie si
+        // toutes conviennent.
+        const options = v?.oneOf?.map((o) => keyOf(o));
+        if (!options || options.includes(undefined) || keys.includes(undefined)) return 'UNKNOWN';
+        const inside = options.filter((o) => keys.includes(o)).length;
+        if (inside > 0 && inside < options.length) return 'UNKNOWN';
+        hit = inside > 0;
+      } else hit = keys.includes(k) ? true : keys.some((x) => x === undefined) ? undefined : false;
     }
     if (hit === undefined) return 'UNKNOWN';
     return hit !== g.negated ? 'MATCH' : 'NO';
@@ -2592,6 +3880,24 @@ function resolve(
       for (const g of (site.guards ?? []).flatMap((x) => x.terms ?? [x]))
         if (g.on && m.params.includes(g.on.split('.')[0] ?? '') && (g.values?.length || g.instance))
           paths.add(g.on);
+    // Un paramètre émis dans un flux trié par type (`this.actions.next(action)`) : son champ de type décide
+    // des traitements atteints, même sans condition dans la méthode.
+    for (const e of m.emits) {
+      const r = e.value ? resolveRef(c, e.ref) : undefined;
+      const field = r ? typedFields.get(streamId(r.cls, r.stream.name)) : undefined;
+      if (!e.value || !field) continue;
+      const add = (expr: TS.Expression, suffix: string): void => {
+        const p = pathOf(ts, expr, m);
+        if (p && m.params.includes(p.split('.')[0] ?? '')) paths.add(`${p}${suffix}`);
+      };
+      const v = strip(ts, e.value);
+      if (ts.isObjectLiteralExpression(v)) {
+        for (const prop of v.properties)
+          if (ts.isSpreadAssignment(prop)) add(prop.expression, `.${field}`);
+          else if (ts.isPropertyAssignment(prop) && prop.name.getText() === field) add(prop.initializer, '');
+          else if (ts.isShorthandPropertyAssignment(prop) && prop.name.text === field) add(prop.name, '');
+      } else if (ts.isIdentifier(v) || ts.isPropertyAccessExpression(v)) add(v, `.${field}`);
+    }
     for (const cs of m.calls) {
       const target = targetClassOf(c, cs.target);
       const found = target ? lookup(target, cs.method) : undefined;
@@ -2717,50 +4023,515 @@ function resolve(
     returnsObservable: false,
     loc: at,
   });
+  // ── La garde d'un flux calculé : les valeurs d'un champ qu'il laisse passer. Lue opérateur par opérateur :
+  // un opérateur qui garde la valeur ne change rien ; un map qui recopie l'objet garde le champ, un map qui le
+  // réécrit le fixe, tout autre le rend inconnu ; un filter sur un champ connu restreint les valeurs. Le
+  // prédicat est suivi dans une fonction nommée, une méthode ou un opérateur maison. Bornée en profondeur. ──
+  interface Callable {
+    param: string;
+    /** Le rappel reçoit un tableau (`([action, state]) => …` après withLatestFrom) : son premier élément. */
+    first?: boolean;
+    body: TS.Expression;
+    cls: ClassInfo;
+    frame: Method;
+    ctx?: Ctxt;
+  }
+  interface Env {
+    cls: ClassInfo;
+    frame: Method;
+    ctx?: Ctxt;
+  }
+  const MAX_GATE_DEPTH = 4;
+  const single = (returns: readonly TS.Expression[] | undefined): TS.Expression | undefined =>
+    returns?.length === 1 ? returns[0] : undefined;
+  const callableOf = (expr: TS.Expression, env: Env, depth = 0): Callable | undefined => {
+    if (depth > MAX_GATE_DEPTH) return undefined;
+    const x = strip(ts, expr);
+    if (ts.isArrowFunction(x) || ts.isFunctionExpression(x)) {
+      const p = x.parameters[0];
+      const body = single(returnsOf(ts, x.body));
+      if (!p || !body) return undefined;
+      if (ts.isIdentifier(p.name)) return { param: p.name.text, body, ...env };
+      const head = ts.isArrayBindingPattern(p.name) ? p.name.elements[0] : undefined;
+      return head && ts.isBindingElement(head) && ts.isIdentifier(head.name)
+        ? { param: head.name.text, first: true, body, ...env }
+        : undefined;
+    }
+    if (ts.isIdentifier(x)) {
+      const local = env.cls.module.get(x.text);
+      if (local && (ts.isArrowFunction(local) || ts.isFunctionExpression(local)))
+        return callableOf(local, env, depth + 1);
+      const fn = functions.get(x.text);
+      const body = single(fn?.returns);
+      const param = fn?.params[0];
+      if (!fn || !body || !param) return undefined;
+      return {
+        param,
+        body,
+        cls: { ...env.cls, module: fn.module, values: new Map() },
+        frame: { ...emptyMethod(x.text, env.frame.loc), params: fn.params, locals: fn.locals },
+      };
+    }
+    if (ts.isPropertyAccessExpression(x) && x.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const found = lookup(env.cls, x.name.text);
+      const body = single(found?.method.returns);
+      const param = found?.method.params[0];
+      return found && body && param ? { param, body, cls: found.cls, frame: found.method } : undefined;
+    }
+    return undefined;
+  };
+  /**
+   * Ce qu'un prédicat laisse passer d'un champ : les valeurs admises (ALLOW) ou écartées (DENY). `exact` :
+   * le prédicat ne dit rien d'autre (une conjonction dont un terme n'est pas lu n'est qu'un majorant : elle
+   * restreint, mais sa négation ne se déduit pas).
+   */
+  interface Pred {
+    field: string;
+    mode: 'ALLOW' | 'DENY';
+    keys: Set<string>;
+    exact: boolean;
+    first?: boolean;
+  }
+  const merge = (l: Pred, r: Pred, how: 'OR' | 'AND'): Pred => {
+    const both = (keep: (k: string) => boolean, from: Iterable<string>): Set<string> =>
+      new Set([...from].filter(keep));
+    const exact = l.exact && r.exact;
+    const same = l.mode === r.mode;
+    // OR : admises ∪ admises, écartées ∩ écartées ; AND : l'inverse. Modes mêlés : ramenés à une seule liste.
+    if (same) {
+      const union = (l.mode === 'ALLOW') === (how === 'OR');
+      return {
+        field: l.field,
+        mode: l.mode,
+        keys: union ? new Set([...l.keys, ...r.keys]) : both((k) => r.keys.has(k), l.keys),
+        exact,
+      };
+    }
+    const allow = l.mode === 'ALLOW' ? l : r;
+    const deny = l.mode === 'ALLOW' ? r : l;
+    return how === 'OR'
+      ? { field: l.field, mode: 'DENY', keys: both((k) => !allow.keys.has(k), deny.keys), exact }
+      : { field: l.field, mode: 'ALLOW', keys: both((k) => !deny.keys.has(k), allow.keys), exact };
+  };
+  const predOf = (fn: Callable, depth = 0): Pred | undefined => {
+    if (depth > MAX_GATE_DEPTH) return undefined;
+    const fieldOfAccess = (e: TS.Expression): string | undefined => {
+      const p = strip(ts, e);
+      return ts.isPropertyAccessExpression(p) &&
+        ts.isIdentifier(p.expression) &&
+        p.expression.text === fn.param
+        ? p.name.text
+        : undefined;
+    };
+    /** Une comparaison à des valeurs toutes connues ; une valeur inconnue rend le terme illisible. */
+    const rule = (field: string, mode: Pred['mode'], values: readonly TS.Expression[]): Pred | undefined => {
+      const keys = values.map((v) => keyOf(valOf(v, fn.cls, fn.frame, fn.ctx)));
+      return keys.every((k): k is string => k !== undefined)
+        ? { field, mode, keys: new Set(keys), exact: true }
+        : undefined;
+    };
+    const read = (e: TS.Expression): Pred | undefined => {
+      const x = strip(ts, e);
+      if (ts.isPrefixUnaryExpression(x) && x.operator === ts.SyntaxKind.ExclamationToken) {
+        const inner = read(x.operand);
+        return inner?.exact ? { ...inner, mode: inner.mode === 'ALLOW' ? 'DENY' : 'ALLOW' } : undefined;
+      }
+      if (ts.isBinaryExpression(x)) {
+        const op = x.operatorToken.kind;
+        if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.AmpersandAmpersandToken) {
+          const l = read(x.left);
+          const r = read(x.right);
+          if (op === ts.SyntaxKind.BarBarToken)
+            return l && r && l.field === r.field ? merge(l, r, 'OR') : undefined;
+          // Une conjonction : un terme illisible (ou sur un autre champ) ne peut que restreindre davantage.
+          if (l && r && l.field === r.field) return merge(l, r, 'AND');
+          const one = l ?? r;
+          return one ? { ...one, exact: false } : undefined;
+        }
+        const equal = op === ts.SyntaxKind.EqualsEqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsToken;
+        const differs =
+          op === ts.SyntaxKind.ExclamationEqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken;
+        if (!equal && !differs) return undefined;
+        const mode = equal ? 'ALLOW' : 'DENY';
+        const left = fieldOfAccess(x.left);
+        if (left !== undefined) return rule(left, mode, [x.right]);
+        const right = fieldOfAccess(x.right);
+        return right !== undefined ? rule(right, mode, [x.left]) : undefined;
+      }
+      if (ts.isCallExpression(x)) {
+        // `['SAVE', 'UPDATE'].includes(action.type)`
+        if (
+          ts.isPropertyAccessExpression(x.expression) &&
+          x.expression.name.text === 'includes' &&
+          x.arguments[0]
+        ) {
+          const list = strip(ts, x.expression.expression);
+          const name = fieldOfAccess(x.arguments[0]);
+          return ts.isArrayLiteralExpression(list) && name !== undefined
+            ? rule(name, 'ALLOW', list.elements)
+            : undefined;
+        }
+        // Le prédicat délègue : `(a) => this.isReject(a)`, `(a) => isSave(a)`.
+        const arg = x.arguments.length === 1 && x.arguments[0] ? strip(ts, x.arguments[0]) : undefined;
+        if (arg && ts.isIdentifier(arg) && arg.text === fn.param) {
+          const inner = callableOf(x.expression, { cls: fn.cls, frame: fn.frame }, depth + 1);
+          const got = inner ? predOf(inner, depth + 1) : undefined;
+          return got && !got.first ? got : undefined;
+        }
+      }
+      return undefined;
+    };
+    const found = read(fn.body);
+    return found ? { ...found, ...(fn.first ? { first: true } : {}) } : undefined;
+  };
+  type Shape =
+    | { kind: 'SAME' | 'TUPLE' | 'UNKNOWN' }
+    | { kind: 'OBJECT'; param: string; spread: boolean; props: Map<string, TS.Expression>; env: Env };
+  interface GateState {
+    shape: Shape;
+    field?: string;
+    /** Les valeurs encore admises (undefined : aucune liste d'admission lue). */
+    accept?: Set<string>;
+    /** Les valeurs écartées par une garde négative (`!==`), tant qu'aucune liste d'admission n'est lue. */
+    reject?: Set<string>;
+  }
+  const applyFilter = (state: GateState, pred: Pred | undefined): void => {
+    if (!pred) return;
+    const shape = state.shape;
+    if (pred.first ? shape.kind !== 'TUPLE' : shape.kind !== 'SAME' && shape.kind !== 'OBJECT') return;
+    if (state.field !== undefined && state.field !== pred.field) return;
+    // La valeur du champ à cet endroit du pipe : celle de l'émission, une constante écrite par un map, inconnue.
+    let fixed: string | undefined;
+    if (shape.kind === 'OBJECT') {
+      const init = shape.props.get(pred.field);
+      if (init) {
+        const access = strip(ts, init);
+        const same =
+          ts.isPropertyAccessExpression(access) &&
+          ts.isIdentifier(access.expression) &&
+          access.expression.text === shape.param &&
+          access.name.text === pred.field;
+        if (!same) {
+          fixed = keyOf(valOf(init, shape.env.cls, shape.env.frame, shape.env.ctx));
+          if (fixed === undefined) return;
+        }
+      } else if (!shape.spread) return;
+    }
+    const passes = (k: string): boolean => (pred.mode === 'ALLOW' ? pred.keys.has(k) : !pred.keys.has(k));
+    state.field = pred.field;
+    if (fixed !== undefined) {
+      // Le map a fixé le champ : le filter passe toujours, ou jamais.
+      if (!passes(fixed)) state.accept = new Set();
+      return;
+    }
+    if (state.accept) state.accept = new Set([...state.accept].filter(passes));
+    else if (pred.mode === 'ALLOW')
+      state.accept = new Set([...pred.keys].filter((k) => !state.reject?.has(k)));
+    else state.reject = new Set([...(state.reject ?? []), ...pred.keys]);
+  };
+  const walkOperators = (ops: readonly TS.Expression[], env: Env, state: GateState, depth: number): void => {
+    for (const raw of ops) {
+      const op = strip(ts, raw);
+      const name = ts.isCallExpression(op) && ts.isIdentifier(op.expression) ? op.expression.text : undefined;
+      if (!ts.isCallExpression(op) || !name) {
+        state.shape = { kind: 'UNKNOWN' };
+        continue;
+      }
+      const custom = functions.get(name);
+      if (custom && !KEEPS_VALUE.has(name) && depth < MAX_GATE_DEPTH) {
+        // Un opérateur maison dont le corps est lisible : évalué avec les arguments transmis.
+        const body = single(custom.returns);
+        const inner = body ? strip(ts, body) : undefined;
+        const frame: Method = {
+          ...emptyMethod(name, env.frame.loc),
+          params: custom.params,
+          locals: custom.locals,
+        };
+        const bound: Env = {
+          cls: { ...env.cls, module: custom.module, values: new Map() },
+          frame,
+          ctx: new Map(
+            custom.params.map((p, i) => [
+              p,
+              op.arguments[i] ? valOf(op.arguments[i], env.cls, env.frame, env.ctx) : undefined,
+            ]),
+          ),
+        };
+        if (inner && ts.isCallExpression(inner) && ts.isIdentifier(inner.expression)) {
+          if (inner.expression.text === 'pipe') walkOperators(inner.arguments, bound, state, depth + 1);
+          else walkOperators([inner], bound, state, depth + 1);
+          continue;
+        }
+        const piped =
+          inner && (ts.isArrowFunction(inner) || ts.isFunctionExpression(inner))
+            ? single(returnsOf(ts, inner.body))
+            : undefined;
+        const chain = piped ? strip(ts, piped) : undefined;
+        if (
+          chain &&
+          ts.isCallExpression(chain) &&
+          ts.isPropertyAccessExpression(chain.expression) &&
+          chain.expression.name.text === 'pipe'
+        ) {
+          walkOperators(chain.arguments, bound, state, depth + 1);
+          continue;
+        }
+        state.shape = { kind: 'UNKNOWN' };
+        continue;
+      }
+      if (name === 'filter') {
+        const fn = op.arguments[0] ? callableOf(op.arguments[0], env) : undefined;
+        if (fn && env.ctx && !fn.ctx && fn.frame === env.frame) fn.ctx = env.ctx;
+        applyFilter(state, fn ? predOf(fn) : undefined);
+      } else if (name === 'ofType') {
+        // L'opérateur d'une bibliothèque d'effets : des types littéraux ou des créateurs d'actions.
+        const wanted = op.arguments.map((a) => actionTypeOf(ts, a, env.cls.module));
+        if (wanted.length > 0 && wanted.every((t): t is string => t !== undefined))
+          applyFilter(state, {
+            field: 'type',
+            mode: 'ALLOW',
+            keys: new Set(wanted.map((t) => `L:${JSON.stringify(t)}`)),
+            exact: true,
+          });
+        else state.shape = { kind: 'UNKNOWN' };
+      } else if (name === 'map') {
+        const fn = op.arguments[0] ? strip(ts, op.arguments[0]) : undefined;
+        const p =
+          fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) ? fn.parameters[0] : undefined;
+        const body =
+          fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))
+            ? single(returnsOf(ts, fn.body))
+            : undefined;
+        const out = body ? strip(ts, body) : undefined;
+        if (state.shape.kind !== 'SAME' || !p || !ts.isIdentifier(p.name) || !out)
+          state.shape = { kind: 'UNKNOWN' };
+        else if (ts.isIdentifier(out) && out.text === p.name.text) continue;
+        else if (ts.isObjectLiteralExpression(out)) {
+          const param = p.name.text;
+          const props = new Map<string, TS.Expression>();
+          let spread = false;
+          let readable = true;
+          for (const prop of out.properties) {
+            if (ts.isSpreadAssignment(prop)) {
+              const src = strip(ts, prop.expression);
+              if (ts.isIdentifier(src) && src.text === param && props.size === 0) spread = true;
+              else readable = false;
+            } else if (ts.isPropertyAssignment(prop)) props.set(prop.name.getText(), prop.initializer);
+            else if (ts.isShorthandPropertyAssignment(prop)) props.set(prop.name.text, prop.name);
+            else readable = false;
+          }
+          state.shape = readable
+            ? {
+                kind: 'OBJECT',
+                param,
+                spread,
+                props,
+                env: { ...env, frame: { ...env.frame, params: [param] } },
+              }
+            : { kind: 'UNKNOWN' };
+        } else state.shape = { kind: 'UNKNOWN' };
+      } else if (name === 'withLatestFrom' || name === 'combineLatestWith') {
+        state.shape = state.shape.kind === 'SAME' ? { kind: 'TUPLE' } : { kind: 'UNKNOWN' };
+      } else if (!KEEPS_VALUE.has(name)) state.shape = { kind: 'UNKNOWN' };
+    }
+  };
   /** flux source → champ de type lu par ses traitements filtrés ; flux filtré → sa source et ses valeurs. */
   const typedFields = new Map<string, string>();
-  const typedStreams = new Map<string, { source: string; field: string; keys: (string | undefined)[] }>();
+  const typedStreams = new Map<
+    string,
+    { source: string; field: string; allow?: Set<string>; deny?: Set<string> }
+  >();
   for (const c of classes.values())
     for (const st of c.streams.values()) {
-      const src = st.sources[0];
-      if (!st.typeFilter || !src) continue;
-      const r = resolveRef(c, src);
+      if (st.gate) {
+        // Une garde déjà connue (réducteur) : sa source est son unique flux d'origine.
+        const origin = st.sources[0] ? resolveRef(c, st.sources[0]) : undefined;
+        if (!origin) continue;
+        const source = streamId(origin.cls, origin.stream.name);
+        const known = typedFields.get(source);
+        typedFields.set(source, known === undefined || known === st.gate.field ? st.gate.field : '');
+        typedStreams.set(streamId(c, st.name), {
+          source,
+          field: st.gate.field,
+          allow: new Set(st.gate.allow),
+        });
+        continue;
+      }
+      const init = st.init ? strip(ts, st.init) : undefined;
+      if (
+        !init ||
+        !ts.isCallExpression(init) ||
+        !ts.isPropertyAccessExpression(init.expression) ||
+        init.expression.name.text !== 'pipe'
+      )
+        continue;
+      const base = refOf(ts, init.expression.expression);
+      const r = base ? resolveRef(c, base) : undefined;
       if (!r) continue;
+      const state: GateState = { shape: { kind: 'SAME' } };
+      walkOperators(init.arguments, { cls: c, frame: emptyMethod(st.name, st.loc) }, state, 0);
+      if (state.field === undefined || (!state.accept && !state.reject)) continue;
       const source = streamId(r.cls, r.stream.name);
       const known = typedFields.get(source);
       // Deux traitements qui trient la même source sur deux champs différents : aucun canal (indécidable).
-      typedFields.set(
-        source,
-        known === undefined || known === st.typeFilter.field ? st.typeFilter.field : '',
-      );
-      const frame = emptyMethod(st.name, st.loc);
+      typedFields.set(source, known === undefined || known === state.field ? state.field : '');
       typedStreams.set(streamId(c, st.name), {
         source,
-        field: st.typeFilter.field,
-        keys: st.typeFilter.values.map((v) => keyOf(valOf(v, c, frame, undefined))),
+        field: state.field,
+        ...(state.accept ? { allow: state.accept } : state.reject ? { deny: state.reject } : {}),
       });
     }
+  // ── Appels indirects : une fonction utilitaire qui reçoit une dépendance fait ses appels au nom de la
+  // méthode ; une référence passée en argument n'est gardée que si elle désigne une méthode de la classe. ──
+  const plain = (e: TS.Expression): boolean => {
+    const x = strip(ts, e);
+    if (literalOf(ts, x) !== undefined) return true;
+    return (
+      ts.isObjectLiteralExpression(x) &&
+      x.properties.every(
+        (p) => ts.isPropertyAssignment(p) && literalOf(ts, strip(ts, p.initializer)) !== undefined,
+      )
+    );
+  };
+  for (const c of classes.values())
+    for (const m of c.methods.values()) {
+      for (const fc of m.fnCalls ?? []) {
+        const fn = functions.get(fc.name);
+        if (!fn) continue;
+        for (const inner of fn.calls) {
+          const arg = fc.site.args[inner.param];
+          const a = arg ? strip(ts, arg) : undefined;
+          if (
+            !a ||
+            !ts.isPropertyAccessExpression(a) ||
+            a.expression.kind !== ts.SyntaxKind.ThisKeyword ||
+            !c.deps.has(a.name.text) ||
+            c.http.has(a.name.text)
+          )
+            continue;
+          m.calls.push({
+            ...fc.site,
+            target: a.name.text,
+            method: inner.method,
+            // Un paramètre de la fonction devient l'argument transmis ; un littéral reste ; toute autre
+            // expression (variable propre à la fonction) est inconnue ici, jamais évaluée hors de son fichier.
+            args: inner.args.map((x) => {
+              const y = strip(ts, x);
+              const i = ts.isIdentifier(y) ? fn.params.indexOf(y.text) : -1;
+              return i >= 0 ? (fc.site.args[i] ?? fc.callee) : plain(x) ? x : fc.callee;
+            }),
+            viaFn: fc.name,
+          });
+        }
+      }
+      const real = (cs: CallSite): boolean => !cs.passedTo || lookup(c, cs.method) !== undefined;
+      m.calls = m.calls.filter(real);
+      for (const p of m.pipelines) p.calls = p.calls.filter(real);
+    }
+  // ── Héritage : les classes qui implémentent une méthode sous une classe (abstraite ou redéfinie). ─────
+  const children = new Map<string, ClassInfo[]>();
+  for (const c of classes.values()) if (c.base) children.set(c.base, [...(children.get(c.base) ?? []), c]);
+  const implementationsOf = (cls: ClassInfo, method: string): ClassInfo[] => {
+    const out: ClassInfo[] = [];
+    const seen = new Set<string>([cls.name]);
+    const queue = [...(children.get(cls.name) ?? [])];
+    while (queue.length > 0 && out.length < 20) {
+      const cur = queue.shift();
+      if (!cur || seen.has(cur.name)) continue;
+      seen.add(cur.name);
+      if (cur.methods.has(method)) out.push(cur);
+      queue.push(...(children.get(cur.name) ?? []));
+    }
+    return out;
+  };
+  /** La méthode appelle (même indirectement) une méthode de `this` que les sous-classes fournissent. */
+  const sensitive = new Map<string, boolean>();
+  const selfSensitive = (cls: ClassInfo, m: Method, seen = new Set<string>()): boolean => {
+    const id = methodId(cls, m.name);
+    const known = sensitive.get(id);
+    if (known !== undefined) return known;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    let out = false;
+    for (const cs of [...m.calls, ...m.pipelines.flatMap((p) => p.calls)]) {
+      if (cs.target !== 'this') continue;
+      const found = lookup(cls, cs.method);
+      const below = implementationsOf(cls, cs.method);
+      if (found ? below.length > 0 || selfSensitive(found.cls, found.method, seen) : below.length > 0) {
+        out = true;
+        break;
+      }
+    }
+    sensitive.set(id, out);
+    return out;
+  };
   const channels = new Map<string, { stream: string; key: string; label: string; loc: Loc }>();
   /**
    * Le flux (ou son canal) où arrive une émission : le canal du type émis quand la valeur émise a un type
    * connu dans ce contexte et que des traitements de ce flux trient sur ce champ ; sinon le flux entier
    * (toutes ses suites restent possibles).
    */
-  const channelOf = (c: ClassInfo, m: Method, e: Emit, sid: string, ctx: Ctxt | undefined): string => {
-    const field = typedFields.get(sid);
-    if (!field || !e.value) return sid;
-    const value = valOf(e.value, c, m, ctx)?.obj?.get(field);
-    const key = keyOf(value);
-    if (!key || !value) return sid;
-    const label = `${field}=${value.lit !== undefined ? value.lit.replace(/^"(.*)"$/, "'$1'") : value.text}`;
-    const id = `${sid}⟨${label}⟩`;
-    if (!channels.has(id)) channels.set(id, { stream: sid, key, label, loc: e.loc });
-    return id;
+  /** Les traitements triés de chaque flux source (calculé à la première demande). */
+  let bySource: Map<string, { allow?: Set<string>; deny?: Set<string> }[]> | undefined;
+  const typedBySource = (): Map<string, { allow?: Set<string>; deny?: Set<string> }[]> => {
+    if (bySource) return bySource;
+    bySource = new Map();
+    for (const t of typedStreams.values()) bySource.set(t.source, [...(bySource.get(t.source) ?? []), t]);
+    return bySource;
   };
+  const channelsOf = (
+    c: ClassInfo,
+    m: Method,
+    e: Emit,
+    sid: string,
+    ctx: Ctxt | undefined,
+  ): { id: string; among?: number; typed?: boolean }[] => {
+    const field = typedFields.get(sid);
+    if (!field || !e.value) return [{ id: sid }];
+    const value = valOf(e.value, c, m, ctx)?.obj?.get(field);
+    // Un type connu : son canal. Un type borné par son type écrit : le canal de chaque valeur admise, mais
+    // seulement si ce bornage écarte au moins un traitement du flux ; sinon l'émission reste celle du flux
+    // entier, sûre, sans éventail inutile.
+    const options = value && keyOf(value) ? [value] : (value?.oneOf ?? []);
+    if (options.length > 1) {
+      const keys = options.map((o) => keyOf(o));
+      const narrows = (typedBySource().get(sid) ?? []).some(
+        (t) => !keys.some((k) => k !== undefined && (t.allow ? t.allow.has(k) : !t.deny?.has(k))),
+      );
+      if (!narrows) return [{ id: sid }];
+    }
+    const out: { id: string; among?: number; typed?: boolean }[] = [];
+    for (const option of options) {
+      const key = keyOf(option);
+      if (!key) return [{ id: sid }];
+      const label = `${field}=${option.lit !== undefined ? option.lit.replace(/^"(.*)"$/, "'$1'") : option.text}`;
+      const id = `${sid}⟨${label}⟩`;
+      if (!channels.has(id)) channels.set(id, { stream: sid, key, label, loc: e.loc });
+      out.push({
+        id,
+        ...(options.length > 1 ? { among: options.length } : {}),
+        ...(option.typed ? { typed: true } : {}),
+      });
+    }
+    return out.length > 0 ? out : [{ id: sid }];
+  };
+  /** Ce que le type écrit apporte à une émission : la raison, et une confiance au plus probable. */
+  const typedNote = (ch: { among?: number; typed?: boolean }): string =>
+    ch.among
+      ? ` — le type écrit n’admet que ${String(ch.among)} valeurs : chacune est une possibilité`
+      : ch.typed
+        ? ' — type déduit du type écrit du paramètre'
+        : '';
+  const lowered = (
+    confidence: UiLink['confidence'],
+    ch: { among?: number; typed?: boolean },
+  ): UiLink['confidence'] => ((ch.among || ch.typed) && confidence === 'CONFIRMED' ? 'PROBABLE' : confidence);
 
   // Des contextes bornés par méthode générique (une méthode aux mille valeurs ne prend pas tout) et, en
   // dernier recours, pour toute l'application : la taille de l'application n'écarte pas les contextes.
-  const MAX_CLONES_PER_METHOD = 64;
+  // 1 024 : un store central aux centaines de types d'action garde un contexte par type (mesuré : 1 000 types,
+  // scan complet en 1,2 s) ; la borne globale protège toujours l'ensemble.
+  const MAX_CLONES_PER_METHOD = 1024;
   const MAX_CLONES = 50_000;
   const clonesOf = new Map<string, number>();
   const limited = new Set<string>();
@@ -2780,7 +4551,7 @@ function resolve(
   ): string | undefined => {
     const id = methodId(c, m.name);
     // Deux appels qui transmettent les mêmes valeurs décisives partagent le même contexte.
-    const key = `${id}|${decisivePaths(c, m)
+    const key = `${id}|${ctx.get('#self')?.inst ?? ''}|${decisivePaths(c, m)
       .map((p) => `${p}=${keyOf(valAt(p, ctx)) ?? '?'}`)
       .join(',')}`;
     const known = specialized.get(key);
@@ -2851,20 +4622,20 @@ function resolve(
       if (v === 'NO') continue;
       const r = resolveRef(c, e.ref);
       if (!r) continue;
-      const sid = channelOf(c, m, e, streamSymbol(r.cls, r.stream), ctx);
       const condition = conditionText(e.guards?.filter((g) => verdictOf(g, c, m, ctx) !== 'MATCH'));
       const asyncNote = asyncText(e.cont);
-      link({
-        from: cloneId,
-        to: sid,
-        kind: 'EMIT',
-        confidence: v === 'UNKNOWN' ? 'PROBABLE' : 'CONFIRMED',
-        reason: `${m.name}(${label}) émet sur ${sid} (next)${condition ? ` — si ${condition}` : ''}`,
-        ...(condition ? { condition } : {}),
-        ...(asyncNote ? { async: asyncNote } : {}),
-        context: label,
-        loc: e.loc,
-      });
+      for (const ch of channelsOf(c, m, e, streamSymbol(r.cls, r.stream), ctx))
+        link({
+          from: cloneId,
+          to: ch.id,
+          kind: 'EMIT',
+          confidence: lowered(v === 'UNKNOWN' ? 'PROBABLE' : 'CONFIRMED', ch),
+          reason: `${m.name}(${label}) émet sur ${ch.id} (${e.how ?? 'next'})${condition ? ` — si ${condition}` : ''}${typedNote(ch)}`,
+          ...(condition ? { condition } : {}),
+          ...(asyncNote ? { async: asyncNote } : {}),
+          context: label,
+          loc: e.loc,
+        });
     }
     return cloneId;
   };
@@ -2877,9 +4648,89 @@ function resolve(
     kind: 'CALL' | 'PIPE',
     base?: { confidence: UiLink['confidence']; why: string; condition?: string; async?: string },
     scope?: { ctx: Ctxt; verdict: 'MATCH' | 'UNKNOWN'; depth: number },
+    /** Le contexte imposé : une des valeurs que le type écrit du chemin admet. */
+    given?: { ctx: Ctxt; path: string; among: number },
   ): void => {
+    // Dans une méthode héritée suivie pour une sous-classe connue, `this` est cette sous-classe.
+    const self = scope?.ctx.get('#self')?.inst;
+    if (cs.target === 'this' && self && self !== c.name && classes.has(self))
+      cs = { ...cs, target: `@type:${self}` };
+    // Le retour d'une méthode dont rien d'écrit ne dit la classe : celle que le compilateur lui donne.
+    if (cs.fallback && !targetClassOf(c, cs.target) && classes.has(cs.fallback))
+      cs = { ...cs, target: `@type:${cs.fallback}`, inferred: true };
+    // Plusieurs fournisseurs Angular donnent des classes différentes pour le type injecté, sans que la classe
+    // en porte un elle-même : chaque classe fournie est une candidate, aucune n'est choisie.
+    const injectedType = cs.virtual ? undefined : c.deps.get(cs.target);
+    const offered =
+      injectedType && !providerOf(c, injectedType)
+        ? [...new Set(providersFor(c, injectedType).map((p) => p.impl))].filter((name) => classes.has(name))
+        : [];
+    if (injectedType && offered.length > 1) {
+      for (const impl of offered)
+        callLink(
+          c,
+          m,
+          from,
+          {
+            ...cs,
+            target: `@type:${impl}`,
+            virtual: { of: injectedType, count: offered.length, provided: true },
+          },
+          kind,
+          base,
+          scope,
+          given,
+        );
+      return;
+    }
+    const receiver = targetClassOf(c, cs.target);
+    if (receiver && !cs.virtual && !lookup(receiver, cs.method)) {
+      // Une méthode abstraite : chaque implémentation lue est une candidate, aucune n'est choisie au hasard.
+      const impls = implementationsOf(receiver, cs.method);
+      if (impls.length > 0) {
+        for (const impl of impls)
+          callLink(
+            c,
+            m,
+            from,
+            { ...cs, target: `@type:${impl.name}`, virtual: { of: receiver.name, count: impls.length } },
+            kind,
+            base,
+            scope,
+            given,
+          );
+        return;
+      }
+    }
     const t = callTarget(c, m, cs);
     if (!t) return;
+    // Une valeur décisive inconnue mais bornée par son type écrit (union, enum) : chaque valeur admise est
+    // suivie dans son propre contexte, comme une possibilité. Un seul chemin à la fois (pas de produit).
+    if (!given) {
+      const decisiveHere = decisivePaths(t.cls, t.method);
+      if (decisiveHere.length > 0) {
+        const probe = new Map<string, Val | undefined>();
+        t.method.params.forEach((param, i) => {
+          const arg = cs.args[i];
+          if (arg) probe.set(param, valOf(arg, c, m, scope?.ctx));
+        });
+        const open = decisiveHere.filter((path) => {
+          const v = valAt(path, probe);
+          return v?.oneOf !== undefined && keyOf(v) === undefined;
+        });
+        const only = open.length === 1 ? open[0] : undefined;
+        const options = only ? valAt(only, probe)?.oneOf : undefined;
+        if (only && options) {
+          for (const option of options)
+            callLink(c, m, from, cs, kind, base, scope, {
+              ctx: withValAt(probe, only, option),
+              path: only,
+              among: options.length,
+            });
+          return;
+        }
+      }
+    }
     const wrapper = wrappers.get(t.id);
     const caller = methodId(c, m.name);
     if (wrapper && kind === 'CALL' && !isLeaf(caller) && !scope) {
@@ -2945,12 +4796,19 @@ function resolve(
     let to = t.id;
     let context: string | undefined;
     const paths = decisivePaths(t.cls, t.method);
-    if (paths.length) {
-      const ctx = new Map<string, Val | undefined>();
-      t.method.params.forEach((param, i) => {
-        const arg = cs.args[i];
-        if (arg) ctx.set(param, valOf(arg, c, m, scope?.ctx));
-      });
+    // Une méthode héritée qui dépend de ce que la sous-classe fournit est suivie pour cette sous-classe.
+    const selfName =
+      receiver && receiver.name !== t.cls.name && selfSensitive(t.cls, t.method) ? receiver.name : undefined;
+    let fromType = false;
+    if (paths.length || selfName) {
+      const ctx = new Map<string, Val | undefined>(given?.ctx ?? []);
+      if (!given)
+        t.method.params.forEach((param, i) => {
+          const arg = cs.args[i];
+          if (arg) ctx.set(param, valOf(arg, c, m, scope?.ctx));
+        });
+      fromType = paths.some((path) => valAt(path, ctx)?.typed === true);
+      if (selfName) ctx.set('#self', { text: selfName, inst: selfName });
       const shownVals = paths
         .map((path) => {
           const v = valAt(path, ctx);
@@ -2958,6 +4816,7 @@ function resolve(
           return path.includes('.') ? `${path.split('.').slice(1).join('.')}=${v.text}` : v.text;
         })
         .filter((x): x is string => x !== undefined);
+      if (selfName) shownVals.unshift(selfName);
       if (shownVals.length) {
         const label = shownVals.join(', ');
         const clone = specialize(t.cls, t.method, ctx, label, (scope?.depth ?? 0) + 1);
@@ -3023,6 +4882,14 @@ function resolve(
       confidence = 'PROBABLE';
       why += ' — la valeur qui choisit cette branche n’est pas déterminable statiquement';
     }
+    // Une valeur que seul le type écrit donne : une possibilité parmi celles qu'il admet, jamais une preuve.
+    if (given) {
+      if (confidence === 'CONFIRMED') confidence = 'PROBABLE';
+      why += ` — le type écrit de ${given.path} n’admet que ${String(given.among)} valeurs : chacune est suivie comme une possibilité`;
+    } else if (fromType && to !== t.id) {
+      if (confidence === 'CONFIRMED') confidence = 'PROBABLE';
+      why += ' — valeur déduite du type écrit du paramètre';
+    }
     if (cs.cont?.some((k) => k.how === 'CALLBACK') && confidence === 'CONFIRMED') confidence = 'PROBABLE';
     // Un rappel d'une chaîne jamais souscrite n'est pas exécuté ; rendue à l'appelant, elle l'est s'il la souscrit.
     const lost = cs.cont?.find((k) => k.run === 'NONE');
@@ -3040,6 +4907,33 @@ function resolve(
     } else if (returned && confidence === 'CONFIRMED') {
       confidence = 'PROBABLE';
       why += ' — la chaîne est rendue à l’appelant : exécutée seulement s’il la souscrit';
+    }
+    if (cs.viaFn) why += ` (par la fonction ${cs.viaFn}())`;
+    if (cs.inferred) why += ' (classe du récepteur donnée par le vérificateur de types TypeScript)';
+    // Ce que l'injection reçoit est décidé par un fournisseur Angular : la preuve est citée.
+    const provided = cs.virtual ? undefined : providerOf(c, c.deps.get(cs.target));
+    if (provided)
+      why += ` (${provided.token} est fourni par ${provided.impl} : ${provided.how}, ${provided.loc.file}:${String(provided.loc.line)})`;
+    if (cs.virtual?.provided) {
+      if (confidence === 'CONFIRMED') confidence = 'PROBABLE';
+      why += ` — ${String(cs.virtual.count)} fournisseurs donnent des classes différentes pour ${cs.virtual.of} : chacune est une candidate, aucune n’est choisie`;
+    } else if (cs.virtual) {
+      if (cs.virtual.count > 1 && confidence === 'CONFIRMED') confidence = 'PROBABLE';
+      why +=
+        cs.virtual.count > 1
+          ? ` — ${cs.virtual.of}.${cs.method}() est abstraite : une de ses ${String(cs.virtual.count)} implémentations lues, aucune n’est choisie`
+          : ` (seule implémentation lue de ${cs.virtual.of}.${cs.method}())`;
+    }
+    if (cs.passedTo) {
+      // Une référence de méthode passée en argument : exécutée si celle qui la reçoit appelle son paramètre.
+      const holder = cs.passedTo.target ? targetClassOf(c, cs.passedTo.target) : undefined;
+      const taker = holder ? lookup(holder, cs.passedTo.method) : undefined;
+      if (taker?.method.invokes?.has(cs.passedTo.index))
+        why += ` (référence passée à ${cs.passedTo.method}(), qui l’appelle)`;
+      else {
+        if (confidence === 'CONFIRMED') confidence = 'PROBABLE';
+        why += ` — référence passée à ${cs.passedTo.method}() : exécutée seulement si ${cs.passedTo.method}() l’appelle`;
+      }
     }
     // Un alias : plusieurs cibles possibles, une affectation non résolue, ou une méthode détachée de son objet.
     if (cs.alternatives && cs.alternatives > 1) {
@@ -3131,15 +5025,15 @@ function resolve(
         const r = resolveRef(c, e.ref);
         if (!r) continue;
         const stream = streamSymbol(r.cls, r.stream);
-        const sid = channelOf(c, m, e, stream, undefined);
-        link({
-          from,
-          to: sid,
-          kind: 'EMIT',
-          confidence: 'CONFIRMED',
-          reason: `${m.name}() émet sur ${sid} (next)`,
-          loc: e.loc,
-        });
+        for (const ch of channelsOf(c, m, e, stream, undefined))
+          link({
+            from,
+            to: ch.id,
+            kind: 'EMIT',
+            confidence: lowered('CONFIRMED', ch),
+            reason: `${m.name}() émet sur ${ch.id} (${e.how ?? 'next'})${typedNote(ch)}`,
+            loc: e.loc,
+          });
         for (const f of e.fedBy) {
           const t = callTarget(c, m, f);
           if (t) {
@@ -3156,7 +5050,10 @@ function resolve(
         }
       }
       for (const p of m.pipelines) {
-        const r = resolveRef(c, p.source);
+        const r = pipelineSource(c, p);
+        // Une lecture supposée d'un signal qui n'en est pas un : aucun traitement (le rappel reste lu comme
+        // le code de la méthode).
+        if (p.maybe && !r) continue;
         // Un flux d'une bibliothèque (ActivatedRoute.params…) : le traitement part de la méthode qui s'y abonne.
         const sid = r ? streamSymbol(r.cls, r.stream) : from;
         const origin = r ? sid : `${p.source.via === 'this' ? '' : `${p.source.via}.`}${p.source.name}`;
@@ -3196,15 +5093,17 @@ function resolve(
         for (const e of p.emits) {
           const target = resolveRef(c, e.ref);
           if (!target) continue;
-          const tid = streamSymbol(target.cls, target.stream);
-          link({
-            from: sid,
-            to: tid,
-            kind: 'PROPAGATES',
-            confidence: base.confidence,
-            reason: `le traitement de ${origin} émet sur ${tid} (${base.why})`,
-            loc: e.loc,
-          });
+          const reached = channelsOf(c, m, e, streamSymbol(target.cls, target.stream), undefined);
+          for (const ch of reached)
+            link({
+              from: sid,
+              to: ch.id,
+              kind: 'PROPAGATES',
+              confidence: lowered(base.confidence, ch),
+              reason: `le traitement de ${origin} émet sur ${ch.id} (${base.why})${typedNote(ch)}`,
+              loc: e.loc,
+            });
+          const tid = reached[0]?.id ?? streamSymbol(target.cls, target.stream);
           for (const cs of p.calls) {
             const t = callTarget(c, m, cs);
             if (t)
@@ -3244,8 +5143,29 @@ function resolve(
       }
     }
     for (const s of c.streams.values()) {
+      if (s.alias) continue;
       const sid = streamSymbol(c, s);
       const run = consumption(sid);
+      for (const e of s.emits) {
+        // Le traitement du flux pousse une valeur dans un autre flux : un effet en déclenche un autre.
+        const target = resolveRef(c, e.ref);
+        if (!target) continue;
+        for (const ch of channelsOf(
+          c,
+          emptyMethod(s.name, s.loc),
+          e,
+          streamSymbol(target.cls, target.stream),
+          undefined,
+        ))
+          link({
+            from: sid,
+            to: ch.id,
+            kind: 'PROPAGATES',
+            confidence: lowered(run.confidence, ch),
+            reason: `le traitement de ${sid} émet sur ${ch.id} (${run.why})${typedNote(ch)}`,
+            loc: e.loc,
+          });
+      }
       for (const src of s.sources) {
         const r = resolveRef(c, src);
         if (!r) continue;
@@ -3377,8 +5297,7 @@ function resolve(
       if (
         typed &&
         typed.source === ch.stream &&
-        !typed.keys.includes(undefined) &&
-        !typed.keys.includes(ch.key)
+        (typed.allow ? !typed.allow.has(ch.key) : typed.deny?.has(ch.key))
       )
         continue;
       link({ ...l, from: cid, reason: `${l.reason} — émission ${ch.label}` });
@@ -3532,7 +5451,8 @@ function resolve(
         role: c.role,
         loc: m.loc,
       };
-      sym.entry = LIFECYCLE.has(m.name) ? 'LIFECYCLE' : bound.has(m.name) ? 'TEMPLATE' : 'INTERNAL';
+      sym.entry =
+        LIFECYCLE.has(m.name) || m.atCreation ? 'LIFECYCLE' : bound.has(m.name) ? 'TEMPLATE' : 'INTERNAL';
       symbols.set(id, sym);
     }
   }
@@ -3642,6 +5562,8 @@ function resolve(
     calls: [...calls.values()],
     bases: [...bases.entries()].map(([id, entry]) => ({ id, ...entry })),
     environment: [],
+    interceptors: providing?.interceptors ?? [],
+    inference: { asked: 0, answered: 0 },
     wrappers: [...wrappers.keys()],
     branched: [...branched.keys()],
     streamOf,
