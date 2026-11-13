@@ -15,7 +15,7 @@ import { ClassIdentity } from '../static-analysis/class-identity.js';
  * réponses qui alimentent un flux. Un Observable est paresseux : un appel dont le résultat n'est jamais
  * souscrit n'est pas présenté comme exécuté. Rien n'est exécuté ; une URL non résolue garde son expression.
  */
-export const RXJS_ANALYZER = 'rxjs-5';
+export const RXJS_ANALYZER = 'rxjs-6';
 
 const SUBJECTS = new Set(['Subject', 'BehaviorSubject', 'ReplaySubject', 'AsyncSubject']);
 const CREATION = new Set([
@@ -72,7 +72,46 @@ const OPERATORS = new Set([
   'combineLatestWith',
   'mergeWith',
 ]);
+/** Les opérateurs qui laissent la valeur telle quelle : ils la retardent, l'écartent ou l'observent. */
+const KEEPS_VALUE = new Set([
+  'tap',
+  'debounceTime',
+  'throttleTime',
+  'auditTime',
+  'sampleTime',
+  'delay',
+  'distinctUntilChanged',
+  'distinctUntilKeyChanged',
+  'takeUntil',
+  'takeUntilDestroyed',
+  'takeWhile',
+  'take',
+  'skip',
+  'first',
+  'share',
+  'shareReplay',
+  'observeOn',
+  'subscribeOn',
+  'finalize',
+  'retry',
+  'catchError',
+  'timeout',
+  'startWith',
+]);
 const SUBSCRIBERS = new Set(['firstValueFrom', 'lastValueFrom', 'toSignal']);
+/** Les appels dont les arguments sont déjà lus autrement (rappels de flux, liaisons de méthode). */
+const PASSES_HANDLED = new Set([
+  'subscribe',
+  'then',
+  'catch',
+  'finally',
+  'pipe',
+  'next',
+  'emit',
+  'bind',
+  'call',
+  'apply',
+]);
 const HTTP_VERBS: Record<string, string> = {
   get: 'GET',
   post: 'POST',
@@ -156,6 +195,12 @@ interface CallSite {
   partial?: boolean;
   /** Une méthode détachée de son objet (`const { dispatch } = this.store`) : `this` n'est pas garanti. */
   unbound?: boolean;
+  /** L'appel est fait par une fonction utilitaire qui reçoit l'objet (`emitOn(this.store, …)`). */
+  viaFn?: string;
+  /** Une méthode passée en référence à un appel (`this.runNow(this.doSave)`) : la méthode qui la reçoit. */
+  passedTo?: { target: string; method: string; index: number };
+  /** La méthode appelée est abstraite (ou absente) dans la classe du récepteur : une de ses implémentations. */
+  virtual?: { of: string; count: number };
   loc: Loc;
 }
 interface HttpSite {
@@ -204,6 +249,10 @@ interface Method {
   returnRef?: string;
   /** Une propriété fléchée (`run = () => …`) garde son `this` même détachée. */
   arrow?: boolean;
+  /** Les appels d'une fonction (`emitOn(this.store, action)`) : résolus quand toutes les fonctions sont lues. */
+  fnCalls?: { name: string; callee: TS.Expression; site: CallSite }[];
+  /** Les paramètres que la méthode appelle (`fn()` dans `runNow(fn)`) : un rappel reçu est exécuté. */
+  invokes?: Set<number>;
   calls: CallSite[];
   emits: Emit[];
   http: HttpSite[];
@@ -225,11 +274,8 @@ interface Stream {
   operators: string[];
   filters: string[];
   reads: string[];
-  /**
-   * Le premier opérateur du flux garde les valeurs d'un type (`filter((a) => a.type === 'SAVE')`,
-   * `ofType('SAVE')`) : seules les émissions de ce type le traversent.
-   */
-  typeFilter?: { field: string; values: TS.Expression[] };
+  /** Les next() faits par le traitement même du flux (`tap(() => this.actions.next(…))`) : un effet qui en relance un autre. */
+  emits: Emit[];
   loc: Loc;
 }
 interface ClassInfo {
@@ -319,6 +365,40 @@ export function analyzeRxjs(
       warnings.push(`${file.path}: RxJS analysis failed (${(error as Error).message})`);
     }
   }
+  // Les membres hérités : une sous-classe dont une classe de base fournit des dépendances, un client HTTP ou
+  // des flux est relue avec eux (son fichier seulement), pour que ses méthodes les reconnaissent.
+  const rereads = new Map<string, Map<string, Inherited>>();
+  for (const info of classes.values()) {
+    const got: Inherited = { deps: new Map(), http: new Set(), streams: new Set() };
+    const seen = new Set<string>([info.name]);
+    let cur = info.base ? classes.get(info.base) : undefined;
+    while (cur && !seen.has(cur.name)) {
+      seen.add(cur.name);
+      for (const [name, type] of cur.deps)
+        if (!info.deps.has(name) && !got.deps.has(name)) got.deps.set(name, type);
+      for (const name of cur.http) if (!info.http.has(name)) got.http.add(name);
+      for (const name of cur.streams.keys()) if (!info.streams.has(name)) got.streams.add(name);
+      cur = cur.base ? classes.get(cur.base) : undefined;
+    }
+    if (got.deps.size + got.http.size + got.streams.size === 0) continue;
+    const byClass = rereads.get(info.file) ?? new Map<string, Inherited>();
+    byClass.set(info.name, got);
+    rereads.set(info.file, byClass);
+  }
+  for (const [filePath, byClass] of rereads) {
+    const file = byPath.get(filePath);
+    if (!file) continue;
+    try {
+      for (const info of classesOf(ts, file, byPath, constants, functions, (name) =>
+        byClass.get(identity.key(file.path, name)),
+      )) {
+        identify(info, identity);
+        if (byClass.has(info.name)) classes.set(info.name, info);
+      }
+    } catch (error) {
+      warnings.push(`${file.path}: RxJS analysis failed (${(error as Error).message})`);
+    }
+  }
   const environment = [...externals.env.entries()].map(([key, entry]) => ({
     key,
     values: entry.files.map((file, i) => {
@@ -360,11 +440,20 @@ function identify(info: ClassInfo, identity: ClassIdentity): void {
 }
 
 /** Une fonction de module (déclarée ou fléchée) : ses paramètres, ses retours, ses constantes locales. */
+/** Les membres qu'une classe reçoit de ses classes de base : dépendances injectées, clients HTTP, flux. */
+interface Inherited {
+  deps: Map<string, string>;
+  http: Set<string>;
+  streams: Set<string>;
+}
+
 interface ModuleFn {
   params: string[];
   returns: TS.Expression[];
   locals: Map<string, TS.Expression>;
   module: Map<string, TS.Expression>;
+  /** Les appels faits sur un paramètre (`store.dispatch(action)` dans `emitOn(store, action)`). */
+  calls: { param: number; method: string; args: TS.Expression[] }[];
 }
 
 /** La forme comparable d'une valeur littérale : chaîne JSON, nombre, booléen ou null. */
@@ -405,12 +494,25 @@ function collectConstants(
         ts.forEachChild(n, visit);
       };
       if (ts.isBlock(fn.body)) ts.forEachChild(fn.body, visit);
-      const entry: ModuleFn = {
-        params: fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : '')),
-        returns: returnsOf(ts, fn.body),
-        locals,
-        module,
+      const params = fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : ''));
+      const onParams: ModuleFn['calls'] = [];
+      const seek = (n: TS.Node): void => {
+        if (
+          ts.isCallExpression(n) &&
+          ts.isPropertyAccessExpression(n.expression) &&
+          ts.isIdentifier(n.expression.expression) &&
+          params.includes(n.expression.expression.text) &&
+          onParams.length < 20
+        )
+          onParams.push({
+            param: params.indexOf(n.expression.expression.text),
+            method: n.expression.name.text,
+            args: [...n.arguments],
+          });
+        ts.forEachChild(n, seek);
       };
+      seek(fn.body);
+      const entry: ModuleFn = { params, returns: returnsOf(ts, fn.body), locals, module, calls: onParams };
       // Un même nom défini deux fois n'est jamais choisi.
       fns.set(name, fns.has(name) ? null : entry);
     };
@@ -510,9 +612,11 @@ function classesOf(
   byPath: ReadonlyMap<string, ReadFile>,
   constants: Map<string, string | null>,
   functions: Map<string, ModuleFn | null>,
+  inherited?: (className: string) => Inherited | undefined,
 ): ClassInfo[] {
   const sf = ts.createSourceFile(file.path, file.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  collectConstants(ts, sf, constants, functions);
+  // Une seconde lecture (membres hérités connus) ne recompte pas les constantes ni les fonctions du fichier.
+  if (!inherited) collectConstants(ts, sf, constants, functions);
   const loc = (node: TS.Node): Loc => ({
     file: file.path,
     line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
@@ -529,7 +633,7 @@ function classesOf(
   const out: ClassInfo[] = [];
   for (const statement of sf.statements) {
     if (!ts.isClassDeclaration(statement) || !statement.name) continue;
-    out.push(classOf(ts, statement, file, byPath, module, loc));
+    out.push(classOf(ts, statement, file, byPath, module, loc, inherited?.(statement.name.text)));
   }
   return out;
 }
@@ -541,6 +645,7 @@ function classOf(
   byPath: ReadonlyMap<string, ReadFile>,
   module: Map<string, TS.Expression>,
   loc: (node: TS.Node) => Loc,
+  fromBase?: Inherited,
 ): ClassInfo {
   const info: ClassInfo = {
     name: node.name?.text ?? '',
@@ -638,10 +743,14 @@ function classOf(
         pending.push({ name, init: member.name, type, at: member });
     }
   }
+  // Ce que les classes de base fournissent (dépendances injectées, client HTTP, flux) est connu des méthodes
+  // de la sous-classe : `this.api.save()` y est un appel, `this.state.next()` une émission.
+  for (const [name, type] of fromBase?.deps ?? []) if (!info.deps.has(name)) info.deps.set(name, type);
+  for (const name of fromBase?.http ?? []) info.http.add(name);
   for (const [name, type] of info.deps)
     if (type === 'HttpClient' || /^(http|httpClient)$/i.test(name)) info.http.add(name);
   // Les flux : Subject créé, ou propriété observable (nom en $, type Observable, pipe/combineLatest…).
-  const streamNames = new Set<string>();
+  const streamNames = new Set<string>(fromBase?.streams ?? []);
   for (const p of pending) {
     const created =
       ts.isNewExpression(p.init) && SUBJECTS.has(p.init.expression.getText().split('.').pop() ?? '');
@@ -678,12 +787,12 @@ function classOf(
       operators: [],
       filters: [],
       reads: [],
+      emits: [],
       loc: loc(p.at),
     };
     if (stream.kind === 'DERIVED' && !ts.isIdentifier(p.init)) {
+      stream.init = p.init;
       readStream(ctx, p.init, stream);
-      const typed = typeFilterOf(ts, p.init);
-      if (typed && stream.sources.length === 1) stream.typeFilter = typed;
     }
     // Une propriété déclarée puis assignée : la seconde lecture complète la première.
     const known = info.streams.get(p.name);
@@ -703,6 +812,8 @@ function classOf(
           operators: [],
           filters: [],
           reads: [],
+          emits: [],
+          init: ret,
           loc: loc(member),
         };
         readStream(ctx, ret, stream);
@@ -799,6 +910,19 @@ function readStream(ctx: Ctx, init: TS.Expression, stream: Stream): void {
       if (ts.isPropertyAccessExpression(callee)) {
         const recv = callee.expression;
         const method = callee.name.text;
+        const emitted = method === 'next' ? refOf(ts, recv) : undefined;
+        if (emitted && isStreamRef(ctx, emitted)) {
+          // Le traitement pousse une valeur dans un flux : une émission (un effet qui en relance un autre),
+          // jamais une source de ce flux.
+          stream.emits.push({
+            ref: emitted,
+            ...(node.arguments[0] ? { value: node.arguments[0] } : {}),
+            fedBy: [],
+            loc: ctx.loc(node),
+          });
+          for (const arg of node.arguments) visit(arg, operator);
+          return;
+        }
         if (recv.kind === ts.SyntaxKind.ThisKeyword && !ctx.streamNames.has(method))
           stream.calls.push(site(ctx, node, 'this', method, 'STORED', operator));
         else if (
@@ -983,72 +1107,6 @@ const short = (text: string, max = 80): string => {
   const one = text.replace(/\s+/g, ' ').trim();
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
-
-/**
- * La garde par type d'un flux calculé : le PREMIER opérateur de `source.pipe(…)` garde les valeurs dont un
- * champ vaut une constante — `filter((a) => a.type === 'SAVE')` (ou plusieurs valeurs réunies par ||), ou
- * `ofType('SAVE', …)` avec des littéraux. Toute autre garde (fonction, opérateur placé après un map) est
- * ignoré ici : il ne permet pas de dire quelles émissions passent.
- */
-function typeFilterOf(
-  ts: TypeScriptModule,
-  init: TS.Expression,
-): { field: string; values: TS.Expression[] } | undefined {
-  const call = strip(ts, init);
-  if (!ts.isCallExpression(call) || !ts.isPropertyAccessExpression(call.expression)) return undefined;
-  if (call.expression.name.text !== 'pipe') return undefined;
-  const first = call.arguments[0];
-  if (!first || !ts.isCallExpression(first) || !ts.isIdentifier(first.expression)) return undefined;
-  const named = (e: TS.Expression): boolean =>
-    literalOf(ts, e) !== undefined || ts.isPropertyAccessExpression(e) || ts.isIdentifier(e);
-  if (first.expression.text === 'ofType') {
-    const values = first.arguments.filter((a) => literalOf(ts, a) !== undefined);
-    return values.length > 0 && values.length === first.arguments.length
-      ? { field: 'type', values }
-      : undefined;
-  }
-  if (first.expression.text !== 'filter') return undefined;
-  const fn = first.arguments[0];
-  if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) return undefined;
-  const param = fn.parameters[0];
-  if (!param || !ts.isIdentifier(param.name)) return undefined;
-  const name = param.name.text;
-  let body: TS.Node = fn.body;
-  if (ts.isBlock(body)) {
-    const only = body.statements.length === 1 ? body.statements[0] : undefined;
-    if (!only || !ts.isReturnStatement(only) || !only.expression) return undefined;
-    body = only.expression;
-  }
-  let field: string | undefined;
-  const values: TS.Expression[] = [];
-  const read = (e: TS.Expression): boolean => {
-    const x = strip(ts, e);
-    if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.BarBarToken)
-      return read(x.left) && read(x.right);
-    if (
-      !ts.isBinaryExpression(x) ||
-      (x.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken &&
-        x.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsToken)
-    )
-      return false;
-    const side = (a: TS.Expression, b: TS.Expression): boolean => {
-      const p = strip(ts, a);
-      if (
-        !ts.isPropertyAccessExpression(p) ||
-        !ts.isIdentifier(p.expression) ||
-        p.expression.text !== name ||
-        !named(strip(ts, b))
-      )
-        return false;
-      if (field !== undefined && field !== p.name.text) return false;
-      field = p.name.text;
-      values.push(strip(ts, b));
-      return true;
-    };
-    return side(x.left, x.right) || side(x.right, x.left);
-  };
-  return read(body as TS.Expression) && field ? { field, values } : undefined;
-}
 
 const strip = (ts: TypeScriptModule, e: TS.Expression): TS.Expression => {
   let cur = e;
@@ -1597,6 +1655,44 @@ function readMethod(
     }
     if (ts.isCallExpression(node)) {
       const callee = node.expression;
+      // Un paramètre appelé (`fn()` dans `runNow(fn)`) : le rappel reçu est exécuté par cette méthode.
+      if (ts.isIdentifier(callee) && method.params.includes(callee.text))
+        (method.invokes ??= new Set()).add(method.params.indexOf(callee.text));
+      // Une méthode de la classe passée en référence (`this.runNow(this.doSave)`, `setTimeout(this.tick)`) :
+      // un appel possible, dit comme tel ; confirmé si la méthode qui la reçoit appelle son paramètre.
+      const calleeName = ts.isPropertyAccessExpression(callee)
+        ? callee.name.text
+        : ts.isIdentifier(callee)
+          ? callee.text
+          : '';
+      if (calleeName && !PASSES_HANDLED.has(calleeName))
+        node.arguments.forEach((arg, index) => {
+          const a = strip(ts, arg);
+          if (
+            !ts.isPropertyAccessExpression(a) ||
+            a.expression.kind !== ts.SyntaxKind.ThisKeyword ||
+            ctx.streamNames.has(a.name.text) ||
+            info.deps.has(a.name.text)
+          )
+            return;
+          const owner = ts.isPropertyAccessExpression(callee) ? callee.expression : undefined;
+          const target = !owner
+            ? ''
+            : owner.kind === ts.SyntaxKind.ThisKeyword
+              ? 'this'
+              : ts.isPropertyAccessExpression(owner) && owner.expression.kind === ts.SyntaxKind.ThisKeyword
+                ? owner.name.text
+                : '';
+          (pipeline ? pipeline.calls : method.calls).push({
+            target: 'this',
+            method: a.name.text,
+            args: [],
+            use: 'LOCAL',
+            ...controlOf(ctx, node, body, method),
+            passedTo: { target, method: calleeName, index },
+            loc: ctx.loc(arg),
+          });
+        });
       // Les créations qui souscrivent (toSignal, firstValueFrom) : un flux passé là est consommé.
       if (ts.isPropertyAccessExpression(callee)) {
         const recv = callee.expression;
@@ -1754,6 +1850,33 @@ function readMethod(
           });
           (pipeline ? pipeline.calls : method.calls).push(s);
         }
+        // Une fonction utilitaire qui reçoit une dépendance (`emitOn(this.store, action)`) : ses appels sur ce
+        // paramètre sont ceux de cette méthode ; ils sont résolus quand toutes les fonctions sont lues.
+        if (
+          !m &&
+          !method.params.includes(callee.text) &&
+          node.arguments.some((arg) => {
+            const a = strip(ts, arg);
+            return (
+              ts.isPropertyAccessExpression(a) &&
+              a.expression.kind === ts.SyntaxKind.ThisKeyword &&
+              info.deps.has(a.name.text) &&
+              !info.http.has(a.name.text)
+            );
+          })
+        )
+          (method.fnCalls ??= []).push({
+            name: callee.text,
+            callee,
+            site: {
+              target: '',
+              method: '',
+              args: [...node.arguments],
+              use: 'LOCAL',
+              ...controlOf(ctx, node, body, method),
+              loc: ctx.loc(node),
+            },
+          });
         if (pipeline && OPERATORS.has(callee.text)) pipeline.operators.push(callee.text);
         if (pipeline && callee.text === 'filter' && node.arguments[0])
           (pipeline.filters ??= []).push(short(node.arguments[0].getText()));
@@ -2592,6 +2715,24 @@ function resolve(
       for (const g of (site.guards ?? []).flatMap((x) => x.terms ?? [x]))
         if (g.on && m.params.includes(g.on.split('.')[0] ?? '') && (g.values?.length || g.instance))
           paths.add(g.on);
+    // Un paramètre émis dans un flux trié par type (`this.actions.next(action)`) : son champ de type décide
+    // des traitements atteints, même sans condition dans la méthode.
+    for (const e of m.emits) {
+      const r = e.value ? resolveRef(c, e.ref) : undefined;
+      const field = r ? typedFields.get(streamId(r.cls, r.stream.name)) : undefined;
+      if (!e.value || !field) continue;
+      const add = (expr: TS.Expression, suffix: string): void => {
+        const p = pathOf(ts, expr, m);
+        if (p && m.params.includes(p.split('.')[0] ?? '')) paths.add(`${p}${suffix}`);
+      };
+      const v = strip(ts, e.value);
+      if (ts.isObjectLiteralExpression(v)) {
+        for (const prop of v.properties)
+          if (ts.isSpreadAssignment(prop)) add(prop.expression, `.${field}`);
+          else if (ts.isPropertyAssignment(prop) && prop.name.getText() === field) add(prop.initializer, '');
+          else if (ts.isShorthandPropertyAssignment(prop) && prop.name.text === field) add(prop.name, '');
+      } else if (ts.isIdentifier(v) || ts.isPropertyAccessExpression(v)) add(v, `.${field}`);
+    }
     for (const cs of m.calls) {
       const target = targetClassOf(c, cs.target);
       const found = target ? lookup(target, cs.method) : undefined;
@@ -2717,29 +2858,377 @@ function resolve(
     returnsObservable: false,
     loc: at,
   });
+  // ── La garde d'un flux calculé : les valeurs d'un champ qu'il laisse passer. Lue opérateur par opérateur :
+  // un opérateur qui garde la valeur ne change rien ; un map qui recopie l'objet garde le champ, un map qui le
+  // réécrit le fixe, tout autre le rend inconnu ; un filter sur un champ connu restreint les valeurs. Le
+  // prédicat est suivi dans une fonction nommée, une méthode ou un opérateur maison. Bornée en profondeur. ──
+  interface Callable {
+    param: string;
+    /** Le rappel reçoit un tableau (`([action, state]) => …` après withLatestFrom) : son premier élément. */
+    first?: boolean;
+    body: TS.Expression;
+    cls: ClassInfo;
+    frame: Method;
+    ctx?: Ctxt;
+  }
+  interface Env {
+    cls: ClassInfo;
+    frame: Method;
+    ctx?: Ctxt;
+  }
+  const MAX_GATE_DEPTH = 4;
+  const single = (returns: readonly TS.Expression[] | undefined): TS.Expression | undefined =>
+    returns?.length === 1 ? returns[0] : undefined;
+  const callableOf = (expr: TS.Expression, env: Env, depth = 0): Callable | undefined => {
+    if (depth > MAX_GATE_DEPTH) return undefined;
+    const x = strip(ts, expr);
+    if (ts.isArrowFunction(x) || ts.isFunctionExpression(x)) {
+      const p = x.parameters[0];
+      const body = single(returnsOf(ts, x.body));
+      if (!p || !body) return undefined;
+      if (ts.isIdentifier(p.name)) return { param: p.name.text, body, ...env };
+      const head = ts.isArrayBindingPattern(p.name) ? p.name.elements[0] : undefined;
+      return head && ts.isBindingElement(head) && ts.isIdentifier(head.name)
+        ? { param: head.name.text, first: true, body, ...env }
+        : undefined;
+    }
+    if (ts.isIdentifier(x)) {
+      const local = env.cls.module.get(x.text);
+      if (local && (ts.isArrowFunction(local) || ts.isFunctionExpression(local)))
+        return callableOf(local, env, depth + 1);
+      const fn = functions.get(x.text);
+      const body = single(fn?.returns);
+      const param = fn?.params[0];
+      if (!fn || !body || !param) return undefined;
+      return {
+        param,
+        body,
+        cls: { ...env.cls, module: fn.module, values: new Map() },
+        frame: { ...emptyMethod(x.text, env.frame.loc), params: fn.params, locals: fn.locals },
+      };
+    }
+    if (ts.isPropertyAccessExpression(x) && x.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const found = lookup(env.cls, x.name.text);
+      const body = single(found?.method.returns);
+      const param = found?.method.params[0];
+      return found && body && param ? { param, body, cls: found.cls, frame: found.method } : undefined;
+    }
+    return undefined;
+  };
+  interface Pred {
+    field: string;
+    /** undefined : une valeur comparée n'est pas connue (rien n'est alors écarté). */
+    keys: (string | undefined)[];
+    first?: boolean;
+  }
+  const predOf = (fn: Callable, depth = 0): Pred | undefined => {
+    if (depth > MAX_GATE_DEPTH) return undefined;
+    let field: string | undefined;
+    const keys: (string | undefined)[] = [];
+    const fieldOfAccess = (e: TS.Expression): string | undefined => {
+      const p = strip(ts, e);
+      return ts.isPropertyAccessExpression(p) &&
+        ts.isIdentifier(p.expression) &&
+        p.expression.text === fn.param
+        ? p.name.text
+        : undefined;
+    };
+    const take = (name: string, values: readonly TS.Expression[]): boolean => {
+      if (field !== undefined && field !== name) return false;
+      field = name;
+      for (const v of values) keys.push(keyOf(valOf(v, fn.cls, fn.frame, fn.ctx)));
+      return true;
+    };
+    const read = (e: TS.Expression): boolean => {
+      const x = strip(ts, e);
+      if (ts.isBinaryExpression(x)) {
+        const op = x.operatorToken.kind;
+        if (op === ts.SyntaxKind.BarBarToken) return read(x.left) && read(x.right);
+        if (op !== ts.SyntaxKind.EqualsEqualsEqualsToken && op !== ts.SyntaxKind.EqualsEqualsToken)
+          return false;
+        const left = fieldOfAccess(x.left);
+        if (left !== undefined) return take(left, [x.right]);
+        const right = fieldOfAccess(x.right);
+        return right !== undefined ? take(right, [x.left]) : false;
+      }
+      if (ts.isCallExpression(x)) {
+        // `['SAVE', 'UPDATE'].includes(action.type)`
+        if (
+          ts.isPropertyAccessExpression(x.expression) &&
+          x.expression.name.text === 'includes' &&
+          x.arguments[0]
+        ) {
+          const list = strip(ts, x.expression.expression);
+          const name = fieldOfAccess(x.arguments[0]);
+          return ts.isArrayLiteralExpression(list) && name !== undefined ? take(name, list.elements) : false;
+        }
+        // Le prédicat délègue : `(a) => this.isReject(a)`, `(a) => isSave(a)`.
+        const arg = x.arguments.length === 1 && x.arguments[0] ? strip(ts, x.arguments[0]) : undefined;
+        if (arg && ts.isIdentifier(arg) && arg.text === fn.param) {
+          const inner = callableOf(x.expression, { cls: fn.cls, frame: fn.frame }, depth + 1);
+          const got = inner ? predOf(inner, depth + 1) : undefined;
+          if (!got || got.first || (field !== undefined && field !== got.field)) return false;
+          field = got.field;
+          keys.push(...got.keys);
+          return true;
+        }
+      }
+      return false;
+    };
+    return read(fn.body) && field !== undefined
+      ? { field, keys, ...(fn.first ? { first: true } : {}) }
+      : undefined;
+  };
+  type Shape =
+    | { kind: 'SAME' | 'TUPLE' | 'UNKNOWN' }
+    | { kind: 'OBJECT'; param: string; spread: boolean; props: Map<string, TS.Expression>; env: Env };
+  interface GateState {
+    shape: Shape;
+    field?: string;
+    /** Les valeurs encore admises (undefined : aucune restriction lue). */
+    accept?: Set<string>;
+  }
+  const applyFilter = (state: GateState, pred: Pred | undefined): void => {
+    if (!pred) return;
+    const shape = state.shape;
+    if (pred.first ? shape.kind !== 'TUPLE' : shape.kind !== 'SAME' && shape.kind !== 'OBJECT') return;
+    if (state.field !== undefined && state.field !== pred.field) return;
+    // La valeur du champ à cet endroit du pipe : celle de l'émission, une constante écrite par un map, inconnue.
+    let fixed: string | undefined;
+    if (shape.kind === 'OBJECT') {
+      const init = shape.props.get(pred.field);
+      if (init) {
+        const access = strip(ts, init);
+        const same =
+          ts.isPropertyAccessExpression(access) &&
+          ts.isIdentifier(access.expression) &&
+          access.expression.text === shape.param &&
+          access.name.text === pred.field;
+        if (!same) {
+          fixed = keyOf(valOf(init, shape.env.cls, shape.env.frame, shape.env.ctx));
+          if (fixed === undefined) return;
+        }
+      } else if (!shape.spread) return;
+    }
+    if (pred.keys.includes(undefined)) return;
+    const allowed = new Set(pred.keys.filter((k): k is string => k !== undefined));
+    state.field = pred.field;
+    if (fixed !== undefined) {
+      // Le map a fixé le champ : le filter passe toujours, ou jamais.
+      if (!allowed.has(fixed)) state.accept = new Set();
+      return;
+    }
+    state.accept = state.accept ? new Set([...state.accept].filter((k) => allowed.has(k))) : allowed;
+  };
+  const walkOperators = (ops: readonly TS.Expression[], env: Env, state: GateState, depth: number): void => {
+    for (const raw of ops) {
+      const op = strip(ts, raw);
+      const name = ts.isCallExpression(op) && ts.isIdentifier(op.expression) ? op.expression.text : undefined;
+      if (!ts.isCallExpression(op) || !name) {
+        state.shape = { kind: 'UNKNOWN' };
+        continue;
+      }
+      const custom = functions.get(name);
+      if (custom && !KEEPS_VALUE.has(name) && depth < MAX_GATE_DEPTH) {
+        // Un opérateur maison dont le corps est lisible : évalué avec les arguments transmis.
+        const body = single(custom.returns);
+        const inner = body ? strip(ts, body) : undefined;
+        const frame: Method = {
+          ...emptyMethod(name, env.frame.loc),
+          params: custom.params,
+          locals: custom.locals,
+        };
+        const bound: Env = {
+          cls: { ...env.cls, module: custom.module, values: new Map() },
+          frame,
+          ctx: new Map(
+            custom.params.map((p, i) => [
+              p,
+              op.arguments[i] ? valOf(op.arguments[i], env.cls, env.frame, env.ctx) : undefined,
+            ]),
+          ),
+        };
+        if (inner && ts.isCallExpression(inner) && ts.isIdentifier(inner.expression)) {
+          if (inner.expression.text === 'pipe') walkOperators(inner.arguments, bound, state, depth + 1);
+          else walkOperators([inner], bound, state, depth + 1);
+          continue;
+        }
+        const piped =
+          inner && (ts.isArrowFunction(inner) || ts.isFunctionExpression(inner))
+            ? single(returnsOf(ts, inner.body))
+            : undefined;
+        const chain = piped ? strip(ts, piped) : undefined;
+        if (
+          chain &&
+          ts.isCallExpression(chain) &&
+          ts.isPropertyAccessExpression(chain.expression) &&
+          chain.expression.name.text === 'pipe'
+        ) {
+          walkOperators(chain.arguments, bound, state, depth + 1);
+          continue;
+        }
+        state.shape = { kind: 'UNKNOWN' };
+        continue;
+      }
+      if (name === 'filter') {
+        const fn = op.arguments[0] ? callableOf(op.arguments[0], env) : undefined;
+        if (fn && env.ctx && !fn.ctx && fn.frame === env.frame) fn.ctx = env.ctx;
+        applyFilter(state, fn ? predOf(fn) : undefined);
+      } else if (name === 'ofType') {
+        // L'opérateur d'une bibliothèque d'effets, avec des types littéraux.
+        if (op.arguments.length > 0 && op.arguments.every((a) => literalOf(ts, a) !== undefined))
+          applyFilter(state, { field: 'type', keys: op.arguments.map((a) => `L:${literalOf(ts, a) ?? ''}`) });
+        else state.shape = { kind: 'UNKNOWN' };
+      } else if (name === 'map') {
+        const fn = op.arguments[0] ? strip(ts, op.arguments[0]) : undefined;
+        const p =
+          fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) ? fn.parameters[0] : undefined;
+        const body =
+          fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))
+            ? single(returnsOf(ts, fn.body))
+            : undefined;
+        const out = body ? strip(ts, body) : undefined;
+        if (state.shape.kind !== 'SAME' || !p || !ts.isIdentifier(p.name) || !out)
+          state.shape = { kind: 'UNKNOWN' };
+        else if (ts.isIdentifier(out) && out.text === p.name.text) continue;
+        else if (ts.isObjectLiteralExpression(out)) {
+          const param = p.name.text;
+          const props = new Map<string, TS.Expression>();
+          let spread = false;
+          let readable = true;
+          for (const prop of out.properties) {
+            if (ts.isSpreadAssignment(prop)) {
+              const src = strip(ts, prop.expression);
+              if (ts.isIdentifier(src) && src.text === param && props.size === 0) spread = true;
+              else readable = false;
+            } else if (ts.isPropertyAssignment(prop)) props.set(prop.name.getText(), prop.initializer);
+            else if (ts.isShorthandPropertyAssignment(prop)) props.set(prop.name.text, prop.name);
+            else readable = false;
+          }
+          state.shape = readable
+            ? {
+                kind: 'OBJECT',
+                param,
+                spread,
+                props,
+                env: { ...env, frame: { ...env.frame, params: [param] } },
+              }
+            : { kind: 'UNKNOWN' };
+        } else state.shape = { kind: 'UNKNOWN' };
+      } else if (name === 'withLatestFrom' || name === 'combineLatestWith') {
+        state.shape = state.shape.kind === 'SAME' ? { kind: 'TUPLE' } : { kind: 'UNKNOWN' };
+      } else if (!KEEPS_VALUE.has(name)) state.shape = { kind: 'UNKNOWN' };
+    }
+  };
   /** flux source → champ de type lu par ses traitements filtrés ; flux filtré → sa source et ses valeurs. */
   const typedFields = new Map<string, string>();
   const typedStreams = new Map<string, { source: string; field: string; keys: (string | undefined)[] }>();
   for (const c of classes.values())
     for (const st of c.streams.values()) {
-      const src = st.sources[0];
-      if (!st.typeFilter || !src) continue;
-      const r = resolveRef(c, src);
+      const init = st.init ? strip(ts, st.init) : undefined;
+      if (
+        !init ||
+        !ts.isCallExpression(init) ||
+        !ts.isPropertyAccessExpression(init.expression) ||
+        init.expression.name.text !== 'pipe'
+      )
+        continue;
+      const base = refOf(ts, init.expression.expression);
+      const r = base ? resolveRef(c, base) : undefined;
       if (!r) continue;
+      const state: GateState = { shape: { kind: 'SAME' } };
+      walkOperators(init.arguments, { cls: c, frame: emptyMethod(st.name, st.loc) }, state, 0);
+      if (state.field === undefined || !state.accept) continue;
       const source = streamId(r.cls, r.stream.name);
       const known = typedFields.get(source);
       // Deux traitements qui trient la même source sur deux champs différents : aucun canal (indécidable).
-      typedFields.set(
-        source,
-        known === undefined || known === st.typeFilter.field ? st.typeFilter.field : '',
-      );
-      const frame = emptyMethod(st.name, st.loc);
-      typedStreams.set(streamId(c, st.name), {
-        source,
-        field: st.typeFilter.field,
-        keys: st.typeFilter.values.map((v) => keyOf(valOf(v, c, frame, undefined))),
-      });
+      typedFields.set(source, known === undefined || known === state.field ? state.field : '');
+      typedStreams.set(streamId(c, st.name), { source, field: state.field, keys: [...state.accept] });
     }
+  // ── Appels indirects : une fonction utilitaire qui reçoit une dépendance fait ses appels au nom de la
+  // méthode ; une référence passée en argument n'est gardée que si elle désigne une méthode de la classe. ──
+  const plain = (e: TS.Expression): boolean => {
+    const x = strip(ts, e);
+    if (literalOf(ts, x) !== undefined) return true;
+    return (
+      ts.isObjectLiteralExpression(x) &&
+      x.properties.every(
+        (p) => ts.isPropertyAssignment(p) && literalOf(ts, strip(ts, p.initializer)) !== undefined,
+      )
+    );
+  };
+  for (const c of classes.values())
+    for (const m of c.methods.values()) {
+      for (const fc of m.fnCalls ?? []) {
+        const fn = functions.get(fc.name);
+        if (!fn) continue;
+        for (const inner of fn.calls) {
+          const arg = fc.site.args[inner.param];
+          const a = arg ? strip(ts, arg) : undefined;
+          if (
+            !a ||
+            !ts.isPropertyAccessExpression(a) ||
+            a.expression.kind !== ts.SyntaxKind.ThisKeyword ||
+            !c.deps.has(a.name.text) ||
+            c.http.has(a.name.text)
+          )
+            continue;
+          m.calls.push({
+            ...fc.site,
+            target: a.name.text,
+            method: inner.method,
+            // Un paramètre de la fonction devient l'argument transmis ; un littéral reste ; toute autre
+            // expression (variable propre à la fonction) est inconnue ici, jamais évaluée hors de son fichier.
+            args: inner.args.map((x) => {
+              const y = strip(ts, x);
+              const i = ts.isIdentifier(y) ? fn.params.indexOf(y.text) : -1;
+              return i >= 0 ? (fc.site.args[i] ?? fc.callee) : plain(x) ? x : fc.callee;
+            }),
+            viaFn: fc.name,
+          });
+        }
+      }
+      const real = (cs: CallSite): boolean => !cs.passedTo || lookup(c, cs.method) !== undefined;
+      m.calls = m.calls.filter(real);
+      for (const p of m.pipelines) p.calls = p.calls.filter(real);
+    }
+  // ── Héritage : les classes qui implémentent une méthode sous une classe (abstraite ou redéfinie). ─────
+  const children = new Map<string, ClassInfo[]>();
+  for (const c of classes.values()) if (c.base) children.set(c.base, [...(children.get(c.base) ?? []), c]);
+  const implementationsOf = (cls: ClassInfo, method: string): ClassInfo[] => {
+    const out: ClassInfo[] = [];
+    const seen = new Set<string>([cls.name]);
+    const queue = [...(children.get(cls.name) ?? [])];
+    while (queue.length > 0 && out.length < 20) {
+      const cur = queue.shift();
+      if (!cur || seen.has(cur.name)) continue;
+      seen.add(cur.name);
+      if (cur.methods.has(method)) out.push(cur);
+      queue.push(...(children.get(cur.name) ?? []));
+    }
+    return out;
+  };
+  /** La méthode appelle (même indirectement) une méthode de `this` que les sous-classes fournissent. */
+  const sensitive = new Map<string, boolean>();
+  const selfSensitive = (cls: ClassInfo, m: Method, seen = new Set<string>()): boolean => {
+    const id = methodId(cls, m.name);
+    const known = sensitive.get(id);
+    if (known !== undefined) return known;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    let out = false;
+    for (const cs of [...m.calls, ...m.pipelines.flatMap((p) => p.calls)]) {
+      if (cs.target !== 'this') continue;
+      const found = lookup(cls, cs.method);
+      const below = implementationsOf(cls, cs.method);
+      if (found ? below.length > 0 || selfSensitive(found.cls, found.method, seen) : below.length > 0) {
+        out = true;
+        break;
+      }
+    }
+    sensitive.set(id, out);
+    return out;
+  };
   const channels = new Map<string, { stream: string; key: string; label: string; loc: Loc }>();
   /**
    * Le flux (ou son canal) où arrive une émission : le canal du type émis quand la valeur émise a un type
@@ -2780,7 +3269,7 @@ function resolve(
   ): string | undefined => {
     const id = methodId(c, m.name);
     // Deux appels qui transmettent les mêmes valeurs décisives partagent le même contexte.
-    const key = `${id}|${decisivePaths(c, m)
+    const key = `${id}|${ctx.get('#self')?.inst ?? ''}|${decisivePaths(c, m)
       .map((p) => `${p}=${keyOf(valAt(p, ctx)) ?? '?'}`)
       .join(',')}`;
     const known = specialized.get(key);
@@ -2878,6 +3367,28 @@ function resolve(
     base?: { confidence: UiLink['confidence']; why: string; condition?: string; async?: string },
     scope?: { ctx: Ctxt; verdict: 'MATCH' | 'UNKNOWN'; depth: number },
   ): void => {
+    // Dans une méthode héritée suivie pour une sous-classe connue, `this` est cette sous-classe.
+    const self = scope?.ctx.get('#self')?.inst;
+    if (cs.target === 'this' && self && self !== c.name && classes.has(self))
+      cs = { ...cs, target: `@type:${self}` };
+    const receiver = targetClassOf(c, cs.target);
+    if (receiver && !cs.virtual && !lookup(receiver, cs.method)) {
+      // Une méthode abstraite : chaque implémentation lue est une candidate, aucune n'est choisie au hasard.
+      const impls = implementationsOf(receiver, cs.method);
+      if (impls.length > 0) {
+        for (const impl of impls)
+          callLink(
+            c,
+            m,
+            from,
+            { ...cs, target: `@type:${impl.name}`, virtual: { of: receiver.name, count: impls.length } },
+            kind,
+            base,
+            scope,
+          );
+        return;
+      }
+    }
     const t = callTarget(c, m, cs);
     if (!t) return;
     const wrapper = wrappers.get(t.id);
@@ -2945,12 +3456,16 @@ function resolve(
     let to = t.id;
     let context: string | undefined;
     const paths = decisivePaths(t.cls, t.method);
-    if (paths.length) {
+    // Une méthode héritée qui dépend de ce que la sous-classe fournit est suivie pour cette sous-classe.
+    const selfName =
+      receiver && receiver.name !== t.cls.name && selfSensitive(t.cls, t.method) ? receiver.name : undefined;
+    if (paths.length || selfName) {
       const ctx = new Map<string, Val | undefined>();
       t.method.params.forEach((param, i) => {
         const arg = cs.args[i];
         if (arg) ctx.set(param, valOf(arg, c, m, scope?.ctx));
       });
+      if (selfName) ctx.set('#self', { text: selfName, inst: selfName });
       const shownVals = paths
         .map((path) => {
           const v = valAt(path, ctx);
@@ -2958,6 +3473,7 @@ function resolve(
           return path.includes('.') ? `${path.split('.').slice(1).join('.')}=${v.text}` : v.text;
         })
         .filter((x): x is string => x !== undefined);
+      if (selfName) shownVals.unshift(selfName);
       if (shownVals.length) {
         const label = shownVals.join(', ');
         const clone = specialize(t.cls, t.method, ctx, label, (scope?.depth ?? 0) + 1);
@@ -3040,6 +3556,25 @@ function resolve(
     } else if (returned && confidence === 'CONFIRMED') {
       confidence = 'PROBABLE';
       why += ' — la chaîne est rendue à l’appelant : exécutée seulement s’il la souscrit';
+    }
+    if (cs.viaFn) why += ` (par la fonction ${cs.viaFn}())`;
+    if (cs.virtual) {
+      if (cs.virtual.count > 1 && confidence === 'CONFIRMED') confidence = 'PROBABLE';
+      why +=
+        cs.virtual.count > 1
+          ? ` — ${cs.virtual.of}.${cs.method}() est abstraite : une de ses ${String(cs.virtual.count)} implémentations lues, aucune n’est choisie`
+          : ` (seule implémentation lue de ${cs.virtual.of}.${cs.method}())`;
+    }
+    if (cs.passedTo) {
+      // Une référence de méthode passée en argument : exécutée si celle qui la reçoit appelle son paramètre.
+      const holder = cs.passedTo.target ? targetClassOf(c, cs.passedTo.target) : undefined;
+      const taker = holder ? lookup(holder, cs.passedTo.method) : undefined;
+      if (taker?.method.invokes?.has(cs.passedTo.index))
+        why += ` (référence passée à ${cs.passedTo.method}(), qui l’appelle)`;
+      else {
+        if (confidence === 'CONFIRMED') confidence = 'PROBABLE';
+        why += ` — référence passée à ${cs.passedTo.method}() : exécutée seulement si ${cs.passedTo.method}() l’appelle`;
+      }
     }
     // Un alias : plusieurs cibles possibles, une affectation non résolue, ou une méthode détachée de son objet.
     if (cs.alternatives && cs.alternatives > 1) {
@@ -3196,7 +3731,7 @@ function resolve(
         for (const e of p.emits) {
           const target = resolveRef(c, e.ref);
           if (!target) continue;
-          const tid = streamSymbol(target.cls, target.stream);
+          const tid = channelOf(c, m, e, streamSymbol(target.cls, target.stream), undefined);
           link({
             from: sid,
             to: tid,
@@ -3246,6 +3781,26 @@ function resolve(
     for (const s of c.streams.values()) {
       const sid = streamSymbol(c, s);
       const run = consumption(sid);
+      for (const e of s.emits) {
+        // Le traitement du flux pousse une valeur dans un autre flux : un effet en déclenche un autre.
+        const target = resolveRef(c, e.ref);
+        if (!target) continue;
+        const tid = channelOf(
+          c,
+          emptyMethod(s.name, s.loc),
+          e,
+          streamSymbol(target.cls, target.stream),
+          undefined,
+        );
+        link({
+          from: sid,
+          to: tid,
+          kind: 'PROPAGATES',
+          confidence: run.confidence,
+          reason: `le traitement de ${sid} émet sur ${tid} (${run.why})`,
+          loc: e.loc,
+        });
+      }
       for (const src of s.sources) {
         const r = resolveRef(c, src);
         if (!r) continue;

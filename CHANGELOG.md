@@ -4,6 +4,21 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : complément du moteur de reconstruction des flux (statique)
+
+- Audit par l'exemple : 23 parcours représentatifs (`tests/fixtures/flow-engine`), 10 justes avant, 23
+  après ; l'épreuve à 500 000 lignes reste à 1 200 / 1 200, graphe identique, sans perte de temps.
+- La garde par type d'un pipe est lue où qu'elle soit : après un `map` (objet recopié, champ réécrit),
+  après `withLatestFrom`, dans une fonction nommée, une méthode ou un opérateur maison paramétré.
+- Une émission faite dans un pipe (`tap(() => this.actions.next(…))`) est une émission : un effet en
+  déclenche un autre. Un `dispatch(action)` qui se contente d'émettre est suivi par type.
+- Appels indirects : fonction utilitaire qui reçoit le store, référence de méthode passée en rappel
+  (confirmée si la méthode qui la reçoit l'appelle, probable sinon).
+- Héritage : une méthode héritée est suivie pour la classe réelle du récepteur ; une méthode abstraite
+  garde toutes ses implémentations comme candidates ; les dépendances, clients HTTP et flux d'une classe
+  de base sont connus des sous-classes.
+- Version d'analyseur `cartography-11;rxjs-6`. Détail : `docs/audits/flow-engine-audit.md`.
+
 ### Cartographie : TraceGraph V2 (liens gardés, identité des classes, sens du flux)
 
 - Une relation lue mais non raccordée au graphe n'est plus supprimée sans trace : elle est gardée comme
