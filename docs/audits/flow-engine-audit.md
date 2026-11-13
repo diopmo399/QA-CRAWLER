@@ -124,23 +124,91 @@ Une limite atteinte est signalée et rend la source `PARTIAL` ; rien n'est suppr
 Les écarts de temps sont dans le bruit de mesure : pas de régression. La relecture des sous-classes ne
 concerne que les fichiers dont une classe de base fournit des membres.
 
-## 6. Ambiguïtés et limites restantes
+## 6. Second lot : combler les limites du premier
 
-- **Type inconnu à l'émission** (`JSON.parse`, entrée de gabarit, `$event`) : toutes les suites restent
-  candidates PROBABLE, avec le diagnostic qui dit d'où vient la valeur.
-- **Type abstrait injecté** : toutes les implémentations lues restent candidates. Les `providers` Angular
-  (`useClass`, `useExisting`) ne sont pas lus pour trancher.
-- **Garde de pipe** : seules l'égalité, `||` et `includes` sur un champ sont lues. Une négation (`!==`) ou
-  un prédicat sur plusieurs champs ne restreint rien.
-- **Fonction utilitaire** : un seul niveau. Une fonction qui passe le store à une autre fonction n'est pas
-  suivie.
-- **Opérateurs personnalisés** : suivis s'ils rendent `filter(…)`, `pipe(…)` ou `source => source.pipe(…)`.
-  Les autres rendent la valeur inconnue.
-- **NgRx** (`createEffect`, `Store.dispatch` de la bibliothèque) : NON VÉRIFIÉ, aucun cas de test. Seul
-  `ofType` avec des littéraux est lu.
-- **Cache** : par source entière. Un fichier modifié fait relire toute la source, et le graphe est
-  reconstruit à chaque scan. Pas de résumé de fonction persistant entre deux scans.
-- **Java** : aucune modification dans ce lot. La résolution polymorphe côté Java reste celle de
-  `java-hierarchy.ts` (candidates gardées, confiance `UNKNOWN`).
-- **Résolution TypeScript** : syntaxique (imports, alias, types écrits). Un type inféré sans annotation
-  n'est pas résolu.
+Même règle que le premier lot : chaque capacité est éprouvée par un cas de code lu par le moteur, avec ce
+qu'il doit atteindre et ce qu'il ne doit jamais atteindre. Rien n'est exécuté ; aucune dépendance n'est
+ajoutée ni chargée. Version d'analyseur : `cartography-13;rxjs-8`.
+
+### 6.1 Mécanismes ajoutés
+
+| Limite du premier lot                           | Ce que le moteur fait maintenant                                                                                                                                                                                                                                                                                                                                                                                              | Code                                                                                                              | Test                                                |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Aucune mesure de ce qui est perdu               | Chaque scan compte ses liens par confiance, ses relations non raccordées par cause, ses interruptions de chaîne par code (`scan.resolution`), sans rien citer du code                                                                                                                                                                                                                                                         | `scan.ts` `resolutionOf` (L89)                                                                                    | `flow-engine.test.ts` « 0 — the measure of a scan » |
+| Imports par alias et fichiers barils non suivis | `paths`, `baseUrl`, `extends` des `tsconfig` de la source ; `export *` et `export { A as B } from` suivis jusqu'à la déclaration ; une classe ou une constante homonyme est celle que l'import désigne                                                                                                                                                                                                                        | `module-resolution.ts` `ModuleResolver` (L99), `class-identity.ts` (L151, L164)                                   | `module-resolution.test.ts` (9), « 14 — imports »   |
+| Classe ambiguë dite « introuvable »             | Diagnostic propre `CLASS_AMBIGUOUS` : plusieurs classes de ce nom, aucune choisie                                                                                                                                                                                                                                                                                                                                             | `analyze-rxjs.ts` `callTarget`                                                                                    | « 14 » cas négatif                                  |
+| Garde de pipe : ni négation ni conjonction      | `!==`, `!liste.includes`, `!(…)`, `&&` (un terme illisible ne peut que restreindre ; sa négation n'est jamais déduite)                                                                                                                                                                                                                                                                                                        | `analyze-rxjs.ts` `merge` (L4095), `predOf` (L4116)                                                               | « 15 »                                              |
+| Valeur inconnue : toutes les suites             | Bornée par son type écrit (union de littéraux, enum, champ discriminant d'une interface) : chaque valeur admise est suivie comme possibilité (PROBABLE), jamais comme preuve ; l'éventail n'est ouvert que s'il écarte un traitement                                                                                                                                                                                          | `shapeOfType` (L3588), `unionVal` (L3566), `channelsOf` (L4482), `callLink` (`given`)                             | « 15 »                                              |
+| NgRx non vérifié                                | Store d'actions de la bibliothèque vu comme un store au flux partagé ; `createAction`, `createActionGroup` (import nommé ou par espace de noms) ; `createEffect` + `ofType` ; actions rendues au store (`dispatch: false` respecté) ; `createReducer`/`on` ; sélecteurs reliés au réducteur enregistré sous leur clé (`provideState`, `forFeature`, `createFeature`, `provideStore`) ; `ComponentStore` (`effect`, `updater`) | `actionTypeOf` (L299), `ngrxStateOf` (L187), `reducersOf` (L1207), `effectOf` (L1422), `componentStoreFn` (L1680) | « 16 — NgRx », « 17 — component store »             |
+| Signaux reconnus mais non suivis                | Signal écrit (`set`, `update`) = émission ; `computed` suit les signaux lus ; `effect()` rejoué à chaque changement d'un signal lu (de la classe ou d'une dépendance, confirmé par la classe de la dépendance) ; `toObservable`, `toSignal` ; signal lu par un gabarit tenu à jour                                                                                                                                            | `signalKindOf` (L1647), `signalReadsOf` (L1662), `pipelineSource` (L3264)                                         | « 18 — Angular signals »                            |
+| `providers` Angular non lus                     | `useClass`, `useExisting`, `useFactory` (classe construite ou injectée) ; `inject(JETON)`, `@Inject(JETON)` ; fournisseur d'un composant valable pour lui et les composants qu'il affiche ; plusieurs fournisseurs différents gardés candidats ; preuve citée (fichier, ligne) ; intercepteurs HTTP listés sur chaque appel                                                                                                   | `providingOf` (L524), `providersFor` (L3175), `providerOf` (L3189), `within` (L3157)                              | « 19 — Angular injection »                          |
+| Type inféré non résolu                          | Lecture locale : `x = new X()`, propriété ou accesseur typé, type de retour écrit, `inject(X)` et `injector.get(X)` sur place. Puis second avis du vérificateur de types TypeScript, sur les fichiers de la source seule (AST partagé, mini-bibliothèque de types interne, bornes : 50 000 questions, 20 s) ; il ne répond que par une classe déclarée dans la source                                                         | `soften` (L1399), `receiverOf`, `inferenceOf` (L409), `TYPE_LIB` (L368)                                           | « 20 — receivers found without an injection »       |
+| Java : appel polymorphe non tranché             | `@Qualifier` / `@Named` au point d'injection (devant `@Primary`), nom de bean écrit (`@Service("x")`), `@Profile` cité quand il distingue des candidates, qui restent alors toutes gardées                                                                                                                                                                                                                                    | `incident/code/java.ts` (L676–684), `incident/code/resolve.ts` (L291, L339, L355)                                 | `cartography-java-dispatch.test.ts` (12)            |
+| 64 contextes par méthode                        | 1 024 (borne globale de 50 000 inchangée) : un store central à 200 types d'action passe de 64 à 200 parcours exacts                                                                                                                                                                                                                                                                                                           | `MAX_CLONES_PER_METHOD` (L4534)                                                                                   | `flow-engine-bounds.test.ts` (2)                    |
+| Durées fixes (60 s, 120 s)                      | Elles suivent le nombre de fichiers (10 ms et 40 ms par fichier, jamais moins que la borne) ; une borne donnée par l'appelant est tenue                                                                                                                                                                                                                                                                                       | `files.ts` `readSource`, `analyze-angular.ts`                                                                     | suites existantes                                   |
+| Graphe reconstruit à chaque scan                | Repris tel quel quand rien n'a changé (mêmes entrées, chaque source reprise à la même révision) : `scan.graphReused`                                                                                                                                                                                                                                                                                                          | `scan.ts` `inputsOf` (L120), `unchanged` (L348)                                                                   | « 12 — cache and invalidation »                     |
+
+### 6.2 Tests
+
+- `tests/unit/flow-engine.test.ts` : 69 tests (32 au premier lot).
+- `tests/unit/module-resolution.test.ts` : 9 ; `tests/unit/flow-engine-bounds.test.ts` : 2 ;
+  `tests/unit/cartography-java-dispatch.test.ts` : 12 (10 avant).
+- Suite unitaire complète : voir le rapport de la PR (aucun test retiré ni désactivé).
+- Une régression rencontrée et corrigée : un signal local lu par un gabarit perdait ses écrivains une fois
+  vu aussi comme un flux (`cartography-trace.test.ts`, cas 18) ; les deux lectures sont gardées
+  (`analyze-angular.ts`).
+
+### 6.3 Mesures (même conteneur, 4 cœurs)
+
+Application synthétique de 1 200 modules, 504 562 lignes, 8 644 fichiers :
+
+| Mesure                       | Avant ce lot (`e0d45d8`) | Après                          |
+| ---------------------------- | ------------------------ | ------------------------------ |
+| Parcours justes              | 1 200 / 1 200            | 1 200 / 1 200                  |
+| Signature du graphe          | `5a072858c555107b`       | `5a072858c555107b` (identique) |
+| Scan complet                 | 15,4 s                   | 13,4 s                         |
+| Nouveau scan sans changement | 6,0 s                    | 1,7 s (graphe repris)          |
+| Mémoire maximale (RSS)       | 1 161 Mo                 | 1 416 Mo (+22 %)               |
+
+- Le temps d'un scan se répartit ainsi (mesuré) : lecture 1,5 s, graphe statique 3,1 s, analyse RxJS 6,3 s
+  (dont environ 2,8 s pour créer le programme du vérificateur de types), gabarits 0,2 s, graphe 4,4 s.
+- Le vérificateur de types coûte la mémoire ajoutée ; son temps est compensé par l'AST partagé entre les
+  passes. Sur cette application synthétique il répond à 0 question sur 240 : elle n'a rien d'inféré.
+- Petite fixture (une centaine de fichiers) : 68 ms avant, 97 ms après (médiane de 5 scans).
+- Store central : 200 types d'action, 200 parcours exacts en 0,2 s ; 1 000 types, 1 000 exacts en 1,2 s.
+- Mesure de la fixture : 447 liens, 359 confirmés, 87 probables, 1 inconnu ; 7 questions au vérificateur
+  de types, 5 réponses.
+
+## 7. Ambiguïtés et limites restantes
+
+- **Aucune application réelle n'a été mesurée.** La grande application est synthétique (cinq styles
+  répétés) : elle prouve la tenue en volume, pas la tenue face à du code irrégulier. `scan.resolution`
+  est fait pour mesurer cela sur un vrai dépôt.
+- **Valeur qui n'existe qu'à l'exécution** (`JSON.parse`, réponse serveur, `$event`, configuration
+  distante) : toutes les suites restent candidates PROBABLE, bornées par le type écrit s'il y en a un.
+- **Type écrit** : une valeur déduite d'un type n'est jamais CONFIRMED (un `as` peut le contredire). Au-delà
+  de 12 valeurs admises, le type n'aide plus et la valeur reste inconnue. Un seul chemin décisif à la fois
+  est ouvert en éventail (pas de produit de plusieurs paramètres).
+- **NgRx** : effets fonctionnels (`createEffect` hors classe), actions écrites en classes, `signalStore`,
+  méta-réducteurs et `router-store` ne sont pas lus. Un réducteur nommé `reducer` importé sous un autre nom
+  n'est pas relié à ses sélecteurs. Deux créateurs de même nom ne sont départagés que par leur import.
+- **Signaux** : la lecture d'un signal d'une dépendance dans un gabarit n'est reconnue que sous la forme
+  `dép.signal()` ; `untracked` et les effets créés dans une fonction utilitaire ne sont pas lus.
+- **Injection** : `useValue`, les fabriques à plusieurs retours, les fournisseurs de routes (`providers` d'une
+  route) et `providedIn` d'un module ne tranchent rien. Les intercepteurs sont listés sur les appels, pas
+  reliés un à un ; un intercepteur fonctionnel n'a pas ses propres appels suivis.
+- **Vérificateur de types** : il ne voit pas les bibliothèques (un type venu d'une bibliothèque reste
+  inconnu), ne tranche pas une union de classes, et n'est interrogé que pour le récepteur d'un appel dans
+  une méthode (pas dans la définition d'un flux).
+- **Gardes de pipe** : comparaison d'un champ à des valeurs connues seulement ; un prédicat sur deux champs
+  ne restreint que par le premier lu.
+- **Fonction utilitaire** : un seul niveau.
+- **Java** : `@ConditionalOnProperty`, les beans déclarés par méthode `@Bean` et les qualificateurs
+  personnalisés ne sont pas lus ; le profil actif n'est jamais supposé.
+- **Cache** : toujours par source entière. Un seul fichier modifié fait relire sa source (environ 13 s pour
+  500 000 lignes). Un cache par fichier demanderait de garder en mémoire des structures que l'analyse
+  modifie ; non fait.
+- **Parallélisme** : non fait. Les arbres syntaxiques ne passent pas d'un fil d'exécution à un autre, et
+  les deux phases qui pèsent (analyse du frontal, construction du graphe) sont séquentielles par nature ici.
+- **Mémoire** : tout est en mémoire (1,4 Go pour 500 000 lignes) ; rien n'est fait pour un dépôt qui la
+  dépasserait.

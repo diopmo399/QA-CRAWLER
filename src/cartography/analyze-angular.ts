@@ -111,7 +111,8 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
     // Le budget suit le volume lu (environ un nœud pour deux caractères, jamais moins de 2 millions) : une
     // grande application est analysée en entier ; un budget épuisé est signalé et rend la source partielle.
     maxAstNodes: Math.max(2_000_000, Math.ceil(relevant.reduce((sum, f) => sum + f.text.length, 0) / 2)),
-    maxDurationMs: 120_000,
+    // La durée suit aussi le nombre de fichiers (40 ms par fichier, jamais moins de deux minutes).
+    maxDurationMs: Math.max(120_000, relevant.length * 40),
   });
   const texts = new Map(files.map((file) => [file.path, file.text]));
   const fields: UiField[] = graph.fields.map((field) => {

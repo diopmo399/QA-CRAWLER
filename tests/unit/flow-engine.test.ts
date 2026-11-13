@@ -610,6 +610,17 @@ describe('12 — cache and invalidation', () => {
     });
     expect(again.model.scan.sources.map((s) => s.state)).toEqual(['REUSED']);
     expect(signature(again.model)).toBe(signature(first.model));
+    // Sans le modèle précédent, le graphe est reconstruit (à l'identique) ; avec lui, il est repris tel quel.
+    expect(again.model.scan.graphReused).toBeUndefined();
+    const kept = await runScan({
+      config: configFor(work),
+      allowedRoots: [work],
+      incremental: true,
+      previous: { facts: first.facts, sources: first.model.scan.sources, model: first.model },
+    });
+    expect(kept.model.scan.graphReused).toBe(true);
+    expect(kept.model.edges).toBe(first.model.edges);
+    expect(kept.model.scan.resolution).toEqual(first.model.scan.resolution);
 
     const file = path.join(work, 'front/src/app/c01/c01.component.ts');
     await writeFile(file, (await readFile(file, 'utf8')).replace("{ type: 'SAVE' }", "{ type: 'LOAD' }"));
@@ -617,9 +628,11 @@ describe('12 — cache and invalidation', () => {
       config: configFor(work),
       allowedRoots: [work],
       incremental: true,
-      previous: { facts: again.facts, sources: again.model.scan.sources },
+      previous: { facts: again.facts, sources: again.model.scan.sources, model: again.model },
     });
     expect(changed.model.scan.sources.map((s) => s.state)).toEqual(['SCANNED']);
+    // Une source relue : le graphe est reconstruit, jamais repris.
+    expect(changed.model.scan.graphReused).toBeUndefined();
     const reached = down('AliasComponent#save', buildIndex(changed.model));
     expect(reached).toContain('AliasApi#list');
     expect(reached).not.toContain('AliasApi#save');

@@ -4529,7 +4529,9 @@ function resolve(
 
   // Des contextes bornés par méthode générique (une méthode aux mille valeurs ne prend pas tout) et, en
   // dernier recours, pour toute l'application : la taille de l'application n'écarte pas les contextes.
-  const MAX_CLONES_PER_METHOD = 64;
+  // 1 024 : un store central aux centaines de types d'action garde un contexte par type (mesuré : 1 000 types,
+  // scan complet en 1,2 s) ; la borne globale protège toujours l'ensemble.
+  const MAX_CLONES_PER_METHOD = 1024;
   const MAX_CLONES = 50_000;
   const clonesOf = new Map<string, number>();
   const limited = new Set<string>();

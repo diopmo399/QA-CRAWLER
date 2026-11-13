@@ -4,6 +4,26 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : second lot du moteur de reconstruction des flux (statique)
+
+- Mesure : `scan.resolution` compte les liens par confiance, les relations non raccordées par cause, les
+  interruptions de chaîne par code et les questions posées au vérificateur de types.
+- Imports par alias de chemin (`tsconfig` : `paths`, `baseUrl`, `extends`) et fichiers barils ; diagnostic
+  `CLASS_AMBIGUOUS` quand rien ne départage deux classes de même nom.
+- Gardes de pipe négatives et combinées (`!==`, `!includes`, `&&`) ; valeur inconnue bornée par son type
+  écrit (union, enum, champ discriminant), suivie pour chaque valeur admise comme une possibilité.
+- NgRx : actions, groupes d'actions, effets (`ofType`, actions rendues au store), réducteurs, sélecteurs
+  reliés au réducteur de leur clé, `ComponentStore`.
+- Signaux Angular : `signal`, `computed`, `effect`, `toSignal`, `toObservable`.
+- Injection Angular : fournisseurs (`useClass`, `useExisting`, `useFactory`), jetons, portée d'un
+  fournisseur de composant, intercepteurs HTTP listés sur chaque appel.
+- Récepteurs sans injection (`new`, type écrit, type de retour) et second avis du vérificateur de types
+  TypeScript sur la source seule, borné.
+- Java : `@Qualifier`, nom de bean écrit, `@Profile`.
+- Tenue en charge : 1 024 contextes par méthode générique, durées proportionnelles au nombre de fichiers,
+  graphe repris quand rien n'a changé (`scan.graphReused` : 6,0 s → 1,7 s à 500 000 lignes).
+- Version d'analyseur `cartography-13;rxjs-8`. Détail, mesures et limites : `docs/audits/flow-engine-audit.md`.
+
 ### Cartographie : complément du moteur de reconstruction des flux (statique)
 
 - Audit par l'exemple : 23 parcours représentatifs (`tests/fixtures/flow-engine`), 10 justes avant, 23

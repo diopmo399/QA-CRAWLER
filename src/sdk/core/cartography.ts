@@ -293,6 +293,13 @@ export interface ScanRecord {
    * candidat, ce qui n'est pas raccordé et pourquoi. Des compteurs seulement, jamais de code.
    */
   resolution?: ScanResolution;
+  /**
+   * L'empreinte de ce que le scan a reçu (sources configurées, version des analyseurs) : deux scans de même
+   * empreinte dont aucune source n'a changé donnent le même graphe.
+   */
+  inputs?: string;
+  /** Le graphe est celui du scan précédent, repris tel quel : rien n'avait changé (ni source, ni analyseur). */
+  graphReused?: boolean;
   edges: number;
   errors: string[];
   /** Les racines de métadonnées lues (locales, autorisées) : état, fichiers lus, éléments ignorés. */

@@ -38,7 +38,7 @@ CALLS d'un COMPONENT vers une méthode liée par son gabarit en STRUCTURE (compo
    l'abonnement (une fois) ». Voir `reactive-causality-resolver.md`.
 5. **API et Dashboard** — `GET /cartography/unresolved` (sous `/projects/:id`), `client.cartography.unresolved`,
    onglet « Liens non résolus ».
-6. **Version d'analyseur** — `ANALYZERS = cartography-11;rxjs-5` : les faits d'un scan antérieur ne
+6. **Version d'analyseur** — `ANALYZERS = cartography-13;rxjs-8` : les faits d'un scan antérieur ne
    sont pas réutilisés (test « faits cartography-10 re-scannés »).
 
 ## Ce que V2 ne fait pas
