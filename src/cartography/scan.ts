@@ -54,7 +54,8 @@ import { resolveContracts, type MavenOptions } from './maven-resolve.js';
 // 11 : identité des classes (homonymes distingués, références et routes résolues par les imports), installation
 //      des abonnements (ngOnInit → flux) distincte de leur propagation.
 // 12 : imports par alias de chemin et fichiers barils, mesure de la reconstruction.
-export const ANALYZERS = `cartography-12;${RXJS_ANALYZER}`;
+// 13 : câblage Spring (@Qualifier, nom de bean écrit, @Profile), fournisseurs Angular et intercepteurs.
+export const ANALYZERS = `cartography-13;${RXJS_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;
@@ -97,7 +98,13 @@ export function resolutionOf(
   for (const source of facts)
     for (const d of source.ui?.diagnostics ?? []) diagnostics[d.code] = (diagnostics[d.code] ?? 0) + 1;
   const read = graph.edges.length + Math.max(all, kept);
+  const typeQueries = { asked: 0, answered: 0 };
+  for (const source of facts) {
+    typeQueries.asked += source.ui?.inference?.asked ?? 0;
+    typeQueries.answered += source.ui?.inference?.answered ?? 0;
+  }
   return {
+    ...(typeQueries.asked > 0 ? { typeQueries } : {}),
     links,
     unresolved,
     diagnostics: Object.fromEntries(Object.entries(diagnostics).sort(([a], [b]) => (a < b ? -1 : 1))),

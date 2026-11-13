@@ -315,6 +315,11 @@ export interface ScanResolution {
   diagnostics: Record<string, number>;
   /** La part des relations lues (liens + non raccordées) qui sont des liens confirmés, de 0 à 1. */
   confirmedRate: number;
+  /**
+   * Les récepteurs d'appel que la lecture du code ne nommait pas et qui ont été soumis au vérificateur de
+   * types TypeScript, et ceux qu'il a rattachés à une classe de la source (absent : aucune question posée).
+   */
+  typeQueries?: { asked: number; answered: number };
 }
 
 /** Un maillon de la chaîne d'une fonctionnalité, couche par couche. */

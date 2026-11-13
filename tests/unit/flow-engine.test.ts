@@ -451,6 +451,128 @@ describe('17 — NgRx component store', () => {
   });
 });
 
+describe('18 — Angular signals', () => {
+  it('writing a signal reaches what a computed signal and an effect make of it', () => {
+    const reached = down('CartComponent#add');
+    expect(reached).toContain('CartStore#setQuantity');
+    expect(reached).toContain('CartStore.quantity');
+    expect(reached).toContain('CartStore.total');
+    // L'effect() du store lit le total : il est rejoué.
+    expect(reached).toContain('CartApi#track');
+    expect(reached).not.toContain('CartApi#remove');
+    expect(edge('CartStore#setQuantity', 'CartStore.quantity')?.reason).toContain('(set)');
+  });
+
+  it('toObservable carries the signal into an RxJS pipe; toSignal subscribes the stream it follows', () => {
+    const reached = down('CartComponent#add');
+    expect(reached).toContain('CartStore.saved$');
+    expect(reached).toContain('CartApi#save');
+    expect(edge('CartStore.items', 'CartApi#list')?.confidence).toBe('CONFIRMED');
+  });
+
+  it('an effect declared as a property reads the signal of a dependency, and runs at creation', () => {
+    const reached = down('CartComponent#coupon');
+    expect(reached).toContain('CartStore.coupon');
+    expect(reached).toContain('CartApi#remove');
+    expect(reached).not.toContain('CartApi#track');
+    expect(edge('CartComponent', 'CartComponent#watcher')?.reason).toContain('cycle de vie');
+  });
+
+  it('negative: another signal is not touched, and reading a signal in a method subscribes nothing', () => {
+    expect(down('CartComponent#coupon')).not.toContain('CartStore.total');
+    const shown = down('CartComponent#show');
+    expect(shown).toContain('CartStore#current');
+    expect(shown.filter((n) => /CartApi|CartStore\./.test(n))).toEqual([]);
+    expect(model.nodes.some((n) => short(n.id) === 'CartStore#quantity')).toBe(false);
+  });
+});
+
+describe('19 — Angular injection: providers, tokens, interceptors', () => {
+  it('an abstract type with one provider is the provided class, with the provider as evidence', () => {
+    const reached = down('PayComponent#pay');
+    expect(reached).toContain('CardGateway#pay');
+    expect(reached).not.toContain('WireGateway#pay');
+    const link = edge('PayComponent#pay', 'CardGateway#pay');
+    expect(link?.confidence).toBe('CONFIRMED');
+    expect(link?.reason).toContain('PayGateway est fourni par CardGateway : useClass');
+    expect(link?.reason).toContain('pay.providers.ts');
+  });
+
+  it('a provider carried by a component wins for it and for the components it displays', () => {
+    expect(down('WirePayComponent#pay')).toContain('WireGateway#pay');
+    expect(down('WirePayComponent#pay')).not.toContain('CardGateway#pay');
+    expect(down('WireChildComponent#pay')).toContain('WireGateway#pay');
+    expect(down('WireChildComponent#pay')).not.toContain('CardGateway#pay');
+  });
+
+  it('an injection token (`@Inject`) is followed to the class its factory builds', () => {
+    const link = edge('PayComponent#notify', 'MailNotifier#notify');
+    expect(link?.confidence).toBe('CONFIRMED');
+    expect(link?.reason).toContain('NOTIFIER est fourni par MailNotifier : useFactory');
+  });
+
+  it('two providers that give different classes: both stay candidates, a class nobody provides never', () => {
+    const reached = down('PayComponent#record');
+    expect(reached).toContain('LocalLedger#write');
+    expect(reached).toContain('RemoteLedger#write');
+    expect(reached).not.toContain('ArchiveLedger#write');
+    const link = edge('PayComponent#record', 'LocalLedger#write');
+    expect(link?.confidence).toBe('PROBABLE');
+    expect(link?.reason).toContain('2 fournisseurs donnent des classes différentes pour Ledger');
+  });
+
+  it('registered HTTP interceptors are listed on each HTTP call of the source', () => {
+    const call = model.nodes.find((n) => short(n.id) === 'CardGateway#pay');
+    expect(call?.detail.interceptors).toEqual(['PayAuthInterceptor']);
+  });
+});
+
+describe('20 — receivers found without an injection (written types, `new`, returns)', () => {
+  it.each([
+    ['viaProperty', 'StockApi#save', 'a property with a written type'],
+    ['viaNew', 'StockApi#list', 'a property built with new'],
+    ['viaGetter', 'StockApi#remove', 'an accessor with a written type'],
+    ['viaReturn', 'StockApi#list', 'the written return type of a method of a dependency'],
+  ])('%s reaches %s (%s)', (method, api) => {
+    expect(down(`StockComponent#${method}`)).toContain(api);
+  });
+
+  it('a local variable injected in place, or asked to the injector, is the class asked for', () => {
+    const reached = down('StockComponent#viaLocal');
+    expect(reached).toContain('StockApi#save');
+    expect(reached).toContain('StockApi#remove');
+    expect(reached).not.toContain('StockApi#list');
+  });
+
+  it('each receiver reaches its own call only', () => {
+    expect(down('StockComponent#viaProperty')).not.toContain('StockApi#remove');
+    expect(down('StockComponent#viaGetter')).not.toContain('StockApi#save');
+  });
+
+  it('nothing written: the TypeScript type checker names the class (inferred return, element of a collection)', () => {
+    for (const method of ['viaInferred', 'viaLoop']) {
+      expect(down(`StockComponent#${method}`)).toContain('StockApi#list');
+      const link = edge(`StockComponent#${method}`, 'StockHelper#refresh');
+      expect(link?.confidence).toBe('CONFIRMED');
+      expect(link?.reason).toContain('donnée par le vérificateur de types TypeScript');
+    }
+    expect(model.scan.resolution?.typeQueries?.answered).toBeGreaterThanOrEqual(2);
+  });
+
+  it('negative: `any` tells the checker nothing, so nothing is followed', () => {
+    const reached = down('StockComponent#viaAny');
+    expect(reached).toContain('StockFactory#loose');
+    expect(reached).not.toContain('StockHelper#refresh');
+    expect(reached).not.toContain('StockApi#list');
+  });
+
+  it('negative: a property of a library type is not followed, and raises no diagnostic', () => {
+    expect(edgesFrom('StockComponent#viaLibrary')).toEqual([]);
+    expect(diagnostics('StockComponent#viaLibrary')).toEqual([]);
+    expect(model.nodes.some((n) => /Date#getTime/.test(n.id))).toBe(false);
+  });
+});
+
 describe('0 — the measure of a scan', () => {
   it('counts the links by confidence and the breaks by cause, without any code', () => {
     const resolution = model.scan.resolution;

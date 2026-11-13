@@ -105,6 +105,40 @@ import org.springframework.web.bind.annotation.*;
   public AuditController(com.ex.a.AuditService a, com.ex.b.AuditService b) { this.a = a; this.b = b; }
   @GetMapping public void go() { a.log("x"); b.trace("y"); }
 }`,
+  // Le câblage Spring écrit : un bean demandé par son nom au point d'injection, face à un @Primary.
+  [`${P}/pay/Gateway.java`]: `package com.ex.pay;
+public interface Gateway { void pay(String m); }`,
+  [`${P}/pay/CardGateway.java`]: `package com.ex.pay;
+@org.springframework.stereotype.Service("card") public class CardGateway implements Gateway { public void pay(String m) {} }`,
+  [`${P}/pay/WireGateway.java`]: `package com.ex.pay;
+@org.springframework.context.annotation.Primary @org.springframework.stereotype.Component
+public class WireGateway implements Gateway { public void pay(String m) {} }`,
+  [`${P}/pay/PayController.java`]: `package com.ex.pay;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.web.bind.annotation.*;
+@RestController @RequestMapping("/api/pay") public class PayController {
+  private final Gateway gateway;
+  private final Gateway fallback;
+  public PayController(@Qualifier("card") Gateway gateway, Gateway fallback) { this.gateway = gateway; this.fallback = fallback; }
+  @PostMapping public void pay(@RequestBody String body) { gateway.pay(body); }
+  @PutMapping public void retry(@RequestBody String body) { fallback.pay(body); }
+}`,
+  // Deux implémentations que seul le profil actif départage : aucune n'est choisie par le scan.
+  [`${P}/pay/Exporter.java`]: `package com.ex.pay;
+public interface Exporter { void export(String m); }`,
+  [`${P}/pay/CsvExporter.java`]: `package com.ex.pay;
+@org.springframework.context.annotation.Profile("prod") @org.springframework.stereotype.Component
+public class CsvExporter implements Exporter { public void export(String m) {} }`,
+  [`${P}/pay/XmlExporter.java`]: `package com.ex.pay;
+@org.springframework.context.annotation.Profile({"dev", "test"}) @org.springframework.stereotype.Component
+public class XmlExporter implements Exporter { public void export(String m) {} }`,
+  [`${P}/pay/ExportController.java`]: `package com.ex.pay;
+import org.springframework.web.bind.annotation.*;
+@RestController @RequestMapping("/api/export") public class ExportController {
+  private final Exporter exporter;
+  public ExportController(Exporter exporter) { this.exporter = exporter; }
+  @PostMapping public void run(@RequestBody String body) { exporter.export(body); }
+}`,
   [`${P}/service/OrderEntity.java`]: `package com.ex.service;
 @jakarta.persistence.Entity @jakarta.persistence.Table(name = "orders") public class OrderEntity { @jakarta.persistence.Id Long id; }`,
 };
@@ -223,6 +257,28 @@ describe('Java dispatch: interfaces, inheritance, multiple implementations', () 
     expect(reads('OrderRepositoryImpl.searchAdvanced').join(' ')).toContain('JPQL');
     // Aucune lecture « d'après le nom de l'opération Spring Data » pour une méthode écrite à la main.
     expect(reads('SearchService.search')).toEqual([]);
+  });
+
+  it('@Qualifier on the injection point names its bean (written bean name), and wins over @Primary', () => {
+    // L'appel garde son lien vers la méthode déclarée (Gateway.pay) ; l'exécution est celle du bean demandé.
+    const chosen = calls('PayController.pay').filter((e) => /(Card|Wire)Gateway\.pay$/.test(short(e.to)));
+    expect(chosen.map((e) => `${short(e.to)} ${e.confidence}`)).toEqual(['CardGateway.pay PROBABLE']);
+    expect(chosen[0]?.reason).toContain('@Qualifier("card") sur « gateway »');
+    // Sans qualificateur, le même type reçoit le bean @Primary.
+    const other = calls('PayController.retry').map((e) => short(e.to));
+    expect(other).not.toContain('CardGateway.pay');
+    expect(to('Gateway.pay')).toEqual(['WireGateway.pay PROBABLE']);
+  });
+
+  it('implementations under different @Profile stay candidates: the active profile chooses, not the scan', () => {
+    const dispatch = calls('Exporter.export');
+    expect(dispatch.map((e) => `${short(e.to)} ${e.confidence}`).sort()).toEqual([
+      'CsvExporter.export UNKNOWN',
+      'XmlExporter.export UNKNOWN',
+    ]);
+    expect(dispatch[0]?.reason).toContain('selon le profil actif');
+    expect(dispatch[0]?.reason).toContain('CsvExporter sous @Profile(prod)');
+    expect(dispatch[0]?.reason).toContain('XmlExporter sous @Profile(dev, test)');
   });
 
   it('every relation points to existing nodes', () => {

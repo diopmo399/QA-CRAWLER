@@ -198,11 +198,14 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
         const stream = rx.streamOf(el.component, m.root, m.path);
         if (!stream) continue;
         const at = states.findIndex((st) => st.component === el.component && st.member === m.root);
+        // Un signal est aussi un flux : les méthodes qui l'écrivent (set, update) restent ses producteurs.
+        const writers = at >= 0 ? states[at]?.writers : undefined;
         const state: UiState = {
           component: el.component,
           member: m.root,
           kind: 'STREAM',
           stream,
+          ...(writers ? { writers } : {}),
           loc: cond.loc,
         };
         if (at >= 0) states[at] = state;
@@ -250,6 +253,8 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
     ...(proxies.length ? { proxies } : {}),
     ...(angular.variants.length ? { variants: angular.variants } : {}),
     ...(rx.environment.length ? { environment: rx.environment } : {}),
+    ...(rx.interceptors.length ? { interceptors: rx.interceptors } : {}),
+    ...(rx.inference.asked > 0 ? { inference: rx.inference } : {}),
     warnings: [...graph.warnings, ...structure.warnings, ...rx.warnings],
   };
 }
