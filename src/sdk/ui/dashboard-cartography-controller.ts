@@ -38,13 +38,16 @@ import {
 } from './dashboard-cartography-structure.js';
 import { mapStrings } from './dashboard-cartography-i18n.js';
 import {
+  drawArch,
   drawRoute,
   JOURNEY_BOTTOMS,
   JOURNEY_MODES,
+  JOURNEY_STYLES,
   JOURNEY_VIEWS,
   VIEW_PRESET,
   type JourneyBottom,
   type JourneyMode,
+  type JourneyStyle,
   type JourneyView,
 } from './dashboard-cartography-journey.js';
 import {
@@ -129,6 +132,8 @@ export class CartographyController {
   private version = 0;
   /** Redessiner le tracé du parcours quand la fenêtre change de taille (posé au premier tracé). */
   private routeResize?: () => void;
+  /** L'élément dont le diagramme d'architecture a déjà été ajusté à la largeur (une fois par élément). */
+  private archFitted?: string;
 
   constructor(private readonly host: CartographyHost) {}
 
@@ -648,9 +653,10 @@ export class CartographyController {
    * (la zone défile en hauteur), entre 75 % et 100 % : un couloir haut ne fait plus descendre le texte de
    * toutes les cartes sous une taille lisible.
    */
-  private fitJourney(auto = false): void {
+  private fitJourney(auto = false, scroll = auto): void {
     const canvas = this.host.root.querySelector<HTMLElement>('[data-jr-canvas]');
-    const lanes = canvas?.querySelector<HTMLElement>('.jr-lanes');
+    // Les couloirs, ou le diagramme d'architecture du parcours.
+    const lanes = canvas?.querySelector<HTMLElement>('.jr-lanes, .ar-stage');
     if (!canvas || !lanes) return;
     // La taille à 100 % : l'échelle (CSS zoom) réduit la mise en page, on la retire de la mesure.
     const zoom = this.ui.jZoom || 1;
@@ -666,7 +672,7 @@ export class CartographyController {
     this.ui.jZoom = auto ? Math.max(0.75, Math.min(1, ratio)) : Math.max(0.5, Math.min(1.5, ratio));
     this.host.paint();
     // Après le rendu (qui remplace les éléments) : amener le graphe en haut de l'écran.
-    if (auto) this.host.root.querySelector<HTMLElement>('.jr-gh')?.scrollIntoView({ block: 'start' });
+    if (scroll) this.host.root.querySelector<HTMLElement>('.jr-gh')?.scrollIntoView({ block: 'start' });
   }
 
   /** Centrer la vue sur un élément (par défaut l'élément choisi, sinon le début des couloirs), sans changer l'échelle. */
@@ -675,9 +681,9 @@ export class CartographyController {
     if (!canvas) return;
     const id = on ?? this.ui.jSelect;
     const target = id
-      ? [...canvas.querySelectorAll<HTMLElement>('[data-action="map-j-item"]')].find(
-          (el) => el.dataset.item === id && el.offsetParent !== null,
-        )
+      ? [
+          ...canvas.querySelectorAll<HTMLElement>('[data-action="map-j-item"], [data-action="map-j-spot"]'),
+        ].find((el) => el.dataset.item === id && el.offsetParent !== null)
       : undefined;
     if (!target) {
       canvas.scrollTo({ left: 0, top: 0 });
@@ -735,6 +741,7 @@ export class CartographyController {
         query({ item: same ? undefined : id });
         // Un élément choisi : son parcours guidé, le chemin principal seul, l'étape de l'élément active.
         ui.jStep = undefined;
+        ui.jSpot = false;
         ui.jMode = 'main';
         ui.jBottom = same ? 'links' : 'step';
         this.reloadJourney();
@@ -752,6 +759,31 @@ export class CartographyController {
           setTimeout(() => {
             this.centerJourney(item);
           }, 0);
+        return true;
+      }
+      case 'map-j-spot': {
+        // Une boîte du diagramme : son étape devient active et mise en avant ; la recliquer rend tout visible.
+        const step = Number(target.dataset.step);
+        if (!Number.isInteger(step) || step < 0) return true;
+        ui.jSpot = !(ui.jSpot && ui.jStep === step);
+        ui.jStep = step;
+        ui.jBottom = 'step';
+        this.host.paint();
+        return true;
+      }
+      case 'map-j-unspot':
+        if (!ui.jSpot) return true;
+        ui.jSpot = false;
+        this.host.paint();
+        return true;
+      case 'map-j-style': {
+        const style = target.dataset.style as JourneyStyle;
+        if (JOURNEY_STYLES.includes(style)) ui.jStyle = style;
+        ui.jSpot = false;
+        this.host.paint();
+        setTimeout(() => {
+          this.fitJourney(true);
+        }, 0);
         return true;
       }
       case 'map-j-mode': {
@@ -779,6 +811,7 @@ export class CartographyController {
       case 'map-j-clear':
         ui.jSelect = undefined;
         ui.jStep = undefined;
+        ui.jSpot = false;
         ui.jOpen = [];
         ui.jClosed = [];
         query({ item: undefined, category: undefined, lane: undefined });
@@ -1031,8 +1064,9 @@ export class CartographyController {
   }
 
   /**
-   * Après chaque rendu : le tracé du chemin principal dans les couloirs de « Parcours & Graphe », d'après la
-   * place réelle des étapes numérotées (elle dépend du repli des cartes, de l'échelle et de la largeur).
+   * Après chaque rendu : le tracé du chemin principal dans les couloirs de « Parcours & Graphe » ou les flèches
+   * de son diagramme d'architecture, d'après la place réelle des étapes numérotées (elle dépend du repli
+   * des cartes, de l'échelle et de la largeur).
    */
   afterPaint(): void {
     // Le bandeau d'étapes tient sur une ligne qui défile : l'étape active y est amenée au centre.
@@ -1040,13 +1074,26 @@ export class CartographyController {
     const on = crumbs?.querySelector<HTMLElement>('.jr-gs.on');
     if (crumbs && on && crumbs.scrollWidth > crumbs.clientWidth)
       crumbs.scrollLeft = Math.max(0, on.offsetLeft - (crumbs.clientWidth - on.offsetWidth) / 2);
-    const svg = this.host.root.querySelector<SVGSVGElement>('svg[data-jr-route]');
-    if (!svg) return;
-    drawRoute(svg);
+    const draw = (): boolean => {
+      const route = this.host.root.querySelector<SVGSVGElement>('svg[data-jr-route]');
+      const arch = this.host.root.querySelector<SVGSVGElement>('svg[data-ar-route]');
+      if (route) drawRoute(route);
+      if (arch) drawArch(arch);
+      return route !== null || arch !== null;
+    };
+    if (!draw()) return;
+    // Le diagramme d'architecture d'un élément est ajusté à la largeur à sa première apparition (sans faire
+    // défiler la page), comme les couloirs à l'ouverture de la fonctionnalité.
+    const selected = this.ui.jSelect;
+    if (selected && this.archFitted !== selected && this.host.root.querySelector('.ar-stage')) {
+      this.archFitted = selected;
+      setTimeout(() => {
+        this.fitJourney(true, false);
+      }, 0);
+    }
     if (!this.routeResize) {
       this.routeResize = () => {
-        const current = this.host.root.querySelector<SVGSVGElement>('svg[data-jr-route]');
-        if (current) drawRoute(current);
+        draw();
       };
       window.addEventListener('resize', this.routeResize);
     }
@@ -1503,6 +1550,9 @@ export class CartographyController {
       case 'map-j-mode':
       case 'map-j-follow':
       case 'map-j-lane':
+      case 'map-j-spot':
+      case 'map-j-unspot':
+      case 'map-j-style':
         return this.journeyAction(action, target);
       case 'map-tab': {
         const tab = target.dataset.tab as MapTab;

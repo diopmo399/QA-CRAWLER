@@ -106,7 +106,7 @@ describe('Parcours & Graphe : natures NgRx et signaux', () => {
 
   it('le bandeau, les cartes et la fiche nomment l’action par son type', () => {
     const html = journeyTab(
-      { ...emptyJourney(), jMap: traced, jSelect: traced.trace?.item ?? '' },
+      { ...emptyJourney(), jStyle: 'lanes', jMap: traced, jSelect: traced.trace?.item ?? '' },
       helpers(traced.feature.id),
     ).replaceAll('<wbr>', '');
     const ribbon = html.slice(html.indexOf('data-path'), html.indexOf('data-jr-canvas'));
@@ -133,6 +133,27 @@ describe('Parcours & Graphe : natures NgRx et signaux', () => {
     );
     expect(graph).toContain('jr-lane l-backend empty');
     expect(graph).toContain('min-width:552px');
+    // Dans le diagramme d'architecture, les actions, envois et effets NgRx sont en orange (actions du store).
+    const arch = journeyTab(
+      { ...emptyJourney(), jMap: traced, jSelect: traced.trace?.item ?? '' },
+      helpers(traced.feature.id),
+    ).replaceAll('<wbr>', '');
+    expect(arch).toMatch(
+      /class="ar-box t-bus[^"]*"[^>]*>[^]*?<span class="ar-t">\[Orders\] Save<\/span><span class="ar-s">Envoi d’action/,
+    );
+    expect(arch).toMatch(
+      /class="ar-box t-bus[^"]*"[^>]*>[^]*?<span class="ar-t">OrderEffects\.save\$<\/span>/,
+    );
+    expect(arch).toContain('Actions du store');
+    // Plus de cinq étapes dans la couche Angular : rangées en U sur deux colonnes (la seconde remonte).
+    expect(arch).toContain('class="ar-col c2"');
+    const rows = Number(/data-ar-step="(\d+)" style="grid-row:\d+;grid-column:2"/.exec(arch)?.[1] ?? 0);
+    expect(rows).toBeGreaterThan(2);
+    expect(arch).toContain(
+      `data-ar-step="${String(rows - 1)}" style="grid-row:${String(rows)};grid-column:1"`,
+    );
+    expect(arch).toContain(`data-ar-step="${String(rows)}" style="grid-row:${String(rows)};grid-column:2"`);
+    expect(arch).toContain('<div class="ar-rail" data-lane="BFF"><span>BFF · non atteint</span>');
     // La fiche d'une action choisie : sa nature et son type.
     const action = traced.items.find((i) => i.nature === 'ACTION' && i.name.includes("'[Orders] Save'"));
     const sheet = journeyTab(

@@ -1267,6 +1267,17 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
   écran ; un bouton, un store, un service SPA, un endpoint, un contrat, un contrôleur ou un client sans
   suite est une rupture, sauf si une branche voisine va plus loin. Au plus 5 000 éléments par sens et
   400 étapes, avec un avertissement si la trace est coupée.
+- **Diagramme d'architecture.** Le parcours de l'élément choisi s'affiche par défaut en diagramme
+  (« Architecture » ; « Couloirs » rend la présentation précédente, avec ses modes) : une région par
+  couche atteinte (un rail « non atteint » pour les autres), une boîte par étape du chemin principal,
+  numérotée comme dans le bandeau et teintée par couche (persistance en violet, actions NgRx en orange),
+  rangée en U sur deux colonnes au-delà de cinq étapes. Les flèches sont tracées d'après la place réelle
+  des boîtes : trait plein parcouru d'impulsions (confirmée), tirets (probable), pointillés (non
+  démontrée), avec le verbe aux passages de couche. Cliquer une boîte rend son étape active et la met en
+  avant avec ses deux voisines ; le reste s'estompe et son détail s'affiche dans « Détails de l'étape ».
+  Un second clic, un clic dans le vide ou « Tout afficher » rend tout visible. Sous le diagramme, la
+  légende et trois cartes tirées de la trace : chemin principal, relations à vérifier, lacunes du scan.
+  Les animations s'arrêtent si le système demande moins de mouvement.
 - **Tableau des liens.** Type, source, cible, statut (confirmé, probable, non démontré) et preuve
   (« Voir le code »), par pages de 25 ; listes de catégorie, de couche, de statut et recherche. Aucune
   relation n'est perdue : tout ce que le graphe agrège est ici, page par page.

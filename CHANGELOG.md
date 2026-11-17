@@ -4,6 +4,22 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : parcours en diagramme d'architecture
+
+- Le parcours de l'élément choisi s'affiche par défaut en diagramme d'architecture (« Architecture ») ; les
+  couloirs restent un clic plus loin (« Couloirs »). Une région par couche atteinte, un rail titré pour une
+  couche non atteinte, une boîte par étape du chemin principal, numérotée comme dans le bandeau et teintée par
+  couche (persistance en violet, actions NgRx en orange). Au-delà de cinq étapes, une région les range en U
+  sur deux colonnes.
+- Les flèches suivent la place réelle des boîtes : trait plein parcouru d'impulsions si la relation est
+  confirmée, tirets si elle est probable, pointillés si elle n'est pas démontrée ; le verbe est écrit aux
+  passages de couche. Les animations s'arrêtent si le système demande moins de mouvement.
+- Cliquer une boîte rend son étape active et la met en avant (halo) avec ses deux voisines ; le reste
+  s'estompe, ses deux flèches s'épaississent, son détail s'affiche sous le graphe. Un second clic, un clic dans
+  le vide ou « Tout afficher » rend tout visible.
+- Sous le diagramme : la légende, et trois cartes tirées de la trace (chemin principal, relations à vérifier,
+  lacunes du scan). Le diagramme s'ajuste à la largeur à sa première apparition.
+
 ### Cartographie : affichage de « Parcours & Graphe »
 
 - Le chemin principal est tracé dans les couloirs, d'une étape numérotée à la suivante : flèche pleine d'un

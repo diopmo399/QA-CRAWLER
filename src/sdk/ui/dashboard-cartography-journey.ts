@@ -47,6 +47,9 @@ export type JourneyBottom = (typeof JOURNEY_BOTTOMS)[number];
 /** Ce que le graphe montre de l'élément choisi : son chemin principal, toutes ses branches, ou tout. */
 export const JOURNEY_MODES = ['main', 'alt', 'full'] as const;
 export type JourneyMode = (typeof JOURNEY_MODES)[number];
+/** La présentation du parcours de l'élément choisi : en diagramme d'architecture, ou dans les couloirs. */
+export const JOURNEY_STYLES = ['archi', 'lanes'] as const;
+export type JourneyStyle = (typeof JOURNEY_STYLES)[number];
 
 export interface JourneyState {
   jView: JourneyView;
@@ -68,6 +71,10 @@ export interface JourneyState {
   jMode: JourneyMode;
   /** Suivre le parcours : changer d'étape amène son élément au centre du graphe. */
   jFollow: boolean;
+  /** La présentation du parcours (diagramme d'architecture par défaut). */
+  jStyle: JourneyStyle;
+  /** Dans le diagramme : l'étape active est mise en avant avec ses voisines, le reste s'estompe. */
+  jSpot: boolean;
 }
 
 export const emptyJourney = (): JourneyState => ({
@@ -81,6 +88,8 @@ export const emptyJourney = (): JourneyState => ({
   jDetail: false,
   jMode: 'main',
   jFollow: true,
+  jStyle: 'archi',
+  jSpot: false,
 });
 
 /** Ce qu'une vue met au premier plan : l'onglet du bas, la catégorie du tableau, les groupes mis en avant. */
@@ -402,6 +411,28 @@ const FR = {
   noFlow: 'Aucun flux de données démontré.',
   gapsTitle: 'Ce que le scan ne démontre pas',
   noGaps: 'Aucune lacune relevée pour cette fonctionnalité.',
+  arch: {
+    styles: { archi: 'Architecture', lanes: 'Couloirs' } satisfies Record<JourneyStyle, string>,
+    styleLabel: 'Présentation du parcours',
+    title: (name: string) => `Architecture du parcours de ${name}`,
+    hint: 'Cliquez une boîte : ses liens s’allument, le reste s’estompe et son détail s’affiche sous le graphe.',
+    showAll: 'Tout afficher',
+    notReached: (lane: string) => `${lane} · non atteint`,
+    legend: { CONFIRMED: 'Chemin confirmé', PROBABLE: 'Probable', UNKNOWN: 'Non démontré' },
+    legendTitle: 'Légende',
+    legendBus: 'Actions du store',
+    legendDb: 'Persistance',
+    main: 'Chemin principal',
+    check: 'À vérifier',
+    gaps: 'Lacunes du scan',
+    confirmed: (ok: number, all: number) =>
+      all === 0 ? 'Aucune relation à suivre' : `${String(ok)} relation(s) confirmée(s) sur ${String(all)}`,
+    layers: (names: string) => `Couches : ${names}`,
+    noEnd: 'Ni table ni API externe atteinte',
+    allConfirmed: 'Toutes les relations du chemin sont confirmées.',
+    elsewhere: (n: number) => `${String(n)} relation(s) probable(s) ou non démontrée(s) hors du chemin`,
+    noGap: 'Aucune lacune ni rupture relevée.',
+  },
   gaps: {
     LANE_NO_SOURCE: 'Couche sans source',
     LANE_NOT_REACHED: 'Couche non atteinte',
@@ -703,6 +734,28 @@ const EN: JourneyStrings = {
   noFlow: 'No data flow demonstrated.',
   gapsTitle: 'What the scan does not demonstrate',
   noGaps: 'No gap found for this feature.',
+  arch: {
+    styles: { archi: 'Architecture', lanes: 'Lanes' },
+    styleLabel: 'Journey layout',
+    title: (name) => `Architecture of the journey of ${name}`,
+    hint: 'Click a box: its links light up, the rest fades and its detail shows below the graph.',
+    showAll: 'Show all',
+    notReached: (lane) => `${lane} · not reached`,
+    legend: { CONFIRMED: 'Confirmed path', PROBABLE: 'Probable', UNKNOWN: 'Not demonstrated' },
+    legendTitle: 'Legend',
+    legendBus: 'Store actions',
+    legendDb: 'Persistence',
+    main: 'Main path',
+    check: 'To check',
+    gaps: 'Scan gaps',
+    confirmed: (ok, all) =>
+      all === 0 ? 'No relation to follow' : `${String(ok)} confirmed relation(s) out of ${String(all)}`,
+    layers: (names) => `Layers: ${names}`,
+    noEnd: 'No table nor external API reached',
+    allConfirmed: 'Every relation of the path is confirmed.',
+    elsewhere: (n) => `${String(n)} probable or undemonstrated relation(s) off the path`,
+    noGap: 'No gap or break found.',
+  },
   gaps: {
     LANE_NO_SOURCE: 'Layer without source',
     LANE_NOT_REACHED: 'Layer not reached',
@@ -1170,10 +1223,230 @@ export function drawRoute(svg: SVGSVGElement): void {
     : '';
 }
 
-function toolbar(s: JourneyStrings, st: JourneyState): string {
+// ── Diagramme d'architecture du parcours ─────────────────────────────────────────────────────────────
+
+/** La teinte d'une boîte : sa couche, sauf la persistance (violet) et les actions du store (orange). */
+function archTone(x: FeatureTraceStep): string {
+  if (x.group === 'REPOSITORY' || x.group === 'ENTITY') return 'db';
+  if (x.nature === 'ACTION' || x.nature === 'DISPATCH' || x.nature === 'EFFECT' || x.nature === 'REDUCER')
+    return 'bus';
+  return laneTone(x.lane);
+}
+const laneTone = (lane: FeatureLane): string =>
+  lane === 'FRONTEND' ? 'fe' : lane === 'BFF' ? 'bff' : lane === 'BACKEND' ? 'be' : 'ext';
+
+/** Une flèche du diagramme : le statut de la relation, son verbe, sa mise en avant. */
+interface ArchLink {
+  s?: MapConfidence;
+  v?: string;
+  c?: 'on' | 'off';
+}
+
+/**
+ * Le parcours de l'élément choisi en diagramme d'architecture : une région par couche atteinte (un rail
+ * titré pour une couche non atteinte), une boîte par étape du chemin principal, dans l'ordre, numérotée
+ * comme dans le bandeau, et les flèches de l'une à la suivante (tracées après le rendu, `drawArch`) : trait
+ * animé si la relation est confirmée, tirets si elle est probable, pointillés si elle n'est pas démontrée.
+ * Cliquer une boîte rend son étape active et la met en avant avec ses voisines ; le reste s'estompe.
+ * Sous le diagramme : la légende et trois cartes (chemin, relations à vérifier, lacunes), toutes tirées
+ * de la trace et de la carte renvoyées par le serveur.
+ */
+function archDiagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathInfo): string {
+  const a = s.arch;
+  const { main, active } = p;
+  const spot = st.jSpot;
+  const state = (i: number): string =>
+    !spot
+      ? i === active
+        ? ' cur'
+        : ''
+      : i === active
+        ? ' sel'
+        : Math.abs(i - active) === 1
+          ? ' near'
+          : ' dim';
+  const box = (x: FeatureTraceStep, i: number, place: string): string => {
+    const kind = kindLabel(s, x.group, x.nature);
+    return `<button class="ar-box t-${archTone(x)}${state(i)}${x.end === 'STOP' ? ' stop' : ''}" data-action="map-j-spot" data-step="${String(i)}" data-item="${esc(x.id)}" data-ar-step="${String(i)}" style="${place}" aria-pressed="${String(spot && i === active)}" title="${esc(`${s.lanes[x.lane][0]} · ${kind}${x.sub ? ` — ${x.sub}` : ''}`)}">${stepBadge(s, p.steps.get(x.id), x.end)}<span class="ar-t">${wb(shownName(x.name, x.nature))}</span><span class="ar-s">${esc(kind)}${x.sub ? ` · ${wb(x.sub)}` : ''}</span></button>`;
+  };
+  const regions = FEATURE_LANES.map((lane) => {
+    const [title, sub] = s.lanes[lane];
+    const steps = main.map((x, i) => ({ x, i })).filter((e) => e.x.lane === lane);
+    if (steps.length === 0)
+      return `<div class="ar-rail" data-lane="${lane}"><span>${esc(a.notReached(title))}</span></div>`;
+    // Au-delà de cinq étapes, la région les range en U sur deux colonnes : la première descend, la seconde
+    // remonte. Les flèches restent courtes, et la dernière étape est en haut à droite, au plus près de la
+    // couche suivante.
+    const cols = steps.length > 5 ? 2 : 1;
+    const rows = Math.ceil(steps.length / cols);
+    const place = (k: number): string => {
+      const col = Math.floor(k / rows);
+      const row = col % 2 === 0 ? k % rows : rows - 1 - (k % rows);
+      return `grid-row:${String(row + 1)};grid-column:${String(col + 1)}`;
+    };
+    return `<section class="ar-region" data-lane="${lane}"><h4 class="ar-rl">${esc(title)}<small>${esc(sub)}</small></h4><div class="ar-col c${String(cols)}">${steps.map((e, k) => box(e.x, e.i, place(k))).join('')}</div></section>`;
+  });
+  const links: ArchLink[] = main.map((_, i) => {
+    if (i === 0) return {};
+    const via = linkInto(p, i);
+    const c = spot ? (i === active || i - 1 === active ? 'on' : 'off') : undefined;
+    // Le verbe n'est écrit que sur le passage d'une couche à l'autre (dans une couche, le numéro suffit).
+    const cross = main[i - 1]?.lane !== main[i]?.lane;
+    return {
+      s: via?.status ?? 'UNKNOWN',
+      ...(via && cross ? { v: verbOf(s, via) } : {}),
+      ...(c ? { c } : {}),
+    };
+  });
+  const head = `<div class="ar-head"><span class="ar-pulse" aria-hidden="true"></span><p>${esc(a.hint)}</p><button class="btn small" data-action="map-j-unspot"${spot ? '' : ' disabled'}>${esc(a.showAll)}</button></div>`;
+  const stage = `<div class="ar-stage" data-ar data-action="map-j-unspot" style="zoom:${String(st.jZoom)}"><svg class="ar-links" data-ar-route="${esc(JSON.stringify(links))}" aria-hidden="true" focusable="false"></svg>${regions.join('')}</div>`;
+  const swatch = (cls: string, label: string): string =>
+    `<span><i class="ar-sw ${cls}" aria-hidden="true"></i>${esc(label)}</span>`;
+  const legend = `<div class="ar-legend" aria-label="${esc(a.legendTitle)}">${FEATURE_LANES.filter((l) =>
+    main.some((x) => x.lane === l),
+  )
+    .map((l) => swatch(`t-${laneTone(l)}`, s.lanes[l][0]))
+    .join(
+      '',
+    )}${main.some((x) => archTone(x) === 'bus') ? swatch('t-bus', a.legendBus) : ''}${main.some((x) => archTone(x) === 'db') ? swatch('t-db', a.legendDb) : ''}${(['CONFIRMED', 'PROBABLE', 'UNKNOWN'] as const).map((c) => swatch(`ln s-${c.toLowerCase()}`, a.legend[c])).join('')}</div>`;
+  return `<section class="ar" aria-label="${esc(a.title(shownName(main[p.upLen]?.name ?? '', main[p.upLen]?.nature)))}">${head}<div class="ar-scroll">${stage}</div>${legend}${archCards(s, map, p)}</section>`;
+}
+
+/** Les trois cartes sous le diagramme : le chemin principal, les relations à vérifier, les lacunes du scan. */
+function archCards(s: JourneyStrings, map: FeatureMap, p: PathInfo): string {
+  const a = s.arch;
+  const { main } = p;
+  const t = map.trace;
+  const vias = main.slice(1).map((_, k) => ({ i: k + 1, via: linkInto(p, k + 1) }));
+  const ok = vias.filter((e) => e.via?.status === 'CONFIRMED').length;
+  const last = main[main.length - 1];
+  const reached = FEATURE_LANES.filter((l) => main.some((x) => x.lane === l)).map((l) => s.lanes[l][0]);
+  const end =
+    last?.end === 'TABLE' || last?.end === 'EXTERNAL' || last?.end === 'STOP'
+      ? s.trace.ends[last.end]
+      : a.noEnd;
+  const li = (text: string): string => `<li>${esc(text)}</li>`;
+  const name = (x: FeatureTraceStep | undefined): string => (x ? shownName(x.name, x.nature) : '');
+  const weak = vias.filter((e) => e.via?.status !== 'CONFIRMED');
+  const weakAll = (t?.statuses.PROBABLE ?? 0) + (t?.statuses.UNKNOWN ?? 0);
+  const checks = [
+    ...weak
+      .slice(0, 4)
+      .map((e) =>
+        li(`${name(main[e.i - 1])} → ${name(main[e.i])} · ${s.conf[e.via?.status ?? 'UNKNOWN'] ?? ''}`),
+      ),
+    ...(weakAll > weak.length ? [li(a.elsewhere(weakAll - weak.length))] : []),
+  ];
+  const stops = (t?.down ?? []).filter((x) => x.end === 'STOP');
+  const gaps = [
+    ...stops.slice(0, 3).map((x) => li(`${name(x)} : ${x.gap ?? s.trace.noOut}`)),
+    ...map.gaps
+      .slice(0, 3)
+      .map((g) => li(`${s.gaps[g.code] ?? g.code}${g.lane ? ` · ${s.lanes[g.lane][0]}` : ''} : ${g.detail}`)),
+  ];
+  const card = (cls: string, title: string, items: string[], empty: string): string =>
+    `<section class="ar-card ${cls}"><h4><i aria-hidden="true"></i>${esc(title)}</h4><ul>${items.length ? items.join('') : li(empty)}</ul></section>`;
+  return `<div class="ar-cards">${card('k-main', a.main, [li(s.trace.steps(main.length)), li(a.confirmed(ok, vias.length)), li(a.layers(reached.join(' → '))), li(end)], '')}${card('k-check', a.check, checks, a.allConfirmed)}${card('k-gaps', a.gaps, gaps, a.noGap)}</div>`;
+}
+
+/** Un rectangle d'étape dans le repère du calque des flèches. */
+interface ArchRect {
+  l: number;
+  r: number;
+  t: number;
+  b: number;
+}
+
+/**
+ * Dessiner les flèches du diagramme d'architecture (dans le navigateur, après le rendu), d'après la place
+ * réelle des boîtes : vers la droite ou la gauche d'une région à l'autre (avec le verbe de la relation),
+ * vers le bas ou le haut dans une même région, par la gauche si les deux boîtes se chevauchent.
+ */
+export function drawArch(svg: SVGSVGElement): void {
+  const stage = svg.parentElement;
+  if (!stage) return;
+  let links: ArchLink[];
+  try {
+    links = JSON.parse(svg.dataset.arRoute ?? '[]') as ArchLink[];
+  } catch {
+    return;
+  }
+  const box = svg.getBoundingClientRect();
+  if (box.width <= 0 || box.height <= 0) return;
+  const rect = (i: number): ArchRect | undefined => {
+    const el = stage.querySelector<HTMLElement>(`[data-ar-step="${String(i)}"]`);
+    if (!el || el.offsetParent === null) return undefined;
+    const r = el.getBoundingClientRect();
+    return { l: r.left - box.left, r: r.right - box.left, t: r.top - box.top, b: r.bottom - box.top };
+  };
+  const f = (n: number): string => n.toFixed(1);
+  const parts: string[] = [];
+  links.forEach((link, i) => {
+    if (i === 0) return;
+    const a = rect(i - 1);
+    const b = rect(i);
+    if (!a || !b) return;
+    const ya = (a.t + a.b) / 2;
+    const yb = (b.t + b.b) / 2;
+    let d: string;
+    let mid: [number, number] | undefined;
+    if (b.l >= a.r - 4) {
+      const c = Math.max(24, (b.l - a.r) / 2);
+      d = `M${f(a.r)} ${f(ya)}C${f(a.r + c)} ${f(ya)} ${f(b.l - c)} ${f(yb)} ${f(b.l - 2)} ${f(yb)}`;
+      mid = [(a.r + b.l) / 2, (ya + yb) / 2];
+    } else if (b.r <= a.l + 4) {
+      const c = Math.max(24, (a.l - b.r) / 2);
+      d = `M${f(a.l)} ${f(ya)}C${f(a.l - c)} ${f(ya)} ${f(b.r + c)} ${f(yb)} ${f(b.r + 2)} ${f(yb)}`;
+      mid = [(a.l + b.r) / 2, (ya + yb) / 2];
+    } else if (b.t >= a.b - 2) {
+      const xa = (a.l + a.r) / 2;
+      const xb = (b.l + b.r) / 2;
+      const c = (b.t - a.b) / 2;
+      d = `M${f(xa)} ${f(a.b)}C${f(xa)} ${f(a.b + c)} ${f(xb)} ${f(b.t - c)} ${f(xb)} ${f(b.t - 2)}`;
+    } else if (b.b <= a.t + 2) {
+      const xa = (a.l + a.r) / 2;
+      const xb = (b.l + b.r) / 2;
+      const c = (a.t - b.b) / 2;
+      d = `M${f(xa)} ${f(a.t)}C${f(xa)} ${f(a.t - c)} ${f(xb)} ${f(b.b + c)} ${f(xb)} ${f(b.b + 2)}`;
+    } else {
+      const x = Math.min(a.l, b.l);
+      d = `M${f(a.l)} ${f(ya)}C${f(x - 30)} ${f(ya)} ${f(x - 30)} ${f(yb)} ${f(b.l - 2)} ${f(yb)}`;
+    }
+    const status = (link.s ?? 'UNKNOWN').toLowerCase();
+    const cls = `s-${status}${link.c ? ` ${link.c}` : ''}`;
+    parts.push(`<path class="ar-e ${cls}" d="${d}" marker-end="url(#ar-h-${status})"/>`);
+    // Sur une relation confirmée, des impulsions défilent le long du trait plein.
+    if (status === 'confirmed') parts.push(`<path class="ar-f ${cls}" d="${d}"/>`);
+    if (mid && link.v)
+      parts.push(
+        `<text class="ar-lbl ${cls}" x="${f(mid[0])}" y="${f(mid[1] - 8)}" text-anchor="middle">${esc(link.v)}</text>`,
+      );
+  });
+  const marker = (status: string): string =>
+    `<marker id="ar-h-${status}" class="s-${status}" viewBox="0 0 10 8" refX="9" refY="4" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="8" orient="auto"><path d="M0 0L10 4L0 8z"/></marker>`;
+  svg.setAttribute('viewBox', `0 0 ${box.width.toFixed(1)} ${box.height.toFixed(1)}`);
+  svg.innerHTML = parts.length
+    ? `<defs>${['confirmed', 'probable', 'unknown'].map(marker).join('')}</defs>${parts.join('')}`
+    : '';
+}
+
+/** Le choix de présentation du parcours : diagramme d'architecture ou couloirs. */
+function styleBar(s: JourneyStrings, st: JourneyState): string {
+  return `<div class="jr-modes" role="group" aria-label="${esc(s.arch.styleLabel)}">${JOURNEY_STYLES.map((v) => `<button class="jr-mode${st.jStyle === v ? ' on' : ''}" data-action="map-j-style" data-style="${v}" aria-pressed="${String(st.jStyle === v)}">${esc(s.arch.styles[v])}</button>`).join('')}</div>`;
+}
+
+function toolbar(s: JourneyStrings, st: JourneyState, archi = false): string {
   const btn = (action: string, label: string, ic: string, extra = ''): string =>
     `<button class="btn small icon-only" data-action="${action}" aria-label="${esc(label)}" title="${esc(label)}"${extra}>${icon(ic)}</button>`;
-  return `<div class="jr-tools">${btn('map-j-detail', st.jDetail ? s.hideMembers : s.showMembers, 'text', ` aria-pressed="${String(st.jDetail)}"`)}${btn('map-j-center', s.center, 'target')}${btn('map-j-fit', s.fit, 'fit')}${btn('map-j-full', st.jFull ? s.exitFull : s.full, st.jFull ? 'minimize' : 'maximize', ` aria-pressed="${String(st.jFull)}"`)}${btn('map-j-zoom', s.zoomOut, 'minus', ' data-dir="-1"')}<output class="jr-zoom" aria-live="polite">${String(Math.round(st.jZoom * 100))} %</output>${btn('map-j-zoom', s.zoomIn, 'plus', ' data-dir="1"')}</div>`;
+  const detail = archi
+    ? ''
+    : btn(
+        'map-j-detail',
+        st.jDetail ? s.hideMembers : s.showMembers,
+        'text',
+        ` aria-pressed="${String(st.jDetail)}"`,
+      );
+  return `<div class="jr-tools">${detail}${btn('map-j-center', s.center, 'target')}${btn('map-j-fit', s.fit, 'fit')}${btn('map-j-full', st.jFull ? s.exitFull : s.full, st.jFull ? 'minimize' : 'maximize', ` aria-pressed="${String(st.jFull)}"`)}${btn('map-j-zoom', s.zoomOut, 'minus', ' data-dir="-1"')}<output class="jr-zoom" aria-live="polite">${String(Math.round(st.jZoom * 100))} %</output>${btn('map-j-zoom', s.zoomIn, 'plus', ' data-dir="1"')}</div>`;
 }
 
 function aspectLabel(s: JourneyStrings, row: ConditionRow): string {
@@ -1563,7 +1836,10 @@ export function journeyTab(st: JourneyState, h: JourneyHelpers): string {
         : neighbourSet(map, selected.id);
   const aside = `<aside class="jr-aside"><section><h3>${esc(s.feature)} : ${esc(map.feature.name)}</h3>${treeView(map.tree, st, map)}</section>${selected ? infoCard(s, map, h, selected) : ''}${categoryList(s, map, st)}</aside>`;
   const guide = selected ? guideBar(s, traced, st, h, selected, path) : '';
-  const bar = path ? modeBar(s, traced, st, path) : '';
+  // Le parcours en diagramme d'architecture (par défaut) ou dans les couloirs ; les modes ne valent que
+  // pour les couloirs (le diagramme montre le chemin principal).
+  const archi = path !== undefined && st.jStyle === 'archi';
+  const bar = path ? `${styleBar(s, st)}${archi ? '' : modeBar(s, traced, st, path)}` : '';
   const fullWarn =
     path && mode === 'full' && map.itemCount > 150
       ? `<p class="map-note warn-t">${esc(s.guide.fullWarn(map.itemCount))}</p>`
@@ -1571,7 +1847,7 @@ export function journeyTab(st: JourneyState, h: JourneyHelpers): string {
   const center =
     st.jView === 'overview'
       ? `<div class="jr-gh">${viewPicker(s, st)}</div>${overview(s, map, h)}`
-      : `<div class="jr-gh"><h3 class="sr-only">${esc(s.journeyTitle)}</h3>${viewPicker(s, st)}${bar}${toolbar(s, st)}</div>${guide}${fullWarn}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`;
+      : `<div class="jr-gh"><h3 class="sr-only">${esc(s.journeyTitle)}</h3>${viewPicker(s, st)}${bar}${toolbar(s, st, archi)}</div>${guide}${archi ? '' : fullWarn}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}${archi ? `<div class="jr-canvas ar-canvas" data-jr-canvas>${archDiagram(s, traced, st, path)}</div>` : `<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`}`;
   const loading = h.loading ? `<span class="spin jr-busy" aria-label="${esc(s.loading)}"></span>` : '';
   return `<section class="card jr${st.jFull ? ' full' : ''}" data-jr><div class="jr-head">${featurePicker(s, map, h)}${loading}${kpis(s, map)}</div>${h.paneError(h.error)}<div class="jr-body">${aside}<div class="jr-main">${center}</div></div>${bottom(s, map, st, h, path)}</section>`;
 }
@@ -1764,5 +2040,66 @@ export const JOURNEY_CSS = `
 .jr-route path.s-unknown{stroke:#c0392b;stroke-dasharray:2 5}
 .jr-route path.s-gap{stroke:#8a96a3;stroke-dasharray:2 6}
 .jr-route marker path{fill:context-stroke;stroke:none;opacity:1}
+.ar-canvas{max-height:none;overflow:visible;border:0;padding:0;background:none}
+.ar{--ar-ink:#0f172a;--ar-mu:#64748b;--ar-line:#e2e8f0;display:flex;flex-direction:column;gap:14px;background:#fff;border:1px solid var(--ar-line);border-radius:14px;padding:16px;color:var(--ar-ink);font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.ar-head{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}.ar-head p{margin:0;flex:1 1 260px;font-size:12px;color:var(--ar-mu)}
+.ar-head .btn{font-family:inherit}
+.ar-pulse{width:10px;height:10px;border-radius:50%;background:#0891b2;flex:none;animation:ar-pulse 2s infinite}
+.ar-scroll{overflow-x:auto;padding:4px 2px}
+.ar-stage{position:relative;display:flex;gap:36px;align-items:stretch;min-width:max-content;padding:16px;border-radius:10px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
+.ar-links{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
+.ar-region{position:relative;display:flex;flex-direction:column;gap:12px;padding:38px 18px 18px;border:1.5px dashed #d97706;border-radius:8px;background:rgba(251,191,36,.05)}
+.ar-rl{position:absolute;top:9px;left:12px;margin:0;font-size:11px;font-weight:600;color:#b45309;display:flex;gap:6px;align-items:baseline}
+.ar-rl small{font-weight:400;color:var(--ar-mu);font-size:10px}
+.ar-col{display:grid;gap:30px 36px;align-items:stretch}.ar-col.c1{grid-template-columns:220px}.ar-col.c2{grid-template-columns:repeat(2,200px)}
+.ar-rail{flex:0 0 44px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:14px;border:1.5px dashed #94a3b8;border-radius:8px;background:rgba(148,163,184,.06)}
+.ar-rail span{writing-mode:vertical-rl;transform:rotate(180deg);font-size:11px;font-weight:600;color:var(--ar-mu);white-space:nowrap}
+.ar-box{--glow:rgba(8,145,178,.45);position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:4px;min-height:52px;padding:10px 14px;border:1.5px solid;border-radius:6px;font:inherit;text-align:center;cursor:pointer;transition:opacity .25s ease,transform .2s ease,box-shadow .2s ease,filter .25s ease}
+.ar-box:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(15,23,42,.1)}
+.ar-box:focus-visible{outline:2px solid var(--ar-ink);outline-offset:3px}
+.ar-t{font-size:12.5px;font-weight:600;color:var(--ar-ink);overflow-wrap:break-word;min-width:0;max-width:100%}
+.ar-s{font-size:10.5px;color:var(--ar-mu);line-height:1.35;overflow-wrap:break-word;min-width:0;max-width:100%}
+.ar-box>.jr-sn{position:absolute;top:-10px;left:-10px;min-width:22px;height:22px;font-size:11px;background:#059669;box-shadow:0 0 0 3px #f8fafc}
+.ar-box>.jr-sn.goal{background:#7c3aed}.ar-box>.jr-sn.stop{background:#e11d48}
+.ar-box.t-fe{background:linear-gradient(rgba(34,211,238,.15),rgba(34,211,238,.15)),#fff;border-color:#0891b2}
+.ar-box.t-bff{--glow:rgba(37,99,235,.45);background:linear-gradient(rgba(96,165,250,.15),rgba(96,165,250,.15)),#fff;border-color:#2563eb}
+.ar-box.t-be{--glow:rgba(5,150,105,.45);background:linear-gradient(rgba(52,211,153,.18),rgba(52,211,153,.18)),#fff;border-color:#059669}
+.ar-box.t-db{--glow:rgba(124,58,237,.45);background:linear-gradient(rgba(167,139,250,.2),rgba(167,139,250,.2)),#fff;border-color:#7c3aed}
+.ar-box.t-ext{--glow:rgba(100,116,139,.45);background:linear-gradient(rgba(148,163,184,.18),rgba(148,163,184,.18)),#fff;border-color:#64748b}
+.ar-box.t-bus{--glow:rgba(234,88,12,.45);background:linear-gradient(rgba(251,146,60,.15),rgba(251,146,60,.15)),#fff;border-color:#ea580c}
+.ar-box.stop{border-style:dashed;border-color:#e11d48}
+.ar-box.cur{box-shadow:0 0 0 3px var(--glow)}
+.ar-box.sel{transform:translateY(-2px) scale(1.03);border-width:2.5px;z-index:3;animation:ar-ring 1.6s ease-out infinite}
+.ar-box.dim{opacity:.28;filter:saturate(.4)}
+.ar-e{fill:none;stroke-width:2;transition:opacity .25s ease,stroke-width .2s ease}
+.ar-e.s-confirmed{stroke:#059669}
+.ar-f{fill:none;stroke:#6ee7b7;stroke-width:2;stroke-linecap:round;stroke-dasharray:8 40;animation:ar-flow 1.4s linear infinite;transition:opacity .25s}
+.ar-f.on{stroke-width:3;animation-duration:.7s}.ar-f.off{opacity:0;animation:none}
+.ar-e.s-probable{stroke:#7c3aed;stroke-dasharray:4 4}
+.ar-e.s-unknown{stroke:#e11d48;stroke-dasharray:2 4}
+.ar-e.on{stroke-width:3}
+.ar-e.off,.ar-lbl.off{opacity:.12}
+.ar-links marker.s-confirmed path{fill:#059669}.ar-links marker.s-probable path{fill:#7c3aed}.ar-links marker.s-unknown path{fill:#e11d48}
+.ar-lbl{font-size:10.5px;font-weight:600;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round;transition:opacity .25s}
+.ar-lbl.s-confirmed{fill:#047857}.ar-lbl.s-probable{fill:#6d28d9}.ar-lbl.s-unknown{fill:#be123c}
+.ar-legend{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:11px;color:#475569}
+.ar-legend span{display:inline-flex;gap:8px;align-items:center}
+.ar-sw{display:inline-block;width:14px;height:10px;border:1.5px solid;border-radius:3px;font-style:normal}
+.ar-sw.t-fe{border-color:#0891b2;background:rgba(34,211,238,.15)}.ar-sw.t-bff{border-color:#2563eb;background:rgba(96,165,250,.15)}
+.ar-sw.t-be{border-color:#059669;background:rgba(52,211,153,.18)}.ar-sw.t-db{border-color:#7c3aed;background:rgba(167,139,250,.2)}
+.ar-sw.t-ext{border-color:#64748b;background:rgba(148,163,184,.18)}.ar-sw.t-bus{border-color:#ea580c;background:rgba(251,146,60,.15)}
+.ar-sw.ln{width:24px;height:0;border-width:1.5px 0 0;border-radius:0;background:none}
+.ar-sw.ln.s-confirmed{border-color:#059669}.ar-sw.ln.s-probable{border-color:#7c3aed;border-top-style:dashed}.ar-sw.ln.s-unknown{border-color:#e11d48;border-top-style:dotted}
+.ar-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.ar-card{border:1px solid var(--ar-line);border-radius:12px;padding:14px 16px;min-width:0}
+.ar-card h4{display:flex;gap:8px;align-items:center;margin:0;font-size:12.5px}
+.ar-card h4 i{width:8px;height:8px;border-radius:50%;flex:none}
+.ar-card.k-main h4 i{background:#059669}.ar-card.k-check h4 i{background:#7c3aed}.ar-card.k-gaps h4 i{background:#e11d48}
+.ar-card ul{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--ar-mu);line-height:1.45}
+.ar-card li{overflow-wrap:anywhere}.ar-card li::before{content:"• "}
+@keyframes ar-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes ar-flow{to{stroke-dashoffset:-48}}
+@keyframes ar-ring{0%{box-shadow:0 0 0 0 var(--glow)}70%{box-shadow:0 0 0 12px rgba(0,0,0,0)}100%{box-shadow:0 0 0 0 rgba(0,0,0,0)}}
+@media (prefers-reduced-motion:reduce){.ar-pulse,.ar-f,.ar-box.sel{animation:none}.ar-f{display:none}.ar-box,.ar-e{transition:none}}
 @media (max-width:1100px){.jr-body{grid-template-columns:minmax(0,1fr)}.jr-bottom{grid-template-columns:minmax(0,1fr)}.jr-ov2{grid-template-columns:minmax(0,1fr)}}
 `;

@@ -474,6 +474,65 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     );
     expect(await ribbon.locator('.jr-cx').allTextContents()).toEqual(['BFF', 'Backend (Java)']);
     expect(await ribbon.locator('.jr-crumbs .jr-pend').textContent()).toBe('Table atteinte');
+    // Par défaut, le parcours est un diagramme d'architecture : une boîte par étape, dans les régions des
+    // couches atteintes, et les flèches de chaque relation tracées d'après la place des boîtes.
+    const arch = journey().locator('section.ar');
+    await arch.waitFor();
+    expect(await arch.locator('.ar-box').count()).toBe(12);
+    expect(
+      await arch.locator('.ar-region').evaluateAll((els) => els.map((e) => e.getAttribute('data-lane'))),
+    ).toEqual(['FRONTEND', 'BFF', 'BACKEND']);
+    const arrows = arch.locator('svg[data-ar-route] > path.ar-e');
+    await expect.poll(async () => arrows.count()).toBe(11);
+    expect(await arch.locator('svg[data-ar-route] > text.ar-lbl').count()).toBeGreaterThanOrEqual(2);
+    // Les relations confirmées : un trait plein, des impulsions qui défilent le long de la flèche.
+    expect(await arch.locator('path.ar-f').count()).toBe(await arch.locator('path.ar-e.s-confirmed').count());
+    expect(
+      await arch
+        .locator('path.ar-f')
+        .first()
+        .evaluate((el) => getComputedStyle(el).animationName),
+    ).toBe('ar-flow');
+    // Un clic sur une boîte : elle est mise en avant, ses voisines restent nettes, le reste s'estompe ; ses
+    // deux flèches s'épaississent, les autres s'effacent ; son détail s'affiche sous le graphe.
+    const box = arch.locator('.ar-box', { hasText: 'RequestController.refuse' });
+    await box.click();
+    await expect.poll(async () => arch.locator('.ar-box.sel').count()).toBe(1);
+    expect(await arch.locator('.ar-box.sel').textContent()).toContain('RequestController.refuse');
+    expect(await arch.locator('.ar-box.near').count()).toBe(2);
+    expect(await arch.locator('.ar-box.dim').count()).toBe(9);
+    await expect.poll(async () => arch.locator('svg[data-ar-route] > path.ar-e.on').count()).toBe(2);
+    expect(await arch.locator('svg[data-ar-route] > path.ar-e.off').count()).toBe(9);
+    await expect
+      .poll(() =>
+        arch
+          .locator('.ar-box.dim')
+          .first()
+          .evaluate((el) => Number(getComputedStyle(el).opacity)),
+      )
+      .toBeLessThan(0.5);
+    await expect
+      .poll(() => journey().locator('[data-step-detail] h4').textContent())
+      .toBe('Contrôleurs : RequestController.refuse');
+    expect(await ribbon.locator('.jr-gs.on').textContent()).toContain('RequestController.refuse');
+    // « Tout afficher », un clic dans le vide du diagramme, ou un second clic sur la boîte : tout redevient net.
+    await arch.locator('.ar-head [data-action="map-j-unspot"]').click();
+    await expect.poll(async () => arch.locator('.ar-box.dim').count()).toBe(0);
+    await box.click();
+    await expect.poll(async () => arch.locator('.ar-box.sel').count()).toBe(1);
+    await arch.locator('.ar-stage').click({ position: { x: 4, y: 4 } });
+    await expect.poll(async () => arch.locator('.ar-box.dim').count()).toBe(0);
+    await box.click();
+    await expect.poll(async () => arch.locator('.ar-box.sel').count()).toBe(1);
+    await box.click();
+    await expect.poll(async () => arch.locator('.ar-box.sel').count()).toBe(0);
+    // La page ne défile pas en largeur : le diagramme défile dans sa zone.
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // Les couloirs, sur demande ; l'étape de l'élément choisi redevient active.
+    await journey().locator('[data-action="map-j-style"][data-style="lanes"]').click();
+    await journey().locator('.jr-lanes').waitFor();
+    expect(await journey().locator('section.ar').count()).toBe(0);
+    await ribbon.locator('.jr-crb[data-step="3"]').click();
     // Les mêmes numéros dans le graphe : la méthode du contrôleur backend porte celui du fil.
     const controllerStep = crumbs.find((c) => c.endsWith('RequestController.refuse'))?.replace(/\D+$/, '');
     const backendCard = journey().locator('.jr-card', { hasText: 'RequestController' }).first();
