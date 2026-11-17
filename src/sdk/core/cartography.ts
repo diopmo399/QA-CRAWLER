@@ -1654,6 +1654,22 @@ export type FeatureCategory = (typeof FEATURE_CATEGORIES)[number];
 /** Les cartes renvoyées au plus par groupe dans la carte d'une fonctionnalité (les plus reliées d'abord). */
 export const FEATURE_GROUP_CARDS = 40;
 
+/**
+ * Ce qu'est un élément du frontal au-delà de son groupe, quand l'analyseur l'a établi : une action NgRx (le
+ * canal d'un type d'action du store), son envoi (`dispatch`), une lecture du store (`select`), un effet
+ * (`createEffect`), l'état d'un réducteur (`createReducer`), un signal ou un signal calculé.
+ */
+export const FEATURE_NATURES = [
+  'ACTION',
+  'DISPATCH',
+  'SELECT',
+  'EFFECT',
+  'REDUCER',
+  'SIGNAL',
+  'COMPUTED',
+] as const;
+export type FeatureNature = (typeof FEATURE_NATURES)[number];
+
 /** Un élément de la fonctionnalité, rangé dans un couloir et un groupe ; `card` réunit les membres d'une classe. */
 export interface FeatureMapItem {
   id: string;
@@ -1671,6 +1687,8 @@ export interface FeatureMapItem {
   links: number;
   /** Persistance (sous-groupe Hibernate/JPA du backend). */
   persistence?: boolean;
+  /** Sa nature NgRx ou signal, quand l'analyseur l'a établie (jamais déduite de son nom). */
+  nature?: FeatureNature;
   evidence?: Evidence;
 }
 
@@ -1761,6 +1779,8 @@ export interface FeatureTraceStep {
   };
   /** Avec `end: 'JOIN'` : l'étape déjà tracée que cette branche rejoint. */
   joins?: string;
+  /** Sa nature NgRx ou signal (celle de l'élément), quand l'analyseur l'a établie. */
+  nature?: FeatureNature;
   /** La preuve de l'élément lui-même (sa déclaration). */
   evidence?: Evidence;
   end?: FeatureTraceEnd;

@@ -10,6 +10,7 @@ import type {
   FeatureMapItem,
   FeatureMapQuery,
   FeatureMapRelation,
+  FeatureNature,
   FeatureTrace,
   FeatureTraceStep,
   FeatureTreeNode,
@@ -26,6 +27,7 @@ import {
   FEATURE_LANES,
   traceSteps,
 } from '../sdk/core/cartography.js';
+import { NGRX_FILE } from './analyze-rxjs.js';
 import { featureDetail, MAX_PAGE, outboundOf, type CoverageContext, type MapIndex } from './explorer.js';
 import { conditionRow } from './structure.js';
 import { flowOf, natureOf } from './investigate.js';
@@ -180,6 +182,25 @@ const subOf = (node: MapNode): string | undefined => {
 
 const firstEvidence = (list: readonly Evidence[] | undefined): Evidence | undefined => list?.[0];
 
+/**
+ * La nature NgRx ou signal d'un nœud du frontal, d'après ce que l'analyseur a posé : le type du flux
+ * (`signal`, `computed`, `toSignal`, `createEffect`, `createReducer`) ou la classe `Store` qu'il ajoute
+ * lui-même sous le chemin réservé `@ngrx/store` (ses canaux d'actions, `dispatch`, `select`). Jamais le nom
+ * d'une classe du projet.
+ */
+function flowNature(node: MapNode): FeatureNature | undefined {
+  const type = str(node.detail.subjectType);
+  if (type === 'signal' || type === 'toSignal') return 'SIGNAL';
+  if (type === 'computed') return 'COMPUTED';
+  if (type === 'createEffect') return 'EFFECT';
+  if (type === 'createReducer') return 'REDUCER';
+  if (node.evidence[0]?.file !== NGRX_FILE) return undefined;
+  if (node.kind === 'STREAM') return 'ACTION';
+  if (node.kind !== 'METHOD') return undefined;
+  const method = simple(node.name.replace(/[(⟨].*$/, ''));
+  return method === 'dispatch' ? 'DISPATCH' : method.startsWith('select') ? 'SELECT' : undefined;
+}
+
 const emptyStatuses = (): Record<MapConfidence, number> => ({ CONFIRMED: 0, PROBABLE: 0, UNKNOWN: 0 });
 
 /**
@@ -210,6 +231,7 @@ export function featureMap(
     const precise = subOf(node);
     const sub = precise && precise !== node.name && precise !== node.label ? precise : undefined;
     const evidence = firstEvidence(node.evidence);
+    const nature = where.lane === 'FRONTEND' ? flowNature(node) : undefined;
     items.set(id, {
       id,
       lane: where.lane,
@@ -222,6 +244,7 @@ export function featureMap(
       cardTitle: title,
       links: 0,
       ...(PERSISTENCE_GROUPS.has(where.group) ? { persistence: true } : {}),
+      ...(nature ? { nature } : {}),
       ...(evidence ? { evidence } : {}),
     });
   }
@@ -589,6 +612,7 @@ function pathOf(
       group: it?.group ?? 'METHOD',
       kind: it?.kind ?? '',
       depth,
+      ...(it?.nature ? { nature: it.nature } : {}),
       ...(parent ? { parent } : {}),
       ...(via
         ? {

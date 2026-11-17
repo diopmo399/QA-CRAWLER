@@ -3010,6 +3010,8 @@ export class QaCrawlerDashboard extends Base {
     this.editor.afterPaint();
     // L'espace d'investigation : défilements, détails ouverts, ligne de code visée.
     this.incidents.afterPaint();
+    // Le tracé du parcours dans les couloirs de la cartographie.
+    this.cartography.afterPaint();
     if (focused?.closest('.cm-editor')) return;
     if (focusKey) {
       const key = CSS.escape(focusKey);
