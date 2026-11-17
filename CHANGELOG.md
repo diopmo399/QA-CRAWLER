@@ -4,6 +4,30 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : affichage de « Parcours & Graphe »
+
+- Le chemin principal est tracé dans les couloirs, d'une étape numérotée à la suivante : flèche pleine d'un
+  couloir à l'autre, trait fin dans un même couloir ; trait plein si la relation est confirmée, tirets si elle
+  est probable, pointillés si elle n'est pas démontrée. Il est redessiné à chaque changement d'échelle ou de
+  taille de fenêtre.
+- En « Parcours principal », seules les étapes du chemin portent un numéro (de 1 à n, dans l'ordre).
+- Natures NgRx et signaux établies par l'analyseur (`FeatureMapItem.nature`, `FeatureTraceStep.nature`) :
+  action, envoi d'action, lecture du store, effet, réducteur, signal, signal calculé. Une action et son envoi
+  sont nommés par leur type (« [Orders] Save ») ; les cartes du store, des effets et d'un réducteur NgRx le
+  disent.
+- Un couloir que la fonctionnalité n'atteint pas devient un rail titré ; la largeur minimale suit les couloirs
+  atteints. Les noms se coupent entre les mots, plus au milieu d'un mot.
+- À l'ouverture, l'échelle s'ajuste en largeur seulement (la zone défile en hauteur) : le texte reste lisible ;
+  « Ajuster » fait toujours tenir tout le graphe.
+- Le verbe de la relation qui mène à une étape reste avec elle dans le bandeau ; l'arbre ne laisse plus de
+  chevron seul sur une ligne.
+- Écran simplifié : les tuiles de chiffres de la fonctionnalité deviennent une ligne de texte (comptes nuls
+  omis) ; la seconde barre d'onglets devient la liste « Afficher », placée avec les modes (« Principal »,
+  « Branches », « Tout ») dans l'en-tête du graphe ; la mini-carte des couches (remplacée par les rails) et la
+  colonne de droite sous le graphe (qui répétait « Conditions & Règles » et « Flux de données ») sont
+  retirées ; le bandeau d'étapes tient sur une ligne qui défile et amène l'étape active au centre.
+- Version d'analyseur `cartography-13;rxjs-9` (types de flux `createEffect` et `createReducer`).
+
 ### Cartographie : second lot du moteur de reconstruction des flux (statique)
 
 - Mesure : `scan.resolution` compte les liens par confiance, les relations non raccordées par cause, les

@@ -427,18 +427,14 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
       Number.parseInt((await journey().locator('.jr-zoom').textContent()) ?? '0', 10);
     await expect.poll(zoomOf).toBeGreaterThanOrEqual(75);
     expect(await zoomOf()).toBeLessThanOrEqual(100);
-    // Tout le graphe visible sans défiler : amené en haut de l'écran, ni coupé à droite ni en bas.
+    // À l'ouverture, le graphe est amené en haut de l'écran et ajusté en largeur seulement : rien n'est coupé
+    // à droite, et la zone défile en hauteur plutôt que de rendre le texte illisible.
     const canvas = journey().locator('[data-jr-canvas]');
     await expect
       .poll(() =>
         canvas.evaluate((el) => {
           const box = el.getBoundingClientRect();
-          return (
-            box.top >= 0 &&
-            box.bottom <= window.innerHeight &&
-            el.scrollWidth <= el.clientWidth &&
-            el.scrollHeight <= el.clientHeight
-          );
+          return box.top >= 0 && box.bottom <= window.innerHeight && el.scrollWidth <= el.clientWidth;
         }),
       )
       .toBe(true);
@@ -472,9 +468,9 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     await ribbon.waitFor();
     expect(await ribbon.locator('.jr-pt').textContent()).toBe('Parcours d’exécution de Refuse');
     const crumbs = await ribbon.locator('.jr-crb').allTextContents();
-    expect(crumbs[0]).toBe('1Pages/requests/create');
+    expect(crumbs[0]).toBe('1Pages : /requests/create');
     expect(crumbs.join(' > ')).toMatch(
-      /4BoutonsRefuse.*RequestService\.refuse.*RequestBffController\.refuse.*RequestController\.refuse.*REQUEST/,
+      /4Boutons : Refuse.*RequestService\.refuse.*RequestBffController\.refuse.*RequestController\.refuse.*REQUEST/,
     );
     expect(await ribbon.locator('.jr-cx').allTextContents()).toEqual(['BFF', 'Backend (Java)']);
     expect(await ribbon.locator('.jr-crumbs .jr-pend').textContent()).toBe('Table atteinte');
@@ -487,6 +483,15 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     expect(await journey().locator('.jr-canvas .jr-m.on, .jr-canvas .jr-ch.on').count()).toBe(1);
     expect(await journey().locator('.jr-btabs [aria-selected="true"]').getAttribute('data-tab')).toBe('step');
     expect(await journey().locator('[data-step-detail]').textContent()).toContain('Étape 4/12');
+    // Le chemin est tracé dans les couloirs entre les étapes affichées : des courbes fléchées d'un couloir à
+    // l'autre (Angular → BFF → Backend), des traits fins dans un même couloir.
+    const route = journey().locator('svg[data-jr-route] > path[d]');
+    await expect.poll(async () => route.count()).toBeGreaterThanOrEqual(8);
+    expect(
+      await journey().locator('svg[data-jr-route] > path[d][marker-end]').count(),
+    ).toBeGreaterThanOrEqual(2);
+    expect(await journey().locator('svg[data-jr-route] > path.in').count()).toBeGreaterThanOrEqual(1);
+    const drawn = await route.first().getAttribute('d');
     // Suivant : l'étape 5 devient active, le bandeau et les détails suivent.
     await ribbon.locator('[aria-label="Étape suivante"]').click();
     await expect.poll(() => ribbon.locator('.jr-gs.on .jr-sn').textContent()).toBe('5');
@@ -519,8 +524,16 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     expect(await zoomOf()).toBe(before);
     await journey().locator('[data-action="map-j-zoom"][data-dir="1"]').click();
     await expect.poll(zoomOf).toBeGreaterThan(before);
+    // Le tracé suit l'échelle : il est redessiné d'après la nouvelle place des cartes.
+    await expect.poll(async () => route.first().getAttribute('d')).not.toBe(drawn);
     await journey().locator('[data-action="map-j-fit"]').click();
     await expect.poll(zoomOf).toBeLessThanOrEqual(150);
+    // « Ajuster » fait tenir tout le graphe dans la zone, en largeur et en hauteur.
+    await expect
+      .poll(() =>
+        canvas.evaluate((el) => el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth),
+      )
+      .toBe(true);
     // Le plein écran, quitté par Échap ; la sélection est gardée.
     await journey().locator('[data-action="map-j-full"]').click();
     await expect.poll(async () => dashboard().locator('[data-jr].full').count()).toBe(1);
@@ -537,7 +550,7 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
       .poll(() => ribbon.locator('.jr-pt').textContent())
       .toBe('Parcours d’exécution de RequestController.refuse');
     const upstream = await ribbon.locator('.jr-crb').allTextContents();
-    expect(upstream[0]).toBe('1Pages/requests/create');
+    expect(upstream[0]).toBe('1Pages : /requests/create');
     expect(upstream.join(' > ')).toMatch(
       /RequestService\.refuse.*RequestBffController\.refuse.*RequestController\.refuse.*REQUEST/,
     );
@@ -545,7 +558,7 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     await expect.poll(async () => journey().locator('.jr-focus').count()).toBe(0);
 
     // La vue « Conditions & Règles » : la condition et la règle backend démontrée.
-    await journey().locator('[data-action="map-j-view"][data-view="rules"]').click();
+    await journey().locator('select[data-map="j-view"]').selectOption('rules');
     await expect.poll(() => journey().locator('.jr-bottom').textContent()).toContain('!state.canValidate');
     expect(await journey().locator('.jr-bottom').textContent()).toContain(
       'ValidationEligibilityService.canValidate',

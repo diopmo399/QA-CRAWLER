@@ -38,6 +38,7 @@ import {
 } from './dashboard-cartography-structure.js';
 import { mapStrings } from './dashboard-cartography-i18n.js';
 import {
+  drawRoute,
   JOURNEY_BOTTOMS,
   JOURNEY_MODES,
   JOURNEY_VIEWS,
@@ -126,6 +127,8 @@ export class CartographyController {
    */
   private readonly cache = new Map<string, FeatureDetail | FieldSheet | MapPage<FieldRow> | FeatureMap>();
   private version = 0;
+  /** Redessiner le tracé du parcours quand la fenêtre change de taille (posé au premier tracé). */
+  private routeResize?: () => void;
 
   constructor(private readonly host: CartographyHost) {}
 
@@ -640,9 +643,10 @@ export class CartographyController {
   }
 
   /**
-   * Ajuster les couloirs à la zone visible, en largeur ET en hauteur. `auto` (ouverture) : le graphe est
-   * d'abord amené en haut de l'écran, puis l'échelle reste entre 75 % (les cartes restent lisibles, la zone
-   * défile au-delà) et 100 % ; à la demande : entre 50 et 150 %.
+   * Ajuster les couloirs à la zone visible. À la demande : en largeur ET en hauteur, entre 50 et 150 %.
+   * `auto` (ouverture) : le graphe est d'abord amené en haut de l'écran, puis ajusté en largeur seulement
+   * (la zone défile en hauteur), entre 75 % et 100 % : un couloir haut ne fait plus descendre le texte de
+   * toutes les cartes sous une taille lisible.
    */
   private fitJourney(auto = false): void {
     const canvas = this.host.root.querySelector<HTMLElement>('[data-jr-canvas]');
@@ -657,7 +661,8 @@ export class CartographyController {
     const head = this.host.root.querySelector<HTMLElement>('.jr-gh');
     const top = canvas.getBoundingClientRect().top - (auto && head ? head.getBoundingClientRect().top : 0);
     const room = Math.max(320, window.innerHeight - Math.max(0, top) - 16);
-    const ratio = Math.floor(Math.min((canvas.clientWidth - 24) / width, (room - 24) / height) * 100) / 100;
+    const across = (canvas.clientWidth - 24) / width;
+    const ratio = Math.floor((auto ? across : Math.min(across, (room - 24) / height)) * 100) / 100;
     this.ui.jZoom = auto ? Math.max(0.75, Math.min(1, ratio)) : Math.max(0.5, Math.min(1.5, ratio));
     this.host.paint();
     // Après le rendu (qui remplace les éléments) : amener le graphe en haut de l'écran.
@@ -693,16 +698,9 @@ export class CartographyController {
       ui.jQuery = compactQuery({ ...ui.jQuery, ...patch, page: patch.page ?? 1 });
     };
     switch (action) {
-      case 'map-j-view': {
-        const view = target.dataset.view as JourneyView;
-        if (!JOURNEY_VIEWS.includes(view)) return true;
-        ui.jView = view;
-        const preset = VIEW_PRESET[view];
-        ui.jBottom = preset.bottom;
-        query({ category: preset.category, lane: undefined });
-        this.reloadJourney();
+      case 'map-j-view':
+        this.journeyView(target.dataset.view);
         return true;
-      }
       case 'map-j-bottom': {
         const tab = target.dataset.tab as JourneyBottom;
         if (JOURNEY_BOTTOMS.includes(tab)) ui.jBottom = tab;
@@ -1020,6 +1018,40 @@ export class CartographyController {
    * La molette sur un graphe : zoom autour du pointeur avec Ctrl (ou ⌘, ou le pincement d'un pavé
    * tactile), et sans touche en plein écran ; ailleurs la page défile normalement.
    */
+  /** Ce que l'onglet « Parcours & Graphe » met en avant : l'onglet du bas, la catégorie du tableau, les groupes. */
+  private journeyView(value: string | undefined): void {
+    const view = value as JourneyView;
+    if (!JOURNEY_VIEWS.includes(view)) return;
+    const ui = this.ui;
+    ui.jView = view;
+    const preset = VIEW_PRESET[view];
+    ui.jBottom = preset.bottom;
+    ui.jQuery = compactQuery({ ...ui.jQuery, category: preset.category, lane: undefined, page: 1 });
+    this.reloadJourney();
+  }
+
+  /**
+   * Après chaque rendu : le tracé du chemin principal dans les couloirs de « Parcours & Graphe », d'après la
+   * place réelle des étapes numérotées (elle dépend du repli des cartes, de l'échelle et de la largeur).
+   */
+  afterPaint(): void {
+    // Le bandeau d'étapes tient sur une ligne qui défile : l'étape active y est amenée au centre.
+    const crumbs = this.host.root.querySelector<HTMLElement>('[data-path] .jr-crumbs');
+    const on = crumbs?.querySelector<HTMLElement>('.jr-gs.on');
+    if (crumbs && on && crumbs.scrollWidth > crumbs.clientWidth)
+      crumbs.scrollLeft = Math.max(0, on.offsetLeft - (crumbs.clientWidth - on.offsetWidth) / 2);
+    const svg = this.host.root.querySelector<SVGSVGElement>('svg[data-jr-route]');
+    if (!svg) return;
+    drawRoute(svg);
+    if (!this.routeResize) {
+      this.routeResize = () => {
+        const current = this.host.root.querySelector<SVGSVGElement>('svg[data-jr-route]');
+        if (current) drawRoute(current);
+      };
+      window.addEventListener('resize', this.routeResize);
+    }
+  }
+
   wheel(event: WheelEvent): void {
     // Écoutée sur l'élément hôte : la cible réelle est la première du chemin (dans la racine fantôme).
     const target = event.composedPath()[0];
@@ -2080,6 +2112,9 @@ export class CartographyController {
         return true;
       case 'impact-env':
         ui.impactEnv = value;
+        return true;
+      case 'j-view':
+        this.journeyView(value);
         return true;
       case 'j-feature':
         if (!value || value === ui.feature) return true;
