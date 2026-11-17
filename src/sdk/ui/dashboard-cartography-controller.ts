@@ -698,16 +698,9 @@ export class CartographyController {
       ui.jQuery = compactQuery({ ...ui.jQuery, ...patch, page: patch.page ?? 1 });
     };
     switch (action) {
-      case 'map-j-view': {
-        const view = target.dataset.view as JourneyView;
-        if (!JOURNEY_VIEWS.includes(view)) return true;
-        ui.jView = view;
-        const preset = VIEW_PRESET[view];
-        ui.jBottom = preset.bottom;
-        query({ category: preset.category, lane: undefined });
-        this.reloadJourney();
+      case 'map-j-view':
+        this.journeyView(target.dataset.view);
         return true;
-      }
       case 'map-j-bottom': {
         const tab = target.dataset.tab as JourneyBottom;
         if (JOURNEY_BOTTOMS.includes(tab)) ui.jBottom = tab;
@@ -1025,11 +1018,28 @@ export class CartographyController {
    * La molette sur un graphe : zoom autour du pointeur avec Ctrl (ou ⌘, ou le pincement d'un pavé
    * tactile), et sans touche en plein écran ; ailleurs la page défile normalement.
    */
+  /** Ce que l'onglet « Parcours & Graphe » met en avant : l'onglet du bas, la catégorie du tableau, les groupes. */
+  private journeyView(value: string | undefined): void {
+    const view = value as JourneyView;
+    if (!JOURNEY_VIEWS.includes(view)) return;
+    const ui = this.ui;
+    ui.jView = view;
+    const preset = VIEW_PRESET[view];
+    ui.jBottom = preset.bottom;
+    ui.jQuery = compactQuery({ ...ui.jQuery, category: preset.category, lane: undefined, page: 1 });
+    this.reloadJourney();
+  }
+
   /**
    * Après chaque rendu : le tracé du chemin principal dans les couloirs de « Parcours & Graphe », d'après la
    * place réelle des étapes numérotées (elle dépend du repli des cartes, de l'échelle et de la largeur).
    */
   afterPaint(): void {
+    // Le bandeau d'étapes tient sur une ligne qui défile : l'étape active y est amenée au centre.
+    const crumbs = this.host.root.querySelector<HTMLElement>('[data-path] .jr-crumbs');
+    const on = crumbs?.querySelector<HTMLElement>('.jr-gs.on');
+    if (crumbs && on && crumbs.scrollWidth > crumbs.clientWidth)
+      crumbs.scrollLeft = Math.max(0, on.offsetLeft - (crumbs.clientWidth - on.offsetWidth) / 2);
     const svg = this.host.root.querySelector<SVGSVGElement>('svg[data-jr-route]');
     if (!svg) return;
     drawRoute(svg);
@@ -2102,6 +2112,9 @@ export class CartographyController {
         return true;
       case 'impact-env':
         ui.impactEnv = value;
+        return true;
+      case 'j-view':
+        this.journeyView(value);
         return true;
       case 'j-feature':
         if (!value || value === ui.feature) return true;

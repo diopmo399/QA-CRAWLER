@@ -21,6 +21,11 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   « Ajuster » fait toujours tenir tout le graphe.
 - Le verbe de la relation qui mène à une étape reste avec elle dans le bandeau ; l'arbre ne laisse plus de
   chevron seul sur une ligne.
+- Écran simplifié : les tuiles de chiffres de la fonctionnalité deviennent une ligne de texte (comptes nuls
+  omis) ; la seconde barre d'onglets devient la liste « Afficher », placée avec les modes (« Principal »,
+  « Branches », « Tout ») dans l'en-tête du graphe ; la mini-carte des couches (remplacée par les rails) et la
+  colonne de droite sous le graphe (qui répétait « Conditions & Règles » et « Flux de données ») sont
+  retirées ; le bandeau d'étapes tient sur une ligne qui défile et amène l'étape active au centre.
 - Version d'analyseur `cartography-13;rxjs-9` (types de flux `createEffect` et `createReducer`).
 
 ### Cartographie : second lot du moteur de reconstruction des flux (statique)

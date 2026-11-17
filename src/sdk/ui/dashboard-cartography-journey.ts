@@ -119,9 +119,10 @@ export interface JourneyHelpers {
 
 const FR = {
   tab: 'Parcours & Graphe',
+  show: 'Afficher',
   views: {
     overview: 'Vue d’ensemble',
-    graph: 'Parcours & Graphe',
+    graph: 'Tout le parcours',
     ui: 'Structure UI',
     stores: 'Stores & Dépendances',
     rules: 'Conditions & Règles',
@@ -301,9 +302,9 @@ const FR = {
     focus: 'Focus sur cette étape',
     proof: 'Voir la preuve',
     modes: {
-      main: () => 'Parcours principal',
-      alt: (n: number) => `Branches alternatives (${String(n)})`,
-      full: () => 'Graphe complet',
+      main: () => 'Principal',
+      alt: (n: number) => `Branches (${String(n)})`,
+      full: () => 'Tout',
     } satisfies Record<JourneyMode, (n: number) => string>,
     fullWarn: (n: number) =>
       `Graphe complet : ${String(n)} éléments. Les cartes sont repliées et les liens regroupés par catégorie ; toutes les relations restent dans le tableau.`,
@@ -425,9 +426,10 @@ type JourneyStrings = typeof FR;
 
 const EN: JourneyStrings = {
   tab: 'Journey & Graph',
+  show: 'Show',
   views: {
     overview: 'Overview',
-    graph: 'Journey & Graph',
+    graph: 'Whole journey',
     ui: 'UI structure',
     stores: 'Stores & dependencies',
     rules: 'Conditions & rules',
@@ -601,9 +603,9 @@ const EN: JourneyStrings = {
     focus: 'Focus on this step',
     proof: 'See the evidence',
     modes: {
-      main: () => 'Main path',
-      alt: (n) => `Alternative branches (${String(n)})`,
-      full: () => 'Complete graph',
+      main: () => 'Main',
+      alt: (n) => `Branches (${String(n)})`,
+      full: () => 'All',
     },
     fullWarn: (n) =>
       `Complete graph: ${String(n)} elements. Cards are collapsed and links grouped by category; every relation stays in the table.`,
@@ -856,7 +858,14 @@ function kpis(s: JourneyStrings, map: FeatureMap): string {
         ]
       : []),
   ];
-  return `<div class="jr-kpis">${tiles.map(([ic, value, label]) => `<div class="jr-kpi">${icon(ic)}<div><b>${esc(value)}</b><small>${esc(label)}</small></div></div>`).join('')}</div>`;
+  // Une ligne de texte : les liens, puis ce qui existe (un compte nul n'est pas affiché).
+  const shown = tiles.filter(([, value], i) => i === 0 || (value !== '0' && value !== '0 %'));
+  return `<p class="jr-sum">${shown.map(([, value, label]) => `<span><b>${esc(value)}</b> ${esc(label)}</span>`).join('<i aria-hidden="true">·</i>')}</p>`;
+}
+
+/** Ce que l'onglet met en avant : une liste déroulante, à côté de la fonctionnalité (pas une 2e barre d'onglets). */
+function viewPicker(s: JourneyStrings, st: JourneyState): string {
+  return `<label class="jr-vpick"><span>${esc(s.show)} :</span><select data-map="j-view" aria-label="${esc(s.show)}">${JOURNEY_VIEWS.map((v) => `<option value="${v}"${st.jView === v ? ' selected' : ''}>${esc(s.views[v])}</option>`).join('')}</select></label>`;
 }
 
 function featurePicker(s: JourneyStrings, map: FeatureMap | undefined, h: JourneyHelpers): string {
@@ -1370,7 +1379,7 @@ function guideBar(
   const stepBtn = (x: FeatureTraceStep, i: number): string => {
     const cls = `${i === active ? ' on' : i === active + 1 ? ' next' : ''}${x.end === 'STOP' ? ' stop' : ''}`;
     const kind = kindLabel(s, x.group, x.nature);
-    return `<li class="jr-gs l-${x.lane.toLowerCase()}${cls}">${i > 0 ? arrow(i) : ''}<button class="jr-crb" data-action="map-j-step" data-step="${String(i)}" data-item="${esc(x.id)}" aria-current="${i === active ? 'step' : 'false'}" title="${esc(`${s.lanes[x.lane][0]} · ${kind}${x.sub ? ` — ${x.sub}` : ''}`)}">${stepBadge(s, steps.get(x.id), x.end)}<span class="jr-gk">${icon(kindIcon(x.group, x.nature))}${esc(kind)}</span><span>${wb(shownName(x.name, x.nature))}</span></button></li>`;
+    return `<li class="jr-gs l-${x.lane.toLowerCase()}${cls}">${i > 0 ? arrow(i) : ''}<button class="jr-crb" data-action="map-j-step" data-step="${String(i)}" data-item="${esc(x.id)}" aria-current="${i === active ? 'step' : 'false'}" title="${esc(`${s.lanes[x.lane][0]} · ${kind}${x.sub ? ` — ${x.sub}` : ''}`)}">${stepBadge(s, steps.get(x.id), x.end)}<span class="jr-gk" title="${esc(kind)}">${icon(kindIcon(x.group, x.nature))}<span class="sr-only">${esc(kind)} : </span></span><span>${esc(shownName(x.name, x.nature))}</span></button></li>`;
   };
   const parts = main.map(stepBtn);
   const last = main[main.length - 1];
@@ -1396,7 +1405,7 @@ function guideBar(
   };
   const cur = main[active];
   const proof = cur ? h.evidence(cur.evidence ?? linkInto(p, active)?.evidence) : '';
-  const controls = `<div class="jr-gctl">${go(0, g.first, 'undo')}${go(active - 1, g.prev, 'back')}${go(active + 1, g.next, 'right')}<button class="btn small" data-action="map-j-item" data-item="${esc(cur?.id ?? '')}"${cur && cur.id !== selected.id ? '' : ' disabled'}>${icon('target')}<span>${esc(g.focus)}</span></button>${proof ? `<span class="jr-gproof" title="${esc(g.proof)}">${proof}</span>` : ''}<button class="jr-tog" data-action="map-j-follow" aria-pressed="${String(st.jFollow)}"><i aria-hidden="true"></i><span>${esc(g.follow)}</span></button>${clear}</div>`;
+  const controls = `<div class="jr-gctl">${go(0, g.first, 'undo')}${go(active - 1, g.prev, 'back')}${go(active + 1, g.next, 'right')}<button class="btn small icon-only" data-action="map-j-item" data-item="${esc(cur?.id ?? '')}" title="${esc(g.focus)}"${cur && cur.id !== selected.id ? '' : ' disabled'}>${icon('target')}<span class="sr-only">${esc(g.focus)}</span></button>${proof ? `<span class="jr-gproof" title="${esc(g.proof)}">${proof}</span>` : ''}<button class="jr-tog" data-action="map-j-follow" aria-pressed="${String(st.jFollow)}"><i aria-hidden="true"></i><span>${esc(g.follow)}</span></button>${clear}</div>`;
   const head = `<div class="jr-ph1">${icon('play')}<b class="jr-pt">${esc(g.title(selected.label ?? selected.name))}</b><span class="mu">${esc(s.trace.steps(steps.size))}</span>${statuses}${endChips}${others > 0 ? `<span class="mu">${esc(s.trace.others(others))}</span>` : ''}${controls}</div>`;
   const stops = t.down.filter((x) => x.end === 'STOP' && x.id !== last?.id);
   const stopLine = stops.length
@@ -1421,12 +1430,7 @@ function modeBar(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathIn
     (m) =>
       `<button class="jr-mode${st.jMode === m ? ' on' : ''}" data-action="map-j-mode" data-mode="${m}" aria-pressed="${String(st.jMode === m)}">${esc(g.modes[m](branches))}</button>`,
   ).join('');
-  const activeLane = p.main[p.active]?.lane;
-  const mini = FEATURE_LANES.map((l) => {
-    const n = p.main.filter((x) => x.lane === l).length;
-    return `<button class="jr-mn l-${l.toLowerCase()}${l === activeLane ? ' on' : ''}${n ? '' : ' off'}" data-action="map-j-lane" data-lane="${l}" title="${esc(`${s.lanes[l][0]} : ${s.trace.steps(n)}`)}">${icon(LANE_ICON[l])}<b>${String(n)}</b></button>`;
-  }).join('<span class="jr-mna" aria-hidden="true">→</span>');
-  return `<div class="jr-gbar"><div class="jr-modes" role="group">${modes}</div><div class="jr-mini" role="group" aria-label="${esc(g.minimap)}">${mini}</div></div>`;
+  return `<div class="jr-modes" role="group" aria-label="${esc(g.minimap)}">${modes}</div>`;
 }
 
 /**
@@ -1530,9 +1534,7 @@ function bottom(
       map.bundles.filter((b) => b.category === 'DATA' || b.category === 'PERSISTENCE'),
     )}`;
   else body = relationsTable(s, map, st, h, path);
-  const rules = map.conditions.slice(0, 4);
-  const side = `<aside class="jr-side"><section><h3>${icon('check')}${esc(s.rulesTitle)}</h3>${rules.length ? `<ul class="jr-rules">${rules.map((c) => `<li><span class="jr-rk">${esc(aspectLabel(s, c))} :</span> <code>${esc(c.expression)}</code>${c.decision ? `<small>→ ${esc(c.decision)}</small>` : ''}</li>`).join('')}</ul>` : `<p class="mu small">${esc(s.noConditions)}</p>`}</section><section><h3>${icon('data')}${esc(s.flowTitle)}</h3>${flowChain(s, map)}</section></aside>`;
-  return `<div class="jr-bottom"><div class="jr-bmain">${tabs}<div class="jr-bbody">${body}</div></div>${side}</div>`;
+  return `<div class="jr-bottom"><div class="jr-bmain">${tabs}<div class="jr-bbody">${body}</div></div></div>`;
 }
 
 export function journeyTab(st: JourneyState, h: JourneyHelpers): string {
@@ -1542,7 +1544,6 @@ export function journeyTab(st: JourneyState, h: JourneyHelpers): string {
     return `<section class="card msg"><p class="mu">${esc(s.noFeature)}</p></section>`;
   if (!map || map.feature.id !== h.feature)
     return `<section class="card jr">${featurePicker(s, undefined, h)}${h.paneError(h.error)}${h.error ? '' : h.spinner()}</section>`;
-  const views = `<div class="tabs jr-views" role="tablist" aria-label="${esc(map.feature.name)}">${JOURNEY_VIEWS.map((v) => `<button role="tab" data-action="map-j-view" data-view="${v}" aria-selected="${String(st.jView === v)}">${esc(s.views[v])}</button>`).join('')}</div>`;
   const selected = st.jSelect ? map.items.find((i) => i.id === st.jSelect) : undefined;
   // La trace n'est lue que si elle est celle de l'élément choisi (pas celle d'une carte encore en cours).
   const traced = selected && map.trace?.item === selected.id ? map : { ...map, trace: undefined };
@@ -1569,29 +1570,25 @@ export function journeyTab(st: JourneyState, h: JourneyHelpers): string {
       : '';
   const center =
     st.jView === 'overview'
-      ? overview(s, map, h)
-      : `<div class="jr-gh"><h3>${icon('play')}${esc(s.journeyTitle)}</h3>${toolbar(s, st)}</div>${guide}${bar}${fullWarn}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`;
+      ? `<div class="jr-gh">${viewPicker(s, st)}</div>${overview(s, map, h)}`
+      : `<div class="jr-gh"><h3 class="sr-only">${esc(s.journeyTitle)}</h3>${viewPicker(s, st)}${bar}${toolbar(s, st)}</div>${guide}${fullWarn}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`;
   const loading = h.loading ? `<span class="spin jr-busy" aria-label="${esc(s.loading)}"></span>` : '';
-  return `<section class="card jr${st.jFull ? ' full' : ''}" data-jr><div class="jr-head">${featurePicker(s, map, h)}${loading}${kpis(s, map)}</div>${views}${h.paneError(h.error)}<div class="jr-body">${aside}<div class="jr-main">${center}</div></div>${bottom(s, map, st, h, path)}</section>`;
+  return `<section class="card jr${st.jFull ? ' full' : ''}" data-jr><div class="jr-head">${featurePicker(s, map, h)}${loading}${kpis(s, map)}</div>${h.paneError(h.error)}<div class="jr-body">${aside}<div class="jr-main">${center}</div></div>${bottom(s, map, st, h, path)}</section>`;
 }
 
 export const JOURNEY_CSS = `
 .jr{display:flex;flex-direction:column;gap:12px;padding:14px}
 .jr.full{position:fixed;inset:8px;z-index:60;overflow:auto;background:var(--qa-color-surface)}
-.jr-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.jr-head{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding-bottom:10px;border-bottom:1px solid var(--qa-color-border)}
 .jr-pick{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-weight:600}
 .jr-pick>.ico{color:var(--qa-color-primary)}
 .jr-pick label{display:flex;gap:6px;align-items:center}
 .jr-pick select{max-width:340px;font-weight:600}
 .jr-status{font-size:12px;padding:2px 9px;border-radius:999px;background:#e8f5ec;color:#1d6b3a}
 .jr-status.s-candidate{background:#fdf3e2;color:#8a5a12}.jr-status.s-rejected{background:#fde8e8;color:#9b1c1c}
-.jr-kpis{display:flex;flex-wrap:wrap;gap:6px}
-.jr-kpi{display:flex;gap:7px;align-items:center;padding:6px 10px;border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);min-width:96px;background:var(--qa-color-surface)}
-.jr-kpi .ico{width:18px;height:18px;color:var(--qa-color-primary)}
-.jr-kpi b{display:block;font-size:17px;line-height:1.1}.jr-kpi small{color:var(--qa-color-muted);font-size:11px}
-.jr-views{flex-wrap:nowrap;overflow-x:auto;gap:4px;border-bottom:1px solid var(--qa-color-border)}
-.jr-views button{white-space:nowrap;flex:none;font-weight:600}
-.jr-views button[aria-selected="true"]{background:var(--qa-color-primary);color:#fff;border-radius:8px}
+.jr-sum{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;margin:0;font-size:12.5px;color:var(--qa-color-muted)}
+.jr-sum b{color:var(--qa-color-text,inherit);font-variant-numeric:tabular-nums}.jr-sum i{font-style:normal}
+.jr-vpick{display:flex;gap:6px;align-items:center;font-size:12.5px}.jr-vpick select{font-weight:600}
 .jr-body{display:grid;grid-template-columns:minmax(210px,250px) minmax(0,1fr);gap:12px;align-items:start}
 .jr-aside{display:flex;flex-direction:column;gap:12px;min-width:0}
 .jr-aside h3,.jr-side h3,.jr-overview h3{display:flex;gap:6px;align-items:center;font-size:13.5px;margin:0 0 6px}
@@ -1610,7 +1607,7 @@ export const JOURNEY_CSS = `
 .jr-cat .ico{width:15px;height:15px}
 .c-contains .ico{color:#7a3fd1}.c-condition .ico{color:#d97a0a}.c-depends .ico{color:#2f6fd1}.c-calls .ico{color:#2f7d4f}.c-data .ico{color:#0f8a8a}.c-persistence .ico{color:#b0661a}.c-external .ico{color:#2f6fd1}
 .jr-main{min-width:0;display:flex;flex-direction:column;gap:8px}
-.jr-gh{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
+.jr-gh{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}.jr-gh .jr-tools{margin-left:auto}
 .jr-gh h3{display:flex;gap:6px;align-items:center;margin:0;font-size:15px}.jr-gh h3 .ico{color:var(--qa-color-primary)}
 .jr-tools{display:flex;gap:4px;align-items:center}.jr-zoom{min-width:48px;text-align:center;font-size:12.5px}
 .jr-focus{display:flex;gap:6px;align-items:center;margin:0;font-size:12.5px;color:var(--qa-color-muted)}
@@ -1654,7 +1651,7 @@ export const JOURNEY_CSS = `
 .jr-focus.jr-path{min-width:0;overflow-wrap:anywhere;display:flex;flex-direction:column;align-items:stretch;color:inherit;gap:6px;padding:8px 10px;border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);background:var(--qa-color-surface)}
 .jr-ph1{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:12.5px}.jr-ph1>.ico{color:var(--qa-color-primary)}
 .jr-pst{display:inline-flex;gap:4px;align-items:center}
-.jr-crumbs{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.jr-crumbs{list-style:none;margin:0;display:flex;flex-wrap:nowrap;gap:4px;align-items:center;overflow-x:auto;position:relative;scrollbar-width:thin}
 .jr-cr{display:flex}.jr-cr.l-frontend,.jr-cr.l-bff,.jr-cr.l-backend,.jr-cr.l-external{border:0;border-radius:999px}
 .jr-crb{display:inline-flex;gap:5px;align-items:center;border:1px solid rgba(0,0,0,.08);background:none;border-radius:999px;padding:2px 9px 2px 3px;font-size:12px;font-weight:600;cursor:pointer;max-width:260px}
 .jr-crb span{min-width:0;overflow-wrap:anywhere}.jr-crb .ico{width:13px;height:13px;flex:none;color:var(--qa-color-muted)}
@@ -1673,13 +1670,15 @@ export const JOURNEY_CSS = `
 .jr-m .jr-sn{align-self:center}.jr-ch .jr-sn{margin-top:0}
 .jr-sn2{display:inline-flex;gap:2px;align-items:center;white-space:nowrap}
 .jr-t td:last-child{white-space:nowrap}
-.jr-crumbs{row-gap:14px;padding-top:8px}
+.jr-crumbs{padding:11px 2px 6px}
+.jr-crumbs>li{flex:none}
 .jr-gs.l-frontend,.jr-gs.l-bff,.jr-gs.l-backend,.jr-gs.l-external{background:none;border:0;display:flex;align-items:center;gap:4px}
 .jr-gs{max-width:100%;min-width:0}
-.jr-gs .jr-crb{flex-direction:column;align-items:flex-start;gap:1px;border-radius:10px;padding:8px 11px 5px;max-width:min(320px,100%);position:relative;font-size:12px}
+.jr-gs .jr-crb{align-items:center;gap:5px;border-radius:999px;padding:5px 11px 5px 8px;max-width:none;white-space:nowrap;position:relative;font-size:12px}
 .jr-gs .jr-crb>.jr-sn{position:absolute;top:-9px;left:50%;transform:translateX(-50%);box-shadow:0 0 0 2px var(--qa-color-surface)}
 .jr-gs .jr-crb>span{max-width:100%}
-.jr-gk{display:inline-flex;gap:4px;align-items:center;font-size:10px;font-weight:600;color:var(--qa-color-muted);text-transform:uppercase;letter-spacing:.02em}.jr-gk .ico{width:11px;height:11px}
+.jr-gk{display:inline-flex;align-items:center;color:var(--qa-color-muted)}.jr-gk .ico{width:13px;height:13px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .jr-gs.l-frontend .jr-crb{background:#f4effc}.jr-gs.l-bff .jr-crb{background:#ecf4fd}.jr-gs.l-backend .jr-crb{background:#ecf8f0}.jr-gs.l-external .jr-crb{background:#fdf3e7}
 .jr-gs.on .jr-crb{outline:2px solid var(--qa-color-primary);box-shadow:0 2px 6px rgba(0,0,0,.12)}
 .jr-gs.next .jr-crb{outline:2px dashed #5aa87a}
@@ -1692,14 +1691,9 @@ export const JOURNEY_CSS = `
 .jr-tog i::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#fff;transition:left .15s}
 .jr-tog[aria-pressed="true"] i{background:var(--qa-color-primary)}.jr-tog[aria-pressed="true"] i::after{left:14px}
 .jr-pnote{margin:0;font-size:11px;color:var(--qa-color-muted);font-style:italic}
-.jr-gbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
 .jr-modes{display:inline-flex;flex-wrap:wrap;border:1px solid var(--qa-color-border);border-radius:999px;padding:2px;gap:2px}
 .jr-mode{border:0;background:none;border-radius:999px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer}
 .jr-mode.on{background:var(--qa-color-primary);color:#fff}
-.jr-mini{display:inline-flex;gap:3px;align-items:center}
-.jr-mn{display:inline-flex;gap:4px;align-items:center;border:1px solid rgba(0,0,0,.1);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer}
-.jr-mn .ico{width:13px;height:13px}.jr-mn.off{opacity:.45}.jr-mn.on{outline:2px solid var(--qa-color-primary)}
-.jr-mna{color:var(--qa-color-muted);font-size:11px}
 .jr-m.on,.jr-ch.on{background:#e3f4e8;box-shadow:inset 0 0 0 2px var(--qa-color-primary)}
 .jr-m.next,.jr-ch.next{outline:2px dashed #5aa87a;outline-offset:-2px}
 .jr-sd{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
@@ -1728,7 +1722,7 @@ export const JOURNEY_CSS = `
 .jr-pill{display:flex;flex-wrap:wrap;gap:3px 5px;align-items:center;justify-content:center;width:100%;border:1px solid var(--qa-color-border);background:#fff;border-radius:999px;padding:3px 8px;font-size:11.5px}
 .jr-pill .ico{width:13px;height:13px}.jr-pill b{font-variant-numeric:tabular-nums}.jr-pill small{flex-basis:100%;text-align:center;font-size:10px;color:var(--qa-color-muted)}
 .jr-pill.weak{border-style:dashed}.jr-pill.on{border-color:var(--qa-color-primary);background:#e3f4e8;font-weight:700}
-.jr-bottom{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,300px);gap:12px;align-items:start}
+.jr-bottom{display:block}
 .jr-bmain{min-width:0;border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);padding:8px}
 .jr-btabs{flex-wrap:nowrap;overflow-x:auto;gap:4px;margin-bottom:8px}.jr-btabs button{white-space:nowrap;flex:none}
 .jr-btabs button[aria-selected="true"]{background:var(--qa-color-primary);color:#fff;border-radius:8px}

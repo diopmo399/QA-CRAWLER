@@ -468,9 +468,9 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     await ribbon.waitFor();
     expect(await ribbon.locator('.jr-pt').textContent()).toBe('Parcours d’exécution de Refuse');
     const crumbs = await ribbon.locator('.jr-crb').allTextContents();
-    expect(crumbs[0]).toBe('1Pages/requests/create');
+    expect(crumbs[0]).toBe('1Pages : /requests/create');
     expect(crumbs.join(' > ')).toMatch(
-      /4BoutonsRefuse.*RequestService\.refuse.*RequestBffController\.refuse.*RequestController\.refuse.*REQUEST/,
+      /4Boutons : Refuse.*RequestService\.refuse.*RequestBffController\.refuse.*RequestController\.refuse.*REQUEST/,
     );
     expect(await ribbon.locator('.jr-cx').allTextContents()).toEqual(['BFF', 'Backend (Java)']);
     expect(await ribbon.locator('.jr-crumbs .jr-pend').textContent()).toBe('Table atteinte');
@@ -550,7 +550,7 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
       .poll(() => ribbon.locator('.jr-pt').textContent())
       .toBe('Parcours d’exécution de RequestController.refuse');
     const upstream = await ribbon.locator('.jr-crb').allTextContents();
-    expect(upstream[0]).toBe('1Pages/requests/create');
+    expect(upstream[0]).toBe('1Pages : /requests/create');
     expect(upstream.join(' > ')).toMatch(
       /RequestService\.refuse.*RequestBffController\.refuse.*RequestController\.refuse.*REQUEST/,
     );
@@ -558,7 +558,7 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     await expect.poll(async () => journey().locator('.jr-focus').count()).toBe(0);
 
     // La vue « Conditions & Règles » : la condition et la règle backend démontrée.
-    await journey().locator('[data-action="map-j-view"][data-view="rules"]').click();
+    await journey().locator('select[data-map="j-view"]').selectOption('rules');
     await expect.poll(() => journey().locator('.jr-bottom').textContent()).toContain('!state.canValidate');
     expect(await journey().locator('.jr-bottom').textContent()).toContain(
       'ValidationEligibilityService.canValidate',

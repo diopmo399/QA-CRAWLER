@@ -110,9 +110,16 @@ describe('Parcours & Graphe : natures NgRx et signaux', () => {
       helpers(traced.feature.id),
     ).replaceAll('<wbr>', '');
     const ribbon = html.slice(html.indexOf('data-path'), html.indexOf('data-jr-canvas'));
-    expect(ribbon).toMatch(/Envoi d’action<\/span><span>\[Orders\] Save<\/span>/);
-    expect(ribbon).toMatch(/Action NgRx<\/span><span>\[Orders\] Save<\/span>/);
-    expect(ribbon).toMatch(/Effet NgRx<\/span><span>OrderEffects\.save\$<\/span>/);
+    // La nature de l'étape : une icône (libellé en infobulle et pour les lecteurs d'écran), puis le nom.
+    expect(ribbon).toMatch(
+      /title="Envoi d’action">[^]*?Envoi d’action : <\/span><\/span><span>\[Orders\] Save<\/span>/,
+    );
+    expect(ribbon).toMatch(
+      /title="Action NgRx">[^]*?Action NgRx : <\/span><\/span><span>\[Orders\] Save<\/span>/,
+    );
+    expect(ribbon).toMatch(
+      /title="Effet NgRx">[^]*?Effet NgRx : <\/span><\/span><span>OrderEffects\.save\$<\/span>/,
+    );
     // Le nom du canal du store reste dans la preuve (infobulle de la relation), pas dans le libellé de l'étape.
     expect(ribbon).not.toMatch(/<span>Store\.(dispatch|actions)/);
     const graph = html.slice(html.indexOf('data-jr-canvas'), html.indexOf('jr-bottom'));

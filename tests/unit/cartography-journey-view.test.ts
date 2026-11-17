@@ -170,7 +170,8 @@ describe('onglet Parcours & Graphe', () => {
   it('chaque vue ouvre son onglet du bas, sans erreur de rendu', () => {
     for (const view of JOURNEY_VIEWS) {
       const html = render({ jView: view, jBottom: VIEW_PRESET[view].bottom });
-      expect(html).toContain(`data-view="${view}" aria-selected="true"`);
+      // La vue se choisit dans une liste (« Afficher »), dans l'en-tête du graphe.
+      expect(html).toContain(`<option value="${view}" selected>`);
     }
     const rules = render({ jView: 'rules', jBottom: 'rules' });
     expect(rules).toContain('!state.canValidate');
@@ -246,7 +247,8 @@ describe('onglet Parcours & Graphe', () => {
     const html = at({});
     // Les noms longs se coupent entre les mots (camelCase, points), jamais en plein mot ni tronqués.
     expect(html).toContain('Request<wbr>Create<wbr>Component');
-    expect(html).toContain('Request<wbr>Service.<wbr>refuse');
+    // Le bandeau tient sur une ligne qui défile : chaque nom y est entier (ni coupé ni tronqué).
+    expect(html).toContain('<span>RequestService.refuse</span></button>');
     expect(html).not.toContain('text-overflow:ellipsis;white-space:nowrap}.jr-crb');
     // Le verbe de la relation qui mène à une étape est dans la même entrée que l'étape (un retour à la ligne
     // ne le laisse jamais seul en bout de ligne).
@@ -282,9 +284,18 @@ describe('onglet Parcours & Graphe', () => {
     expect(last.slice(last.indexOf('data-step-detail'))).toMatch(/Étape 12\/12[^]*REQUEST[^]*Table atteinte/);
     // La fiche de l'élément choisi sous l'arbre ; les modes et la mini-carte des couches.
     expect(html).toMatch(/data-info>[^]*Refuse[^]*Boutons[^]*Angular \(SPA\)/);
-    expect(html).toMatch(/data-mode="main" aria-pressed="true">Parcours principal/);
-    expect(html).toMatch(/Branches alternatives \(\d+\)/);
-    expect(count(html, 'data-action="map-j-lane"')).toBe(4);
+    expect(html).toMatch(/data-mode="main" aria-pressed="true">Principal/);
+    expect(html).toMatch(/Branches \(\d+\)/);
+    // Simplifié : ni mini-carte des couches (les rails la remplacent), ni tuiles de chiffres, ni seconde barre
+    // d'onglets, ni colonne de droite sous le graphe ; les modes et la vue sont dans l'en-tête du graphe.
+    expect(html).not.toContain('data-action="map-j-lane"');
+    expect(html).not.toContain('class="jr-kpi"');
+    expect(html).not.toContain('data-action="map-j-view"');
+    expect(html).not.toContain('class="jr-side"');
+    expect(html).toMatch(
+      /<div class="jr-gh">[^]*?data-map="j-view"[^]*?class="jr-modes"[^]*?class="jr-tools"/,
+    );
+    expect(html).toMatch(/<p class="jr-sum"><span><b>\d+<\/b> Liens<\/span>/);
     // Sans parcours (carte d'une autre sélection) : ni onglet de l'étape ni bandeau d'étapes.
     const plain = render({ jBottom: 'step' });
     expect(plain).not.toContain('data-step-detail');
