@@ -656,7 +656,7 @@ export class CartographyController {
   private fitJourney(auto = false, scroll = auto): void {
     const canvas = this.host.root.querySelector<HTMLElement>('[data-jr-canvas]');
     // Les couloirs, ou le diagramme d'architecture du parcours.
-    const lanes = canvas?.querySelector<HTMLElement>('.jr-lanes, .ar-stage');
+    const lanes = canvas?.querySelector<HTMLElement>('.jr-lanes, .ar-stage, .sq-stage');
     if (!canvas || !lanes) return;
     // La taille à 100 % : l'échelle (CSS zoom) réduit la mise en page, on la retire de la mesure.
     const zoom = this.ui.jZoom || 1;
@@ -1081,16 +1081,17 @@ export class CartographyController {
       if (arch) drawArch(arch);
       return route !== null || arch !== null;
     };
-    if (!draw()) return;
-    // Le diagramme d'architecture d'un élément est ajusté à la largeur à sa première apparition (sans faire
-    // défiler la page), comme les couloirs à l'ouverture de la fonctionnalité.
+    const drawn = draw();
+    // Le diagramme d'architecture ou de séquence d'un élément est ajusté à la largeur à sa première
+    // apparition (sans faire défiler la page), comme les couloirs à l'ouverture de la fonctionnalité.
     const selected = this.ui.jSelect;
-    if (selected && this.archFitted !== selected && this.host.root.querySelector('.ar-stage')) {
+    if (selected && this.archFitted !== selected && this.host.root.querySelector('.ar-stage, .sq-stage')) {
       this.archFitted = selected;
       setTimeout(() => {
         this.fitJourney(true, false);
       }, 0);
     }
+    if (!drawn) return;
     if (!this.routeResize) {
       this.routeResize = () => {
         draw();

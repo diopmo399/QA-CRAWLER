@@ -528,6 +528,29 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     await expect.poll(async () => arch.locator('.ar-box.sel').count()).toBe(0);
     // La page ne défile pas en largeur : le diagramme défile dans sa zone.
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // La séquence : une ligne de vie par étape après la structure, un message par relation ; cliquer une
+    // ligne de vie allume ses messages, cliquer un message rend son étape active.
+    await journey().locator('[data-action="map-j-style"][data-style="seq"]').click();
+    const seq = journey().locator('section.sq');
+    await seq.waitFor();
+    expect(await seq.locator('button.sq-p').count()).toBe(9);
+    expect(await seq.locator('.sq-msg').count()).toBe(9);
+    expect(await seq.locator('.sq-cr').count()).toBe(3);
+    const life = seq.locator('button.sq-p', { hasText: 'RequestBffController.refuse' });
+    await life.click();
+    await expect.poll(async () => seq.locator('button.sq-p.sel').count()).toBe(1);
+    expect(await seq.locator('button.sq-p.near').count()).toBe(2);
+    expect(await seq.locator('.sq-msg.on').count()).toBe(2);
+    expect(await seq.locator('.sq-msg.off').count()).toBe(7);
+    await expect
+      .poll(() => journey().locator('[data-step-detail] h4').textContent())
+      .toContain('RequestBffController.refuse');
+    await seq.locator('.sq-msg .sq-lab', { hasText: 'déclenche' }).click();
+    await expect.poll(() => seq.locator('button.sq-p.sel').textContent()).toContain('RequestService.refuse');
+    expect(await seq.locator('.sq-msg.sel .sq-lab').textContent()).toContain('déclenche');
+    await seq.locator('.ar-head [data-action="map-j-unspot"]').click();
+    await expect.poll(async () => seq.locator('.sq-msg.off').count()).toBe(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     // Les couloirs, sur demande ; l'étape de l'élément choisi redevient active.
     await journey().locator('[data-action="map-j-style"][data-style="lanes"]').click();
     await journey().locator('.jr-lanes').waitFor();

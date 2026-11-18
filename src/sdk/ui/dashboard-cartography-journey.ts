@@ -47,8 +47,8 @@ export type JourneyBottom = (typeof JOURNEY_BOTTOMS)[number];
 /** Ce que le graphe montre de l'élément choisi : son chemin principal, toutes ses branches, ou tout. */
 export const JOURNEY_MODES = ['main', 'alt', 'full'] as const;
 export type JourneyMode = (typeof JOURNEY_MODES)[number];
-/** La présentation du parcours de l'élément choisi : en diagramme d'architecture, ou dans les couloirs. */
-export const JOURNEY_STYLES = ['archi', 'lanes'] as const;
+/** La présentation du parcours de l'élément choisi : diagramme d'architecture, de séquence, ou couloirs. */
+export const JOURNEY_STYLES = ['archi', 'seq', 'lanes'] as const;
 export type JourneyStyle = (typeof JOURNEY_STYLES)[number];
 
 export interface JourneyState {
@@ -411,8 +411,23 @@ const FR = {
   noFlow: 'Aucun flux de données démontré.',
   gapsTitle: 'Ce que le scan ne démontre pas',
   noGaps: 'Aucune lacune relevée pour cette fonctionnalité.',
+  seq: {
+    title: (name: string) => `Séquence du parcours de ${name}`,
+    hint: 'Cliquez une ligne de vie ou un message : son étape s’allume avec ses messages, le reste s’estompe.',
+    where: 'Où se trouve l’élément',
+    user: 'Utilisateur',
+    userSub: 'acteur',
+    click: 'clic',
+    action: 'Action utilisateur',
+    activity: 'Activité (premier → dernier message)',
+    noReturn:
+      'Seuls les appels démontrés par le scan sont dessinés, dans l’ordre déduit du code : les réponses (retours) ne le sont pas.',
+  },
   arch: {
-    styles: { archi: 'Architecture', lanes: 'Couloirs' } satisfies Record<JourneyStyle, string>,
+    styles: { archi: 'Architecture', seq: 'Séquence', lanes: 'Couloirs' } satisfies Record<
+      JourneyStyle,
+      string
+    >,
     styleLabel: 'Présentation du parcours',
     title: (name: string) => `Architecture du parcours de ${name}`,
     hint: 'Cliquez une boîte : ses liens s’allument, le reste s’estompe et son détail s’affiche sous le graphe.',
@@ -734,8 +749,20 @@ const EN: JourneyStrings = {
   noFlow: 'No data flow demonstrated.',
   gapsTitle: 'What the scan does not demonstrate',
   noGaps: 'No gap found for this feature.',
+  seq: {
+    title: (name) => `Sequence of the journey of ${name}`,
+    hint: 'Click a lifeline or a message: its step lights up with its messages, the rest fades.',
+    where: 'Where the element is',
+    user: 'User',
+    userSub: 'actor',
+    click: 'click',
+    action: 'User action',
+    activity: 'Activity (first → last message)',
+    noReturn:
+      'Only the calls demonstrated by the scan are drawn, in the order inferred from the code: responses (returns) are not.',
+  },
   arch: {
-    styles: { archi: 'Architecture', lanes: 'Lanes' },
+    styles: { archi: 'Architecture', seq: 'Sequence', lanes: 'Lanes' },
     styleLabel: 'Journey layout',
     title: (name) => `Architecture of the journey of ${name}`,
     hint: 'Click a box: its links light up, the rest fades and its detail shows below the graph.',
@@ -1349,6 +1376,165 @@ function archCards(s: JourneyStrings, map: FeatureMap, p: PathInfo): string {
   return `<div class="ar-cards">${card('k-main', a.main, [li(s.trace.steps(main.length)), li(a.confirmed(ok, vias.length)), li(a.layers(reached.join(' → '))), li(end)], '')}${card('k-check', a.check, checks, a.allConfirmed)}${card('k-gaps', a.gaps, gaps, a.noGap)}</div>`;
 }
 
+// ── Diagramme de séquence du parcours ────────────────────────────────────────────────────────────────
+
+/** Les étapes de structure (page, composant, conteneur) qui ouvrent un parcours : où se trouve l'élément. */
+const SEQ_STRUCTURE = new Set<FeatureGroup>(['PAGE', 'COMPONENT', 'CONTAINER']);
+/** Largeur d'une ligne de vie (boîte) et d'une colonne, hauteur d'une rangée de message. */
+const SEQ_BOX = 112;
+const SEQ_COL = 124;
+const SEQ_ROW = 50;
+
+/** Un message du diagramme de séquence : d'une ligne de vie (ou de l'utilisateur) à l'étape suivante. */
+interface SeqMessage {
+  fromX: number;
+  from?: number;
+  to: number;
+  label: string;
+  status: MapConfidence | 'ACTION';
+  n?: number;
+}
+
+/**
+ * Le parcours de l'élément choisi en diagramme de séquence : les étapes de structure qui l'ouvrent (page,
+ * composant, conteneurs) en une ligne « où se trouve l'élément », puis une ligne de vie par étape suivante
+ * du chemin principal, rangées dans la région de leur couche, et un message par relation, de haut en bas
+ * dans l'ordre du chemin, numéroté comme le bandeau. Un bouton est précédé du clic de l'utilisateur (une
+ * action, pas une relation du code). Seuls les appels démontrés sont dessinés : aucune réponse (retour)
+ * n'est inventée. Cliquer une ligne de vie ou un message rend son étape active et la met en avant.
+ */
+function seqDiagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathInfo): string {
+  const q = s.seq;
+  const { main, active } = p;
+  let prefix = 0;
+  while (prefix < main.length - 1 && SEQ_STRUCTURE.has(main[prefix]?.group ?? 'PAGE')) prefix++;
+  const steps = main.slice(prefix).map((x, k) => ({ x, i: prefix + k }));
+  const first = steps[0];
+  const actor = first?.x.group === 'BUTTON';
+  const spot = st.jSpot && active >= prefix;
+  // Les colonnes : l'utilisateur, puis chaque couche dans l'ordre fixe (un rail si elle n'est pas atteinte).
+  let cursor = 16;
+  let actorX = 0;
+  if (actor) {
+    actorX = cursor + SEQ_BOX / 2;
+    cursor += SEQ_COL + 8;
+  }
+  const xs = new Map<number, number>();
+  const zones: string[] = [];
+  // Un rail pour une couche que le parcours traverse sans l'atteindre (entre deux couches atteintes).
+  const reached = FEATURE_LANES.map((l) => steps.some((e) => e.x.lane === l));
+  const firstLane = reached.indexOf(true);
+  const lastLane = reached.lastIndexOf(true);
+  for (const [rank, lane] of FEATURE_LANES.entries()) {
+    const [title, sub] = s.lanes[lane];
+    const cols = steps.filter((e) => e.x.lane === lane);
+    if (rank < firstLane || rank > lastLane) continue;
+    if (cols.length === 0) {
+      zones.push(
+        `<div class="sq-rail" data-lane="${lane}" style="left:${String(cursor)}px"><span>${esc(s.arch.notReached(title))}</span></div>`,
+      );
+      cursor += 52;
+      continue;
+    }
+    const left = cursor;
+    cursor += 12;
+    for (const e of cols) {
+      xs.set(e.i, cursor + SEQ_BOX / 2);
+      cursor += SEQ_COL;
+    }
+    zones.push(
+      `<div class="sq-region" data-lane="${lane}" style="left:${String(left)}px;width:${String(cursor - left)}px"><span class="ar-rl">${esc(title)}<small>${esc(sub)}</small></span></div>`,
+    );
+    cursor += 16;
+  }
+  const width = cursor;
+  const x = (i: number): number => xs.get(i) ?? 0;
+  const msgs: SeqMessage[] = [];
+  if (actor) msgs.push({ fromX: actorX, to: first.i, label: q.click, status: 'ACTION' });
+  for (const e of steps.slice(1)) {
+    const via = linkInto(p, e.i);
+    msgs.push({
+      fromX: x(e.i - 1),
+      from: e.i - 1,
+      to: e.i,
+      label: via ? verbOf(s, via) : '→',
+      status: via?.status ?? 'UNKNOWN',
+      n: p.steps.get(e.x.id),
+    });
+  }
+  const yOf = (k: number): number => 152 + k * SEQ_ROW;
+  const bottom = yOf(Math.max(0, msgs.length - 1)) + 40;
+  const state = (i: number): string =>
+    !spot
+      ? i === active
+        ? ' cur'
+        : ''
+      : i === active
+        ? ' sel'
+        : Math.abs(i - active) === 1
+          ? ' near'
+          : ' dim';
+  const dimmed = (i: number): string => (spot && state(i) === ' dim' ? ' dim' : '');
+  const lifelines = steps
+    .map(
+      (e) =>
+        `<i class="sq-life${dimmed(e.i)}" style="left:${String(x(e.i) - 1)}px;height:${String(bottom - 106)}px"></i>`,
+    )
+    .join('');
+  const bars = steps
+    .map((e) => {
+      const ys = msgs.flatMap((m, k) => (m.to === e.i || m.from === e.i ? [yOf(k)] : []));
+      if (ys.length === 0) return '';
+      const top = Math.min(...ys) - 10;
+      return `<i class="sq-bar t-${archTone(e.x)}${dimmed(e.i)}" style="left:${String(x(e.i) - 5)}px;top:${String(top)}px;height:${String(Math.max(...ys) + 10 - top)}px"></i>`;
+    })
+    .join('');
+  const people = steps
+    .map((e) => {
+      const kind = kindLabel(s, e.x.group, e.x.nature);
+      return `<button class="sq-p ar-box t-${archTone(e.x)}${state(e.i)}${e.x.end === 'STOP' ? ' stop' : ''}" data-action="map-j-spot" data-step="${String(e.i)}" data-item="${esc(e.x.id)}" data-sq-step="${String(e.i)}" style="left:${String(x(e.i) - SEQ_BOX / 2)}px" aria-pressed="${String(spot && e.i === active)}" title="${esc(`${s.lanes[e.x.lane][0]} · ${kind}${e.x.sub ? ` — ${e.x.sub}` : ''}`)}">${stepBadge(s, p.steps.get(e.x.id), e.x.end)}<span class="ar-t">${wb(shownName(e.x.name, e.x.nature))}</span><span class="ar-s">${esc(kind)}</span></button>`;
+    })
+    .join('');
+  const user = actor
+    ? `<i class="sq-life${spot && active !== first.i ? ' dim' : ''}" style="left:${String(actorX - 1)}px;height:${String(bottom - 106)}px"></i><span class="sq-p ar-box t-ext sq-user${spot ? (active === first.i ? ' near' : ' dim') : ''}" style="left:${String(actorX - SEQ_BOX / 2)}px"><span class="ar-t">${esc(q.user)}</span><span class="ar-s">${esc(q.userSub)}</span></span>`
+    : '';
+  const messages = msgs
+    .map((m, k) => {
+      const xb = x(m.to);
+      const right = xb >= m.fromX;
+      const x1 = m.fromX + (right ? 5 : -5);
+      const x2 = xb + (right ? -5 : 5);
+      const on = spot && (m.to === active || m.from === active);
+      const cls = `sq-msg s-${m.status.toLowerCase()} ${right ? 'r' : 'l'}${spot ? (on ? ' on' : ' off') : ''}${spot && m.to === active ? ' sel' : ''}`;
+      const target = main[m.to];
+      return `<div class="${cls}" style="left:${String(Math.min(x1, x2))}px;top:${String(yOf(k))}px;width:${String(Math.abs(x2 - x1))}px"><i class="ln"></i><i class="pu"></i><i class="hd"></i><button class="sq-lab" data-action="map-j-spot" data-step="${String(m.to)}" data-item="${esc(target?.id ?? '')}" title="${esc(m.status === 'ACTION' ? q.action : (s.conf[m.status] ?? ''))}">${m.n === undefined ? '' : `<b>${String(m.n)}</b>`}<span>${esc(m.label)}</span></button></div>`;
+    })
+    .join('');
+  const where =
+    prefix > 0
+      ? `<div class="sq-where"><span>${esc(q.where)} :</span>${main
+          .slice(0, prefix)
+          .map(
+            (x0, i) =>
+              `<button class="sq-cr" data-action="map-j-step" data-step="${String(i)}" data-item="${esc(x0.id)}">${stepBadge(s, p.steps.get(x0.id), x0.end)}<span>${wb(shownName(x0.name, x0.nature))}</span></button>`,
+          )
+          .join('<i aria-hidden="true">›</i>')}</div>`
+      : '';
+  const head = `<div class="ar-head"><span class="ar-pulse" aria-hidden="true"></span><p>${esc(q.hint)}</p><button class="btn small" data-action="map-j-unspot"${st.jSpot ? '' : ' disabled'}>${esc(s.arch.showAll)}</button></div>`;
+  const stage = `<div class="sq-stage" data-sq data-action="map-j-unspot" style="zoom:${String(st.jZoom)};width:${String(width)}px;height:${String(bottom + 16)}px">${zones.join('')}${lifelines}${user}${bars}${messages}${people}</div>`;
+  const swatch = (cls: string, label: string): string =>
+    `<span><i class="ar-sw ${cls}" aria-hidden="true"></i>${esc(label)}</span>`;
+  const legend = `<div class="ar-legend" aria-label="${esc(s.arch.legendTitle)}">${FEATURE_LANES.filter((l) =>
+    steps.some((e) => e.x.lane === l),
+  )
+    .map((l) => swatch(`t-${laneTone(l)}`, s.lanes[l][0]))
+    .join(
+      '',
+    )}${steps.some((e) => archTone(e.x) === 'db') ? swatch('t-db', s.arch.legendDb) : ''}${swatch('sq-act', q.activity)}${(['CONFIRMED', 'PROBABLE', 'UNKNOWN'] as const).map((c) => swatch(`ln s-${c.toLowerCase()}`, s.arch.legend[c])).join('')}${actor ? swatch('ln s-action', q.action) : ''}</div>`;
+  const name = main[p.upLen];
+  return `<section class="ar sq" aria-label="${esc(q.title(shownName(name?.name ?? '', name?.nature)))}">${head}${where}<div class="ar-scroll">${stage}</div>${legend}<p class="sq-note">${esc(q.noReturn)}</p>${archCards(s, map, p)}</section>`;
+}
+
 /** Un rectangle d'étape dans le repère du calque des flèches. */
 interface ArchRect {
   l: number;
@@ -1836,9 +2022,9 @@ export function journeyTab(st: JourneyState, h: JourneyHelpers): string {
         : neighbourSet(map, selected.id);
   const aside = `<aside class="jr-aside"><section><h3>${esc(s.feature)} : ${esc(map.feature.name)}</h3>${treeView(map.tree, st, map)}</section>${selected ? infoCard(s, map, h, selected) : ''}${categoryList(s, map, st)}</aside>`;
   const guide = selected ? guideBar(s, traced, st, h, selected, path) : '';
-  // Le parcours en diagramme d'architecture (par défaut) ou dans les couloirs ; les modes ne valent que
-  // pour les couloirs (le diagramme montre le chemin principal).
-  const archi = path !== undefined && st.jStyle === 'archi';
+  // Le parcours en diagramme d'architecture (par défaut), de séquence, ou dans les couloirs ; les modes ne
+  // valent que pour les couloirs (les diagrammes montrent le chemin principal).
+  const archi = path !== undefined && st.jStyle !== 'lanes';
   const bar = path ? `${styleBar(s, st)}${archi ? '' : modeBar(s, traced, st, path)}` : '';
   const fullWarn =
     path && mode === 'full' && map.itemCount > 150
@@ -1847,7 +2033,7 @@ export function journeyTab(st: JourneyState, h: JourneyHelpers): string {
   const center =
     st.jView === 'overview'
       ? `<div class="jr-gh">${viewPicker(s, st)}</div>${overview(s, map, h)}`
-      : `<div class="jr-gh"><h3 class="sr-only">${esc(s.journeyTitle)}</h3>${viewPicker(s, st)}${bar}${toolbar(s, st, archi)}</div>${guide}${archi ? '' : fullWarn}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}${archi ? `<div class="jr-canvas ar-canvas" data-jr-canvas>${archDiagram(s, traced, st, path)}</div>` : `<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`}`;
+      : `<div class="jr-gh"><h3 class="sr-only">${esc(s.journeyTitle)}</h3>${viewPicker(s, st)}${bar}${toolbar(s, st, archi)}</div>${guide}${archi ? '' : fullWarn}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}${archi ? `<div class="jr-canvas ar-canvas" data-jr-canvas>${st.jStyle === 'seq' ? seqDiagram(s, traced, st, path) : archDiagram(s, traced, st, path)}</div>` : `<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`}`;
   const loading = h.loading ? `<span class="spin jr-busy" aria-label="${esc(s.loading)}"></span>` : '';
   return `<section class="card jr${st.jFull ? ' full' : ''}" data-jr><div class="jr-head">${featurePicker(s, map, h)}${loading}${kpis(s, map)}</div>${h.paneError(h.error)}<div class="jr-body">${aside}<div class="jr-main">${center}</div></div>${bottom(s, map, st, h, path)}</section>`;
 }
@@ -2101,5 +2287,47 @@ export const JOURNEY_CSS = `
 @keyframes ar-flow{to{stroke-dashoffset:-48}}
 @keyframes ar-ring{0%{box-shadow:0 0 0 0 var(--glow)}70%{box-shadow:0 0 0 12px rgba(0,0,0,0)}100%{box-shadow:0 0 0 0 rgba(0,0,0,0)}}
 @media (prefers-reduced-motion:reduce){.ar-pulse,.ar-f,.ar-box.sel{animation:none}.ar-f{display:none}.ar-box,.ar-e{transition:none}}
+.sq-stage{position:relative;border-radius:10px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
+.sq-region{position:absolute;top:6px;bottom:6px;border:1.5px dashed #d97706;border-radius:8px;background:rgba(251,191,36,.05)}
+.sq-region .ar-rl{top:6px;left:10px}
+.sq-rail{position:absolute;top:6px;bottom:6px;width:40px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:14px;box-sizing:border-box;border:1.5px dashed #94a3b8;border-radius:8px;background:rgba(148,163,184,.06)}
+.sq-rail span{writing-mode:vertical-rl;transform:rotate(180deg);font-size:11px;font-weight:600;color:var(--ar-mu);white-space:nowrap}
+.sq-p{position:absolute;top:38px;width:112px;min-height:62px;box-sizing:border-box;padding:9px 8px 7px;justify-content:center}
+.sq-p .ar-t{font-size:11.5px;line-height:1.25}.sq-p .ar-s{font-size:9.5px}
+.sq-user{cursor:default}.sq-user:hover{transform:none;box-shadow:none}.sq-user.near{opacity:1}
+.sq-life{position:absolute;top:106px;width:0;border-left:1.5px dashed #94a3b8;transition:opacity .25s}
+.sq-bar{position:absolute;width:10px;box-sizing:border-box;border:1.5px solid;border-radius:2px;z-index:1;transition:opacity .25s}
+.sq-bar.t-fe{border-color:#0891b2;background:rgba(34,211,238,.18)}.sq-bar.t-bff{border-color:#2563eb;background:rgba(96,165,250,.18)}
+.sq-bar.t-be{border-color:#059669;background:rgba(52,211,153,.2)}.sq-bar.t-db{border-color:#7c3aed;background:rgba(167,139,250,.22)}
+.sq-bar.t-ext,.sq-bar.t-bus{border-color:#ea580c;background:rgba(251,146,60,.18)}
+.sq-life.dim,.sq-bar.dim{opacity:.25}
+.sq-msg{position:absolute;height:0;z-index:2;transition:opacity .25s}
+.sq-msg .ln{position:absolute;left:0;right:0;top:-1px;border-top:2px solid currentColor}
+.sq-msg .pu{position:absolute;left:0;right:0;top:-1px;height:2px;background:repeating-linear-gradient(90deg,var(--pu) 0 8px,transparent 8px 48px);animation:sq-r 1.4s linear infinite}
+.sq-msg.l .pu{animation-name:sq-l}
+.sq-msg .hd{position:absolute;top:-5px;width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent}
+.sq-msg.r .hd{right:-1px;border-left:9px solid currentColor}.sq-msg.l .hd{left:-1px;border-right:9px solid currentColor}
+.sq-msg.s-confirmed{color:#059669;--pu:#6ee7b7}.sq-msg.s-action{color:#64748b;--pu:#cbd5e1}
+.sq-msg.s-probable{color:#7c3aed}.sq-msg.s-probable .ln{border-top-style:dashed}.sq-msg.s-probable .pu{display:none}
+.sq-msg.s-unknown{color:#e11d48}.sq-msg.s-unknown .ln{border-top-style:dotted}.sq-msg.s-unknown .pu{display:none}
+.sq-msg.on .ln{border-top-width:3px}.sq-msg.on .pu{height:3px;animation-duration:.7s}
+.sq-msg.off{opacity:.12}.sq-msg.off .pu{display:none}
+.sq-lab{position:absolute;left:10px;top:-27px;z-index:3;display:inline-flex;gap:6px;align-items:center;white-space:nowrap;font:inherit;font-size:11px;font-weight:600;color:inherit;background:#fff;border:1px solid #e2e8f0;border-radius:5px;padding:2px 7px 2px 3px;cursor:pointer}
+.sq-lab:hover{border-color:#94a3b8}.sq-lab:focus-visible{outline:2px solid var(--ar-ink);outline-offset:3px}
+.sq-lab b{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 4px;box-sizing:border-box;border-radius:999px;background:currentColor}
+.sq-lab b{color:#fff}.sq-lab span{color:inherit}
+.sq-msg.s-confirmed .sq-lab b{background:#059669}.sq-msg.s-probable .sq-lab b{background:#7c3aed}.sq-msg.s-unknown .sq-lab b{background:#e11d48}
+.sq-msg.s-probable .sq-lab{border-style:dashed}
+.sq-msg.sel .sq-lab{border-color:currentColor;box-shadow:0 0 0 3px rgba(5,150,105,.18)}
+.sq-where{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11.5px;color:var(--ar-mu)}
+.sq-where>i{font-style:normal}
+.sq-cr{display:inline-flex;gap:6px;align-items:center;font:inherit;font-size:11.5px;color:var(--ar-ink);padding:3px 9px 3px 3px;border-radius:999px;border:1px solid #0891b2;background:rgba(34,211,238,.12);cursor:pointer}
+.sq-cr>.jr-sn{background:#059669}
+.ar-sw.sq-act{width:8px;height:16px;border-color:#0891b2;background:rgba(34,211,238,.18);border-radius:2px}
+.ar-sw.ln.s-action{border-color:#64748b}
+.sq-note{margin:0;font-size:11px;color:var(--ar-mu);font-style:italic}
+@keyframes sq-r{from{background-position:0 0}to{background-position:48px 0}}
+@keyframes sq-l{from{background-position:48px 0}to{background-position:0 0}}
+@media (prefers-reduced-motion:reduce){.sq-msg .pu{display:none}}
 @media (max-width:1100px){.jr-body{grid-template-columns:minmax(0,1fr)}.jr-bottom{grid-template-columns:minmax(0,1fr)}.jr-ov2{grid-template-columns:minmax(0,1fr)}}
 `;

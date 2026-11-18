@@ -1278,6 +1278,14 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
   Un second clic, un clic dans le vide ou « Tout afficher » rend tout visible. Sous le diagramme, la
   légende et trois cartes tirées de la trace : chemin principal, relations à vérifier, lacunes du scan.
   Les animations s'arrêtent si le système demande moins de mouvement.
+- **Diagramme de séquence.** « Séquence » montre le même chemin dans le temps : les étapes de structure
+  qui l'ouvrent (page, composant, conteneurs) en une ligne « où se trouve l'élément », puis une ligne de
+  vie par étape suivante, rangée dans la région de sa couche (un rail pour une couche traversée sans être
+  atteinte), avec sa barre d'activité ; un message par relation, de haut en bas dans l'ordre du chemin,
+  numéroté comme le bandeau, avec son verbe et son niveau de preuve. Un bouton est précédé du clic de
+  l'utilisateur, marqué comme une action et non comme une relation du code. Seuls les appels démontrés
+  sont dessinés : aucune réponse (retour) n'est inventée. Cliquer une ligne de vie ou un message rend son
+  étape active : ses messages s'allument, le reste s'estompe, et « Détails de l'étape » la décrit.
 - **Tableau des liens.** Type, source, cible, statut (confirmé, probable, non démontré) et preuve
   (« Voir le code »), par pages de 25 ; listes de catégorie, de couche, de statut et recherche. Aucune
   relation n'est perdue : tout ce que le graphe agrège est ici, page par page.

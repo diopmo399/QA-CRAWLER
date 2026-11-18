@@ -463,6 +463,83 @@ describe('onglet Parcours & Graphe', () => {
     expect(spot).toContain('class="ar-stage" data-ar data-action="map-j-unspot"');
   });
 
+  it('le diagramme de séquence : une ligne de vie par étape après la structure, un message par relation', () => {
+    const t = traced.trace;
+    const at = (patch: Partial<JourneyState> = {}) =>
+      journeyTab(
+        { ...emptyJourney(), jStyle: 'seq', jMap: traced, jSelect: t?.item ?? '', ...patch },
+        helpers(map.feature.id),
+      ).replaceAll('<wbr>', '');
+    const html = at();
+    expect(html).toContain('<section class="ar sq"');
+    expect(html).toMatch(/data-action="map-j-style" data-style="seq" aria-pressed="true">Séquence</);
+    expect(html).not.toContain('data-action="map-j-mode"');
+    // Les étapes de structure (page, composant, conteneur) : la ligne « où se trouve l'élément ».
+    const where = html.slice(html.indexOf('class="sq-where"'), html.indexOf('class="ar-scroll"'));
+    expect(
+      [...where.matchAll(/class="sq-cr" data-action="map-j-step" data-step="(\d)"/g)].map((m) => m[1]),
+    ).toEqual(['0', '1', '2']);
+    expect(where).toContain('<span>/requests/create</span>');
+    // Une ligne de vie par étape suivante, du bouton à la table, dans les régions des couches atteintes ;
+    // l'utilisateur devant le bouton ; aucun rail au-delà de la dernière couche atteinte.
+    const stage = html.slice(html.indexOf('class="sq-stage"'), html.indexOf('class="ar-legend"'));
+    const lives = [...stage.matchAll(/data-sq-step="(\d+)"/g)].map((m) => Number(m[1]));
+    expect(lives).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect([...stage.matchAll(/class="sq-region" data-lane="(\w+)"/g)].map((m) => m[1])).toEqual([
+      'FRONTEND',
+      'BFF',
+      'BACKEND',
+    ]);
+    expect(stage).not.toContain('sq-rail');
+    expect(stage).toContain('<span class="ar-t">Utilisateur</span>');
+    expect(stage).toMatch(/data-sq-step="3"[^>]*>[^]*?<span class="ar-t">Refuse<\/span>/);
+    // Les messages : le clic (action), puis une relation par étape, numérotée comme le bandeau, avec son verbe.
+    const msgs = [
+      ...stage.matchAll(
+        /class="sq-msg s-(\w+) (r|l)"[^>]*>[^]*?data-step="(\d+)"[^>]*>(?:<b>(\d+)<\/b>)?<span>([^<]*)</g,
+      ),
+    ];
+    expect(msgs.length).toBe(9);
+    expect(msgs[0]?.slice(1)).toEqual(['action', 'r', '3', undefined, 'clic']);
+    expect(msgs.slice(1).map((m) => Number(m[4]))).toEqual([5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(msgs.slice(1).every((m) => ['confirmed', 'probable', 'unknown'].includes(m[1] ?? ''))).toBe(true);
+    expect(msgs[1]?.[5]).toBe('déclenche');
+    // Aucune réponse n'est dessinée : chaque message va vers l'étape suivante (de gauche à droite ici).
+    expect(msgs.every((m) => m[2] === 'r')).toBe(true);
+    expect(html).toContain('les réponses (retours) ne le sont pas');
+    expect(html).toContain('Chemin principal');
+  });
+
+  it('dans la séquence, l’étape cliquée s’allume avec ses messages ; le reste s’estompe', () => {
+    const t = traced.trace;
+    const at = (patch: Partial<JourneyState>) =>
+      journeyTab(
+        { ...emptyJourney(), jStyle: 'seq', jMap: traced, jSelect: t?.item ?? '', ...patch },
+        helpers(map.feature.id),
+      );
+    const life = (html: string, i: number) =>
+      new RegExp(`class="sq-p ar-box ([^"]*)" data-action="map-j-spot" data-step="${String(i)}"`).exec(
+        html,
+      )?.[1] ?? '';
+    const spot = at({ jStep: 5, jSpot: true });
+    expect(life(spot, 5)).toMatch(/ sel$/);
+    expect(life(spot, 4)).toMatch(/ near$/);
+    expect(life(spot, 6)).toMatch(/ near$/);
+    expect(life(spot, 9)).toMatch(/ dim$/);
+    const states = [...spot.matchAll(/class="sq-msg s-\w+ [rl]( on| off)( sel)?"/g)].map(
+      (m) => `${m[1] ?? ''}${m[2] ?? ''}`,
+    );
+    expect(states).toEqual([' off', ' off', ' on sel', ' on', ' off', ' off', ' off', ' off', ' off']);
+    expect(spot).toContain('class="sq-stage" data-sq data-action="map-j-unspot"');
+    // Le message mène à son étape : le cliquer la rend active.
+    expect(spot).toMatch(/<button class="sq-lab" data-action="map-j-spot" data-step="5"/);
+    // Sans mise en avant, ou sur une étape de structure (hors des lignes de vie), rien n'est estompé.
+    expect(at({ jStep: 5 })).not.toMatch(/class="sq-msg [^"]* off"/);
+    const structure = at({ jStep: 1, jSpot: true });
+    expect(structure).not.toMatch(/class="sq-p ar-box [^"]* dim"/);
+    expect(structure).not.toMatch(/class="sq-msg [^"]* off"/);
+  });
+
   it('le tableau des liens montre la page demandée avec la preuve de chaque relation', () => {
     const html = render();
     expect(count(html, '<tr')).toBeGreaterThanOrEqual(map.relations.items.length);

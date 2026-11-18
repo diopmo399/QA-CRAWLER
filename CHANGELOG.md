@@ -4,7 +4,7 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
-### Cartographie : parcours en diagramme d'architecture
+### Cartographie : parcours en diagrammes d'architecture et de séquence
 
 - Le parcours de l'élément choisi s'affiche par défaut en diagramme d'architecture (« Architecture ») ; les
   couloirs restent un clic plus loin (« Couloirs »). Une région par couche atteinte, un rail titré pour une
@@ -19,6 +19,12 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
   le vide ou « Tout afficher » rend tout visible.
 - Sous le diagramme : la légende, et trois cartes tirées de la trace (chemin principal, relations à vérifier,
   lacunes du scan). Le diagramme s'ajuste à la largeur à sa première apparition.
+- Présentation « Séquence » : les étapes de structure (page, composant, conteneurs) en une ligne « où se
+  trouve l'élément », puis une ligne de vie par étape du chemin principal, dans la région de sa couche, avec
+  sa barre d'activité ; un message par relation, de haut en bas, numéroté comme le bandeau, avec son verbe et
+  son niveau de preuve ; le clic de l'utilisateur devant un bouton (une action, pas une relation du code).
+  Aucune réponse n'est dessinée : le scan ne les démontre pas. Cliquer une ligne de vie ou un message rend
+  son étape active : ses messages s'allument, le reste s'estompe.
 
 ### Cartographie : affichage de « Parcours & Graphe »
 
