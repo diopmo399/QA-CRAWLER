@@ -656,7 +656,7 @@ export class CartographyController {
   private fitJourney(auto = false, scroll = auto): void {
     const canvas = this.host.root.querySelector<HTMLElement>('[data-jr-canvas]');
     // Les couloirs, ou le diagramme d'architecture du parcours.
-    const lanes = canvas?.querySelector<HTMLElement>('.jr-lanes, .ar-stage, .sq-stage');
+    const lanes = canvas?.querySelector<HTMLElement>('.jr-lanes, .ar-stage, .sq-stage, .dg-stage');
     if (!canvas || !lanes) return;
     // La taille à 100 % : l'échelle (CSS zoom) réduit la mise en page, on la retire de la mesure.
     const zoom = this.ui.jZoom || 1;
@@ -742,6 +742,7 @@ export class CartographyController {
         // Un élément choisi : son parcours guidé, le chemin principal seul, l'étape de l'élément active.
         ui.jStep = undefined;
         ui.jSpot = false;
+        ui.jSpotId = undefined;
         ui.jMode = 'main';
         ui.jBottom = same ? 'links' : 'step';
         this.reloadJourney();
@@ -752,6 +753,7 @@ export class CartographyController {
         const step = Number(target.dataset.step);
         if (!Number.isInteger(step) || step < 0) return true;
         ui.jStep = step;
+        ui.jSpotId = undefined;
         ui.jBottom = 'step';
         this.host.paint();
         const item = target.dataset.item;
@@ -763,9 +765,18 @@ export class CartographyController {
       }
       case 'map-j-spot': {
         // Une boîte du diagramme : son étape devient active et mise en avant ; la recliquer rend tout visible.
+        // Hors du chemin principal (branche, décision) : le nœud est mis en avant, l'étape active ne change pas.
+        const spot = target.dataset.spot;
+        if (spot) {
+          ui.jSpot = !(ui.jSpot && ui.jSpotId === spot);
+          ui.jSpotId = ui.jSpot ? spot : undefined;
+          this.host.paint();
+          return true;
+        }
         const step = Number(target.dataset.step);
         if (!Number.isInteger(step) || step < 0) return true;
-        ui.jSpot = !(ui.jSpot && ui.jStep === step);
+        ui.jSpot = !(ui.jSpot && ui.jSpotId === undefined && ui.jStep === step);
+        ui.jSpotId = undefined;
         ui.jStep = step;
         ui.jBottom = 'step';
         this.host.paint();
@@ -774,12 +785,14 @@ export class CartographyController {
       case 'map-j-unspot':
         if (!ui.jSpot) return true;
         ui.jSpot = false;
+        ui.jSpotId = undefined;
         this.host.paint();
         return true;
       case 'map-j-style': {
         const style = target.dataset.style as JourneyStyle;
         if (JOURNEY_STYLES.includes(style)) ui.jStyle = style;
         ui.jSpot = false;
+        ui.jSpotId = undefined;
         this.host.paint();
         setTimeout(() => {
           this.fitJourney(true);
@@ -812,6 +825,7 @@ export class CartographyController {
         ui.jSelect = undefined;
         ui.jStep = undefined;
         ui.jSpot = false;
+        ui.jSpotId = undefined;
         ui.jOpen = [];
         ui.jClosed = [];
         query({ item: undefined, category: undefined, lane: undefined });
@@ -1085,7 +1099,11 @@ export class CartographyController {
     // Le diagramme d'architecture ou de séquence d'un élément est ajusté à la largeur à sa première
     // apparition (sans faire défiler la page), comme les couloirs à l'ouverture de la fonctionnalité.
     const selected = this.ui.jSelect;
-    if (selected && this.archFitted !== selected && this.host.root.querySelector('.ar-stage, .sq-stage')) {
+    if (
+      selected &&
+      this.archFitted !== selected &&
+      this.host.root.querySelector('.ar-stage, .sq-stage, .dg-stage')
+    ) {
       this.archFitted = selected;
       setTimeout(() => {
         this.fitJourney(true, false);

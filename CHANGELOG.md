@@ -4,6 +4,21 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : parcours en workflow et en flux de données, flèches Archify
+
+- Deux nouvelles présentations du parcours : « Workflow » (toute la trace aval en arbre, du clic à la
+  table ; les gardes du code deviennent des losanges de décision, seule la branche démontrée « vrai » est
+  dessinée) et « Data flow » (les étapes en colonnes source, état, transport, traitement, stockage, externe,
+  affichage ; une lecture va de la table vers qui la lit). Mises en page au rendu, cliquables : une étape ou
+  une décision allume ses entrées et sorties, une branche hors du chemin se met en avant sans changer
+  l'étape active.
+- Les flèches de l'architecture et des nouveaux diagrammes suivent Archify : tracé à angle droit, pointe
+  10 × 7, chemin démontré en vert parcouru d'une comète, probable ou asynchrone en tirets violets, non
+  démontré en pointillés gris ; étiquettes sur fond plein au milieu du segment central. Espacement Archify
+  (80 px) entre régions et entre boîtes de l'architecture.
+- La trace porte la garde de code (`condition`) et le moment asynchrone (`async`) d'une relation quand le
+  scan les a lus (`FeatureMapRelation`, `FeatureTraceStep.via`).
+
 ### Cartographie : parcours en diagrammes d'architecture et de séquence
 
 - Le parcours de l'élément choisi s'affiche par défaut en diagramme d'architecture (« Architecture ») ; les

@@ -1272,8 +1272,9 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
   couche atteinte (un rail « non atteint » pour les autres), une boîte par étape du chemin principal,
   numérotée comme dans le bandeau et teintée par couche (persistance en violet, actions NgRx en orange),
   rangée en U sur deux colonnes au-delà de cinq étapes. Les flèches sont tracées d'après la place réelle
-  des boîtes : trait plein parcouru d'impulsions (confirmée), tirets (probable), pointillés (non
-  démontrée), avec le verbe aux passages de couche. Cliquer une boîte rend son étape active et la met en
+  des boîtes, à angle droit comme dans Archify (80 px entre régions et entre boîtes) : trait vert parcouru
+  d'une comète (confirmée), tirets violets (probable), pointillés gris (non démontrée), avec le verbe aux
+  passages de couche, sur un fond plein. Cliquer une boîte rend son étape active et la met en
   avant avec ses deux voisines ; le reste s'estompe et son détail s'affiche dans « Détails de l'étape ».
   Un second clic, un clic dans le vide ou « Tout afficher » rend tout visible. Sous le diagramme, la
   légende et trois cartes tirées de la trace : chemin principal, relations à vérifier, lacunes du scan.
@@ -1286,6 +1287,22 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
   l'utilisateur, marqué comme une action et non comme une relation du code. Seuls les appels démontrés
   sont dessinés : aucune réponse (retour) n'est inventée. Cliquer une ligne de vie ou un message rend son
   étape active : ses messages s'allument, le reste s'estompe, et « Détails de l'étape » la décrit.
+- **Workflow.** « Workflow » déroule toute la trace aval de l'élément en arbre de gauche à droite : le clic
+  de l'utilisateur (pour un bouton), puis une colonne par profondeur, le chemin principal sur la première
+  rangée et les branches dessous. Les étapes atteintes sous une même garde du code (lue par le scan, par
+  ex. `this.etat.value.valide`) passent par un losange de décision ; seule la branche démontrée (« vrai »)
+  est dessinée, la branche contraire n'est jamais inventée. Flèches : chemin principal en vert avec sa
+  comète, branche en ardoise, asynchrone (après `await` ou `subscribe`) ou probable en tirets violets, non
+  démontré en pointillés. Cliquer une étape ou une décision allume ses entrées et sorties ; une branche
+  hors du chemin principal se met en avant sans changer l'étape active.
+- **Data flow.** « Data flow » range les mêmes étapes en colonnes par rôle — source, état (stores),
+  transport (services HTTP, endpoints), traitement (contrôleurs, services, règles), stockage (dépôts,
+  tables), externe, affichage (une interface atteinte après un store) — et dessine chaque relation dans le
+  sens des données : une lecture part de la table vers qui la lit, une écriture ou un envoi va vers sa
+  cible. Une branche garde sa rangée en traversant les colonnes ; le verbe est écrit entre deux colonnes.
+- **Garde et moment asynchrone dans la trace.** Une relation (`FeatureMapRelation`) et l'étape qu'elle
+  atteint (`FeatureTraceStep.via`) portent, quand le scan les a lus, `condition` (la garde de code) et
+  `async` (le moment asynchrone) ; absents sinon.
 - **Tableau des liens.** Type, source, cible, statut (confirmé, probable, non démontré) et preuve
   (« Voir le code »), par pages de 25 ; listes de catégorie, de couche, de statut et recherche. Aucune
   relation n'est perdue : tout ce que le graphe agrège est ici, page par page.

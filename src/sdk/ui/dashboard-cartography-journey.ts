@@ -17,6 +17,14 @@ import type {
   MapConfidence,
 } from '../core/cartography.js';
 import { FEATURE_CATEGORIES, FEATURE_LANES, traceMainPath, traceSteps } from '../core/cartography.js';
+import {
+  ARROW_CSS,
+  type ArrowRole,
+  arrowMarkers,
+  arrowSvg,
+  orthPath,
+  type Pt,
+} from './dashboard-cartography-arrows.js';
 import { icon } from './dashboard-parts.js';
 import { esc } from './view.js';
 
@@ -48,7 +56,7 @@ export type JourneyBottom = (typeof JOURNEY_BOTTOMS)[number];
 export const JOURNEY_MODES = ['main', 'alt', 'full'] as const;
 export type JourneyMode = (typeof JOURNEY_MODES)[number];
 /** La présentation du parcours de l'élément choisi : diagramme d'architecture, de séquence, ou couloirs. */
-export const JOURNEY_STYLES = ['archi', 'seq', 'lanes'] as const;
+export const JOURNEY_STYLES = ['archi', 'flow', 'seq', 'data', 'lanes'] as const;
 export type JourneyStyle = (typeof JOURNEY_STYLES)[number];
 
 export interface JourneyState {
@@ -75,6 +83,8 @@ export interface JourneyState {
   jStyle: JourneyStyle;
   /** Dans le diagramme : l'étape active est mise en avant avec ses voisines, le reste s'estompe. */
   jSpot: boolean;
+  /** Le nœud mis en avant hors du chemin principal (branche, décision), dans le workflow et le flux. */
+  jSpotId?: string;
 }
 
 export const emptyJourney = (): JourneyState => ({
@@ -411,6 +421,46 @@ const FR = {
   noFlow: 'Aucun flux de données démontré.',
   gapsTitle: 'Ce que le scan ne démontre pas',
   noGaps: 'Aucune lacune relevée pour cette fonctionnalité.',
+  flow: {
+    title: (name: string) => `Workflow du parcours de ${name}`,
+    hint: 'Cliquez une étape ou une décision : ses entrées et sorties s’allument, le reste s’estompe.',
+    start: 'Clic',
+    startSub: 'utilisateur',
+    decision: 'Décision',
+    decisionSub: 'garde du code',
+    yes: 'vrai',
+    joins: (n: number) => `rejoint l’étape ${String(n)}`,
+    legend: {
+      main: 'Chemin principal',
+      branch: 'Branche',
+      async: 'Asynchrone (après une réponse)',
+      probable: 'Probable',
+      gap: 'Non démontré',
+      decision: 'Décision (garde du code)',
+    },
+    note: 'Les décisions sont les gardes lues dans le code ; seule la branche démontrée (« vrai ») est dessinée.',
+  },
+  data: {
+    title: (name: string) => `Flux de données du parcours de ${name}`,
+    hint: 'Cliquez un nœud : les données qui y entrent et en sortent s’allument, le reste s’estompe.',
+    stages: {
+      src: 'Source',
+      state: 'État',
+      transport: 'Transport',
+      proc: 'Traitement',
+      store: 'Stockage',
+      ext: 'Externe',
+      cons: 'Affichage',
+    },
+    legend: {
+      write: 'Envoi / écriture',
+      read: 'Lecture',
+      async: 'Asynchrone',
+      probable: 'Probable',
+      gap: 'Non démontré',
+    },
+    note: 'Les étapes du parcours rangées par rôle dans le flux ; une lecture est dessinée de la table vers qui la lit.',
+  },
   seq: {
     title: (name: string) => `Séquence du parcours de ${name}`,
     hint: 'Cliquez une ligne de vie ou un message : son étape s’allume avec ses messages, le reste s’estompe.',
@@ -424,10 +474,13 @@ const FR = {
       'Seuls les appels démontrés par le scan sont dessinés, dans l’ordre déduit du code : les réponses (retours) ne le sont pas.',
   },
   arch: {
-    styles: { archi: 'Architecture', seq: 'Séquence', lanes: 'Couloirs' } satisfies Record<
-      JourneyStyle,
-      string
-    >,
+    styles: {
+      archi: 'Architecture',
+      flow: 'Workflow',
+      seq: 'Séquence',
+      data: 'Data flow',
+      lanes: 'Couloirs',
+    } satisfies Record<JourneyStyle, string>,
     styleLabel: 'Présentation du parcours',
     title: (name: string) => `Architecture du parcours de ${name}`,
     hint: 'Cliquez une boîte : ses liens s’allument, le reste s’estompe et son détail s’affiche sous le graphe.',
@@ -749,6 +802,46 @@ const EN: JourneyStrings = {
   noFlow: 'No data flow demonstrated.',
   gapsTitle: 'What the scan does not demonstrate',
   noGaps: 'No gap found for this feature.',
+  flow: {
+    title: (name) => `Workflow of the journey of ${name}`,
+    hint: 'Click a step or a decision: its inputs and outputs light up, the rest fades.',
+    start: 'Click',
+    startSub: 'user',
+    decision: 'Decision',
+    decisionSub: 'code guard',
+    yes: 'true',
+    joins: (n) => `joins step ${String(n)}`,
+    legend: {
+      main: 'Main path',
+      branch: 'Branch',
+      async: 'Asynchronous (after a response)',
+      probable: 'Probable',
+      gap: 'Not demonstrated',
+      decision: 'Decision (code guard)',
+    },
+    note: 'Decisions are the guards read in the code; only the demonstrated branch (“true”) is drawn.',
+  },
+  data: {
+    title: (name) => `Data flow of the journey of ${name}`,
+    hint: 'Click a node: the data flowing in and out lights up, the rest fades.',
+    stages: {
+      src: 'Source',
+      state: 'State',
+      transport: 'Transport',
+      proc: 'Processing',
+      store: 'Storage',
+      ext: 'External',
+      cons: 'Display',
+    },
+    legend: {
+      write: 'Send / write',
+      read: 'Read',
+      async: 'Asynchronous',
+      probable: 'Probable',
+      gap: 'Not demonstrated',
+    },
+    note: 'The journey steps arranged by role in the flow; a read is drawn from the table to its reader.',
+  },
   seq: {
     title: (name) => `Sequence of the journey of ${name}`,
     hint: 'Click a lifeline or a message: its step lights up with its messages, the rest fades.',
@@ -762,7 +855,7 @@ const EN: JourneyStrings = {
       'Only the calls demonstrated by the scan are drawn, in the order inferred from the code: responses (returns) are not.',
   },
   arch: {
-    styles: { archi: 'Architecture', seq: 'Sequence', lanes: 'Lanes' },
+    styles: { archi: 'Architecture', flow: 'Workflow', seq: 'Sequence', data: 'Data flow', lanes: 'Lanes' },
     styleLabel: 'Journey layout',
     title: (name) => `Architecture of the journey of ${name}`,
     hint: 'Click a box: its links light up, the rest fades and its detail shows below the graph.',
@@ -1335,7 +1428,15 @@ function archDiagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: Pa
     .map((l) => swatch(`t-${laneTone(l)}`, s.lanes[l][0]))
     .join(
       '',
-    )}${main.some((x) => archTone(x) === 'bus') ? swatch('t-bus', a.legendBus) : ''}${main.some((x) => archTone(x) === 'db') ? swatch('t-db', a.legendDb) : ''}${(['CONFIRMED', 'PROBABLE', 'UNKNOWN'] as const).map((c) => swatch(`ln s-${c.toLowerCase()}`, a.legend[c])).join('')}</div>`;
+    )}${main.some((x) => archTone(x) === 'bus') ? swatch('t-bus', a.legendBus) : ''}${main.some((x) => archTone(x) === 'db') ? swatch('t-db', a.legendDb) : ''}${(
+    [
+      ['CONFIRMED', 'emphasis'],
+      ['PROBABLE', 'dashed'],
+      ['UNKNOWN', 'gap'],
+    ] as const
+  )
+    .map(([c, r]) => swatch(`ln r-${r}`, a.legend[c]))
+    .join('')}</div>`;
   return `<section class="ar" aria-label="${esc(a.title(shownName(main[p.upLen]?.name ?? '', main[p.upLen]?.nature)))}">${head}<div class="ar-scroll">${stage}</div>${legend}${archCards(s, map, p)}</section>`;
 }
 
@@ -1535,6 +1636,499 @@ function seqDiagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: Pat
   return `<section class="ar sq" aria-label="${esc(q.title(shownName(name?.name ?? '', name?.nature)))}">${head}${where}<div class="ar-scroll">${stage}</div>${legend}<p class="sq-note">${esc(q.noReturn)}</p>${archCards(s, map, p)}</section>`;
 }
 
+// ── Workflow et flux de données du parcours (mis en page au rendu) ───────────────────────────────────
+
+/** Un nœud des diagrammes calculés : une étape de la trace, une décision (garde du code) ou le départ. */
+interface DgNode {
+  /** L'identifiant de mise en avant : celui de l'étape, `dec:…` pour une décision, `start` pour le clic. */
+  id: string;
+  kind: 'step' | 'dec' | 'start';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  step?: FeatureTraceStep;
+  cond?: string;
+}
+
+/** Une flèche des diagrammes calculés, dans le sens où l'on la lit (`from` → `to`). */
+interface DgEdge {
+  from: string;
+  to: string;
+  role: ArrowRole;
+  label?: string;
+  /** Le coude imposé (abscisse) ; sinon au milieu. */
+  c?: number;
+  /** Où partent et arrivent la flèche sur les boîtes. */
+  sides: 'rl' | 'lr' | 'rr' | 'bt';
+}
+
+/** L'élément mis en avant : l'étape active (sur le chemin) ou le nœud cliqué hors du chemin. */
+const spotOf = (st: JourneyState, p: PathInfo): string | undefined =>
+  st.jSpot ? (st.jSpotId ?? p.main[p.active]?.id) : undefined;
+
+/** La classe d'une flèche d'après la relation : non démontrée, probable ou asynchrone, chemin, branche. */
+function roleOf(via: FeatureTraceStep['via'], main: boolean, async = true): ArrowRole {
+  if (!via) return 'default';
+  if (via.status === 'UNKNOWN') return 'gap';
+  if (via.status === 'PROBABLE' || (async && via.async)) return 'dashed';
+  return main ? 'emphasis' : 'default';
+}
+
+/** Le libellé court d'une garde dans son losange : sa dernière propriété (« valide ? »), sinon tronqué. */
+function shortCondition(cond: string): string {
+  const c = cond.replace(/^!?this\./, '').trim();
+  const last = /^[\w$.]+$/.test(c) ? (c.split('.').pop() ?? c) : c;
+  const neg = cond.trim().startsWith('!') ? '!' : '';
+  const text = `${neg}${last}`;
+  return `${text.length > 18 ? `${text.slice(0, 17)}…` : text} ?`;
+}
+
+/**
+ * Le rendu commun des diagrammes calculés : le fond quadrillé à la taille du contenu, les flèches (tracé
+ * orthogonal, comète sur le chemin démontré), leurs étiquettes et les nœuds cliquables. Le nœud mis en
+ * avant s'allume avec ses voisins (à travers une décision) ; le reste s'estompe.
+ */
+function dgStage(
+  s: JourneyStrings,
+  st: JourneyState,
+  p: PathInfo,
+  kind: 'flow' | 'data',
+  nodes: DgNode[],
+  edges: DgEdge[],
+  extra = '',
+): string {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const spot = spotOf(st, p);
+  const lit = new Set<DgEdge>();
+  const near = new Set<string>();
+  if (spot) {
+    const touch = (id: string): void => {
+      for (const e of edges)
+        if (e.from === id || e.to === id) {
+          lit.add(e);
+          const other = e.from === id ? e.to : e.from;
+          if (!near.has(other) && other !== spot) {
+            near.add(other);
+            if (byId.get(other)?.kind === 'dec') touch(other);
+          }
+        }
+    };
+    touch(spot);
+  }
+  const width = Math.max(...nodes.map((n) => n.x + n.w)) + 24;
+  const height = Math.max(...nodes.map((n) => n.y + n.h)) + 24;
+  const state = (id: string): string =>
+    !spot
+      ? id === p.main[p.active]?.id
+        ? ' cur'
+        : ''
+      : id === spot
+        ? ' sel'
+        : near.has(id)
+          ? ' near'
+          : ' dim';
+  const prefix = `dg-${kind}`;
+  let comet = 0;
+  const labels: string[] = [];
+  const arrows = edges
+    .map((e) => {
+      const a = byId.get(e.from);
+      const b = byId.get(e.to);
+      if (!a || !b) return '';
+      const ya = a.y + a.h / 2;
+      const yb = b.y + b.h / 2;
+      const { d, mid } =
+        e.sides === 'bt'
+          ? orthPath({ x: a.x + a.w / 2, y: a.y + a.h }, { x: b.x + b.w / 2, y: b.y - 1 }, 'v')
+          : orthPath(
+              { x: e.sides === 'lr' ? a.x : a.x + a.w, y: ya },
+              { x: e.sides === 'rl' ? b.x - 1 : b.x + b.w + 1, y: yb },
+              'h',
+              e.c,
+            );
+      const on = spot ? (lit.has(e) ? 'on' : 'off') : undefined;
+      if (e.label)
+        labels.push(
+          `<span class="dg-lb r-${e.role}${on ? ` ${on}` : ''}" style="left:${String(Math.round(mid.x))}px;top:${String(Math.round(mid.y))}px">${esc(e.label)}</span>`,
+        );
+      return arrowSvg(prefix, {
+        d,
+        role: e.role,
+        ...(on ? { state: on } : {}),
+        ...(e.role === 'emphasis' ? { comet: comet++ } : {}),
+        data: ` data-from="${esc(e.from)}" data-to="${esc(e.to)}"`,
+      });
+    })
+    .join('');
+  const box = (n: DgNode): string => {
+    const place = `left:${String(n.x)}px;top:${String(n.y)}px;width:${String(n.w)}px;height:${String(n.h)}px`;
+    if (n.kind === 'start')
+      return `<span class="dg-n ar-box t-ext dg-pill${spot ? (near.has(n.id) ? ' near' : ' dim') : ''}" data-dg="start" style="${place}"><span class="ar-t">${esc(s.flow.start)}</span><span class="ar-s">${esc(s.flow.startSub)}</span></span>`;
+    if (n.kind === 'dec')
+      return `<button class="dg-n dg-dec${state(n.id)}" data-action="map-j-spot" data-spot="${esc(n.id)}" data-dg="${esc(n.id)}" style="${place}" aria-pressed="${String(spot === n.id)}" title="${esc(`${s.flow.decision} · ${n.cond ?? ''}`)}"><span class="dg-dsh" aria-hidden="true"></span><span class="ar-t">${esc(shortCondition(n.cond ?? ''))}</span></button>`;
+    const x = n.step;
+    if (!x) return '';
+    const i = p.main.findIndex((m) => m.id === x.id);
+    const kindText = kindLabel(s, x.group, x.nature);
+    const joins = x.end === 'JOIN' && x.joins ? p.steps.get(x.joins) : undefined;
+    const target = i >= 0 ? `data-step="${String(i)}"` : `data-spot="${esc(x.id)}"`;
+    return `<button class="dg-n ar-box t-${archTone(x)}${state(x.id)}${x.end === 'STOP' ? ' stop' : ''}" data-action="map-j-spot" ${target} data-item="${esc(x.id)}" data-dg="${esc(x.id)}" style="${place}" aria-pressed="${String(spot === x.id)}" title="${esc(`${s.lanes[x.lane][0]} · ${kindText}${x.sub ? ` — ${x.sub}` : ''}${x.via?.condition ? ` · ${x.via.condition}` : ''}${x.via?.async ? ` · ${x.via.async}` : ''}`)}">${stepBadge(s, p.steps.get(x.id), x.end)}<span class="ar-t">${wb(shownName(x.name, x.nature))}</span><span class="ar-s">${esc(joins === undefined ? kindText : s.flow.joins(joins))}</span></button>`;
+  };
+  return `<div class="dg-stage dg-${kind}" data-dg-stage data-action="map-j-unspot" style="zoom:${String(st.jZoom)};width:${String(width)}px;height:${String(height)}px">${extra}<svg class="dg-links" width="${String(width)}" height="${String(height)}" viewBox="0 0 ${String(width)} ${String(height)}" aria-hidden="true" focusable="false">${arrowMarkers(prefix)}${arrows}</svg>${labels.join('')}${nodes.map(box).join('')}</div>`;
+}
+
+/** La ligne « où se trouve l'élément » : les étapes de structure qui ouvrent le chemin, cliquables. */
+function whereBar(s: JourneyStrings, p: PathInfo, upTo: number): string {
+  if (upTo <= 0) return '';
+  return `<div class="sq-where"><span>${esc(s.seq.where)} :</span>${p.main
+    .slice(0, upTo)
+    .map(
+      (x0, i) =>
+        `<button class="sq-cr" data-action="map-j-step" data-step="${String(i)}" data-item="${esc(x0.id)}">${stepBadge(s, p.steps.get(x0.id), x0.end)}<span>${wb(shownName(x0.name, x0.nature))}</span></button>`,
+    )
+    .join('<i aria-hidden="true">›</i>')}</div>`;
+}
+
+/** La légende d'un diagramme calculé : les couches présentes et les classes de flèche employées. */
+function dgLegend(
+  s: JourneyStrings,
+  shown: readonly FeatureTraceStep[],
+  roles: ReadonlyMap<ArrowRole, string>,
+  extra = '',
+): string {
+  const swatch = (cls: string, label: string): string =>
+    `<span><i class="ar-sw ${cls}" aria-hidden="true"></i>${esc(label)}</span>`;
+  const tones = FEATURE_LANES.filter((l) => shown.some((x) => x.lane === l))
+    .map((l) => swatch(`t-${laneTone(l)}`, s.lanes[l][0]))
+    .join('');
+  const bus = shown.some((x) => archTone(x) === 'bus') ? swatch('t-bus', s.arch.legendBus) : '';
+  const db = shown.some((x) => archTone(x) === 'db') ? swatch('t-db', s.arch.legendDb) : '';
+  const lines = [...roles].map(([r, label]) => swatch(`ln r-${r}`, label)).join('');
+  return `<div class="ar-legend" aria-label="${esc(s.arch.legendTitle)}">${tones}${bus}${db}${extra}${lines}</div>`;
+}
+
+/** Largeur et hauteur d'une étape, écarts entre colonnes et rangées, taille d'une décision (Workflow). */
+const FLOW_W = 156;
+const FLOW_H = 72;
+const FLOW_GX = 48;
+const FLOW_GY = 26;
+const FLOW_DEC = 72;
+const DG_PAD = 24;
+
+/** Un nœud de l'arbre du workflow, avant sa mise en place. */
+interface FlowTree {
+  id: string;
+  kind: 'step' | 'dec' | 'start';
+  step?: FeatureTraceStep;
+  cond?: string;
+  children: FlowTree[];
+  col: number;
+  row: number;
+}
+
+/**
+ * Le parcours de l'élément choisi en workflow : du clic (pour un bouton) à chaque étape aval de la trace,
+ * en arbre de gauche à droite — une colonne par profondeur, le chemin principal sur la première rangée,
+ * les branches dessous. Les étapes atteintes sous une même garde du code passent par un losange de
+ * décision ; seule la branche démontrée (« vrai ») est dessinée. Flèches : chemin principal en vert (comète),
+ * branches en ardoise, asynchrone ou probable en tirets violets, non démontré en pointillés.
+ */
+function flowDiagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathInfo): string {
+  const t = map.trace;
+  const q = s.flow;
+  const root = t?.down.find((x) => x.id === t.item);
+  if (!t || !root) return '';
+  const kids = new Map<string, FeatureTraceStep[]>();
+  for (const x of t.down)
+    if (x.parent && x.id !== t.item) kids.set(x.parent, [...(kids.get(x.parent) ?? []), x]);
+  const seen = new Set<string>();
+  const build = (x: FeatureTraceStep): FlowTree => {
+    seen.add(x.id);
+    const children: FlowTree[] = [];
+    const groups = new Map<string, FlowTree>();
+    // L'étape du chemin principal d'abord (sa branche reste droite), puis les autres dans l'ordre de la trace.
+    const list = [...(kids.get(x.id) ?? [])]
+      .filter((c) => !seen.has(c.id))
+      .sort((a, b) => Number(!p.mainIds.has(a.id)) - Number(!p.mainIds.has(b.id)));
+    for (const c of list) {
+      const cond = c.via?.condition;
+      const node = build(c);
+      if (!cond) {
+        children.push(node);
+        continue;
+      }
+      let g = groups.get(cond);
+      if (!g) {
+        g = { id: `dec:${x.id}:${String(groups.size)}`, kind: 'dec', cond, children: [], col: 0, row: 0 };
+        groups.set(cond, g);
+        children.push(g);
+      }
+      g.children.push(node);
+    }
+    return { id: x.id, kind: 'step', step: x, children, col: 0, row: 0 };
+  };
+  const tree = build(root);
+  const actor = root.group === 'BUTTON';
+  const top: FlowTree = actor ? { id: 'start', kind: 'start', children: [tree], col: 0, row: 0 } : tree;
+  let rows = 0;
+  const place = (n: FlowTree, col: number): void => {
+    n.col = col;
+    if (n.children.length === 0) {
+      n.row = rows++;
+      return;
+    }
+    for (const c of n.children) place(c, col + 1);
+    n.row = n.children[0]?.row ?? 0;
+  };
+  place(top, 0);
+  const nodes: DgNode[] = [];
+  const edges: DgEdge[] = [];
+  const walk = (n: FlowTree, parent?: FlowTree): void => {
+    const x0 = DG_PAD + n.col * (FLOW_W + FLOW_GX);
+    const y0 = DG_PAD + n.row * (FLOW_H + FLOW_GY);
+    if (n.kind === 'dec')
+      nodes.push({
+        id: n.id,
+        kind: 'dec',
+        x: x0 + (FLOW_W - FLOW_DEC) / 2,
+        y: y0 + (FLOW_H - FLOW_DEC) / 2,
+        w: FLOW_DEC,
+        h: FLOW_DEC,
+        ...(n.cond ? { cond: n.cond } : {}),
+      });
+    else if (n.kind === 'start')
+      nodes.push({ id: n.id, kind: 'start', x: x0 + 20, y: y0 + 8, w: FLOW_W - 40, h: FLOW_H - 16 });
+    else
+      nodes.push({
+        id: n.id,
+        kind: 'step',
+        x: x0,
+        y: y0,
+        w: FLOW_W,
+        h: FLOW_H,
+        ...(n.step ? { step: n.step } : {}),
+      });
+    if (parent) {
+      const c = DG_PAD + parent.col * (FLOW_W + FLOW_GX) + FLOW_W + FLOW_GX / 2;
+      const step = n.step;
+      // Vers une décision : la relation de sa première étape (le chemin principal s'il y passe).
+      const via = n.kind === 'dec' ? n.children[0]?.step?.via : step?.via;
+      const main =
+        n.kind === 'dec'
+          ? n.children.some((k) => k.step && p.mainIds.has(k.step.id))
+          : step
+            ? p.mainIds.has(step.id)
+            : false;
+      const role: ArrowRole =
+        parent.kind === 'start'
+          ? 'emphasis'
+          : roleOf(
+              via,
+              main && p.mainIds.has(parent.step?.id ?? parent.children[0]?.step?.id ?? ''),
+              parent.kind !== 'dec',
+            );
+      edges.push({
+        from: parent.id,
+        to: n.id,
+        role,
+        c,
+        sides: 'rl',
+        ...(parent.kind === 'dec' ? { label: q.yes } : {}),
+      });
+    }
+    for (const k of n.children) walk(k, n);
+  };
+  walk(top);
+  const shown = nodes.flatMap((n) => (n.step ? [n.step] : []));
+  const used = new Set(edges.map((e) => e.role));
+  const roleLabels = new Map<ArrowRole, string>(
+    (
+      [
+        ['emphasis', q.legend.main],
+        ['default', q.legend.branch],
+        ['dashed', `${q.legend.async} · ${q.legend.probable}`],
+        ['gap', q.legend.gap],
+      ] as const
+    ).filter(([r]) => used.has(r)),
+  );
+  const dec = nodes.some((n) => n.kind === 'dec')
+    ? `<span><i class="ar-sw dg-sw-dec" aria-hidden="true"></i>${esc(q.legend.decision)}</span>`
+    : '';
+  const head = `<div class="ar-head"><span class="ar-pulse" aria-hidden="true"></span><p>${esc(q.hint)}</p><button class="btn small" data-action="map-j-unspot"${st.jSpot ? '' : ' disabled'}>${esc(s.arch.showAll)}</button></div>`;
+  const name = p.main[p.upLen];
+  return `<section class="ar dg" aria-label="${esc(q.title(shownName(name?.name ?? '', name?.nature)))}">${head}${whereBar(s, p, p.upLen)}<div class="ar-scroll">${dgStage(s, st, p, 'flow', nodes, edges)}</div>${dgLegend(s, shown, roleLabels, dec)}<p class="sq-note">${esc(q.note)}</p>${archCards(s, map, p)}</section>`;
+}
+
+/** Les étapes d'un flux de données, de la source à l'affichage. */
+const DATA_STAGES = ['src', 'state', 'transport', 'proc', 'store', 'ext', 'cons'] as const;
+type DataStage = (typeof DATA_STAGES)[number];
+const DATA_W = 150;
+const DATA_H = 72;
+const DATA_GX = 96;
+const DATA_GY = 44;
+const DATA_HEAD = 30;
+
+/** Le rôle d'une étape dans le flux : d'après son groupe ; une interface atteinte après un store affiche. */
+function stageOf(x: FeatureTraceStep, afterStore: boolean): DataStage {
+  switch (x.group) {
+    case 'STORE':
+      return 'state';
+    case 'SPA_SERVICE':
+    case 'ENDPOINT':
+    case 'CONTRACT':
+    case 'DTO':
+    case 'MODEL':
+    case 'CLIENT':
+    case 'EXTERNAL_CALL':
+      return 'transport';
+    case 'CONTROLLER':
+    case 'SERVICE':
+    case 'RULE':
+    case 'METHOD':
+      return 'proc';
+    case 'REPOSITORY':
+    case 'ENTITY':
+      return 'store';
+    case 'EXTERNAL_SERVICE':
+      return 'ext';
+    default:
+      return afterStore ? 'cons' : 'src';
+  }
+}
+
+/**
+ * Le parcours de l'élément choisi en flux de données : les mêmes étapes que la trace, rangées en colonnes
+ * par rôle (source, état, transport, traitement, stockage, externe, affichage). Chaque relation de la trace
+ * est une flèche dans le sens où vont les données : une lecture part de la table vers qui la lit, une
+ * écriture ou un envoi va vers sa cible (vert, comète), une lecture est ardoise, l'asynchrone et le probable
+ * en tirets, le non démontré en pointillés ; le verbe est écrit entre deux colonnes.
+ */
+function dataDiagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathInfo): string {
+  const t = map.trace;
+  const q = s.data;
+  if (!t || t.down.length === 0) return '';
+  const byId = new Map(t.down.map((x) => [x.id, x]));
+  const afterStore = (x: FeatureTraceStep): boolean => {
+    for (
+      let y = x.parent ? byId.get(x.parent) : undefined, k = 0;
+      y && k < 200;
+      y = y.parent ? byId.get(y.parent) : undefined, k++
+    )
+      if (y.group === 'STORE') return true;
+    return false;
+  };
+  const order = (x: FeatureTraceStep): number => p.steps.get(x.id) ?? Number.MAX_SAFE_INTEGER;
+  const steps = [...t.down].sort((a, b) => order(a) - order(b));
+  const stage = new Map(steps.map((x) => [x.id, stageOf(x, x.depth > 0 && afterStore(x))]));
+  const cols = DATA_STAGES.filter((k) => steps.some((x) => stage.get(x.id) === k));
+  const colOf = (id: string): number => cols.indexOf(stage.get(id) ?? 'src');
+  // Mise en place gloutonne, en profondeur, chemin principal d'abord : chaque étape prend la rangée de
+  // celle d'où elle vient (la suivante si elles partagent la colonne), ou la première rangée libre
+  // au-dessous. Une branche reste ainsi sur sa rangée en traversant les colonnes : flèches droites.
+  const kids = new Map<string, FeatureTraceStep[]>();
+  for (const x of steps)
+    if (x.parent && byId.has(x.parent)) kids.set(x.parent, [...(kids.get(x.parent) ?? []), x]);
+  const taken = cols.map(() => new Set<number>());
+  const rowOf = new Map<string, number>();
+  const put = (x: FeatureTraceStep, want: number): void => {
+    if (rowOf.has(x.id)) return;
+    const c = colOf(x.id);
+    const used = taken[c] ?? new Set<number>();
+    let r = want;
+    while (used.has(r)) r++;
+    used.add(r);
+    rowOf.set(x.id, r);
+    const list = [...(kids.get(x.id) ?? [])].sort(
+      (a, b) => Number(!p.mainIds.has(a.id)) - Number(!p.mainIds.has(b.id)),
+    );
+    for (const k of list) put(k, colOf(k.id) === c ? r + 1 : r);
+  };
+  for (const x of steps) if (!x.parent || !byId.has(x.parent)) put(x, 0);
+  const nodes: DgNode[] = steps.map((x) => ({
+    id: x.id,
+    kind: 'step',
+    step: x,
+    x: DG_PAD + colOf(x.id) * (DATA_W + DATA_GX),
+    y: DG_PAD + DATA_HEAD + (rowOf.get(x.id) ?? 0) * (DATA_H + DATA_GY),
+    w: DATA_W,
+    h: DATA_H,
+  }));
+  // Les coudes d'un même intervalle sont décalés par source : deux flèches ne partagent pas leur montant.
+  const lane = new Map<string, number>();
+  const offset = (gap: string, src: string): number => {
+    const key = `${gap}|${src}`;
+    let v = lane.get(key);
+    if (v === undefined) {
+      v = [...lane.keys()].filter((k) => k.startsWith(`${gap}|`)).length;
+      lane.set(key, v);
+    }
+    return (v % 5) * 12;
+  };
+  const edges: DgEdge[] = [];
+  for (const x of steps) {
+    const via = x.via;
+    if (!x.parent || !via || !byId.has(x.parent)) continue;
+    const reads = via.kinds.includes('READS') && !via.kinds.includes('WRITES');
+    const [from, to] = reads ? [x.id, x.parent] : [x.parent, x.id];
+    const ca = colOf(from);
+    const cb = colOf(to);
+    const main = p.mainIds.has(x.id) && p.mainIds.has(x.parent);
+    const role: ArrowRole =
+      via.status === 'UNKNOWN'
+        ? 'gap'
+        : via.status === 'PROBABLE' || via.async
+          ? 'dashed'
+          : via.kinds.includes('WRITES') || main
+            ? reads
+              ? 'default'
+              : 'emphasis'
+            : 'default';
+    const left = DG_PAD + Math.min(ca, cb) * (DATA_W + DATA_GX) + DATA_W;
+    const label = ca === cb ? undefined : verbOf(s, via);
+    if (ca < cb)
+      edges.push({
+        from,
+        to,
+        role,
+        sides: 'rl',
+        c: left + 18 + offset(`${String(ca)}>`, from),
+        ...(label ? { label } : {}),
+      });
+    else if (ca > cb)
+      edges.push({
+        from,
+        to,
+        role,
+        sides: 'lr',
+        c: left + DATA_GX - 18 - offset(`${String(cb)}<`, from),
+        ...(label ? { label } : {}),
+      });
+    else if ((rowOf.get(to) ?? 0) - (rowOf.get(from) ?? 0) === 1) edges.push({ from, to, role, sides: 'bt' });
+    else edges.push({ from, to, role, sides: 'rr', c: left + 14 + offset(`${String(ca)}=`, from) / 2 });
+  }
+  const heads = cols
+    .map(
+      (k, c) =>
+        `<span class="dg-sh" style="left:${String(DG_PAD + c * (DATA_W + DATA_GX))}px;width:${String(DATA_W)}px">${esc(q.stages[k])}</span>`,
+    )
+    .join('');
+  const used = new Set(edges.map((e) => e.role));
+  const roleLabels = new Map<ArrowRole, string>(
+    (
+      [
+        ['emphasis', q.legend.write],
+        ['default', q.legend.read],
+        ['dashed', `${q.legend.async} · ${q.legend.probable}`],
+        ['gap', q.legend.gap],
+      ] as const
+    ).filter(([r]) => used.has(r)),
+  );
+  const head = `<div class="ar-head"><span class="ar-pulse" aria-hidden="true"></span><p>${esc(q.hint)}</p><button class="btn small" data-action="map-j-unspot"${st.jSpot ? '' : ' disabled'}>${esc(s.arch.showAll)}</button></div>`;
+  const name = p.main[p.upLen];
+  return `<section class="ar dg" aria-label="${esc(q.title(shownName(name?.name ?? '', name?.nature)))}">${head}${whereBar(s, p, p.upLen)}<div class="ar-scroll">${dgStage(s, st, p, 'data', nodes, edges, heads)}</div>${dgLegend(s, steps, roleLabels)}<p class="sq-note">${esc(q.note)}</p>${archCards(s, map, p)}</section>`;
+}
+
 /** Un rectangle d'étape dans le repère du calque des flèches. */
 interface ArchRect {
   l: number;
@@ -1545,8 +2139,10 @@ interface ArchRect {
 
 /**
  * Dessiner les flèches du diagramme d'architecture (dans le navigateur, après le rendu), d'après la place
- * réelle des boîtes : vers la droite ou la gauche d'une région à l'autre (avec le verbe de la relation),
- * vers le bas ou le haut dans une même région, par la gauche si les deux boîtes se chevauchent.
+ * réelle des boîtes, à angle droit comme dans Archify : horizontal-vertical-horizontal d'une région à
+ * l'autre (avec le verbe de la relation sur le segment central), vertical-horizontal-vertical dans une même
+ * région, par la gauche si les deux boîtes se chevauchent. Relation confirmée : trait vert parcouru d'une
+ * comète ; probable : tirets violets ; non démontrée : pointillés gris.
  */
 export function drawArch(svg: SVGSVGElement): void {
   const stage = svg.parentElement;
@@ -1559,14 +2155,22 @@ export function drawArch(svg: SVGSVGElement): void {
   }
   const box = svg.getBoundingClientRect();
   if (box.width <= 0 || box.height <= 0) return;
+  // Les mesures sont à l'échelle affichée (CSS zoom) : on les ramène au repère du calque.
+  const scale = svg.clientWidth > 0 ? box.width / svg.clientWidth : 1;
   const rect = (i: number): ArchRect | undefined => {
     const el = stage.querySelector<HTMLElement>(`[data-ar-step="${String(i)}"]`);
     if (!el || el.offsetParent === null) return undefined;
     const r = el.getBoundingClientRect();
-    return { l: r.left - box.left, r: r.right - box.left, t: r.top - box.top, b: r.bottom - box.top };
+    return {
+      l: (r.left - box.left) / scale,
+      r: (r.right - box.left) / scale,
+      t: (r.top - box.top) / scale,
+      b: (r.bottom - box.top) / scale,
+    };
   };
-  const f = (n: number): string => n.toFixed(1);
   const parts: string[] = [];
+  const labels: string[] = [];
+  let comet = 0;
   links.forEach((link, i) => {
     if (i === 0) return;
     const a = rect(i - 1);
@@ -1574,49 +2178,50 @@ export function drawArch(svg: SVGSVGElement): void {
     if (!a || !b) return;
     const ya = (a.t + a.b) / 2;
     const yb = (b.t + b.b) / 2;
-    let d: string;
-    let mid: [number, number] | undefined;
-    if (b.l >= a.r - 4) {
-      const c = Math.max(24, (b.l - a.r) / 2);
-      d = `M${f(a.r)} ${f(ya)}C${f(a.r + c)} ${f(ya)} ${f(b.l - c)} ${f(yb)} ${f(b.l - 2)} ${f(yb)}`;
-      mid = [(a.r + b.l) / 2, (ya + yb) / 2];
-    } else if (b.r <= a.l + 4) {
-      const c = Math.max(24, (a.l - b.r) / 2);
-      d = `M${f(a.l)} ${f(ya)}C${f(a.l - c)} ${f(ya)} ${f(b.r + c)} ${f(yb)} ${f(b.r + 2)} ${f(yb)}`;
-      mid = [(a.l + b.r) / 2, (ya + yb) / 2];
-    } else if (b.t >= a.b - 2) {
-      const xa = (a.l + a.r) / 2;
-      const xb = (b.l + b.r) / 2;
-      const c = (b.t - a.b) / 2;
-      d = `M${f(xa)} ${f(a.b)}C${f(xa)} ${f(a.b + c)} ${f(xb)} ${f(b.t - c)} ${f(xb)} ${f(b.t - 2)}`;
-    } else if (b.b <= a.t + 2) {
-      const xa = (a.l + a.r) / 2;
-      const xb = (b.l + b.r) / 2;
-      const c = (a.t - b.b) / 2;
-      d = `M${f(xa)} ${f(a.t)}C${f(xa)} ${f(a.t - c)} ${f(xb)} ${f(b.b + c)} ${f(xb)} ${f(b.b + 2)}`;
-    } else {
-      const x = Math.min(a.l, b.l);
-      d = `M${f(a.l)} ${f(ya)}C${f(x - 30)} ${f(ya)} ${f(x - 30)} ${f(yb)} ${f(b.l - 2)} ${f(yb)}`;
-    }
-    const status = (link.s ?? 'UNKNOWN').toLowerCase();
-    const cls = `s-${status}${link.c ? ` ${link.c}` : ''}`;
-    parts.push(`<path class="ar-e ${cls}" d="${d}" marker-end="url(#ar-h-${status})"/>`);
-    // Sur une relation confirmée, des impulsions défilent le long du trait plein.
-    if (status === 'confirmed') parts.push(`<path class="ar-f ${cls}" d="${d}"/>`);
-    if (mid && link.v)
-      parts.push(
-        `<text class="ar-lbl ${cls}" x="${f(mid[0])}" y="${f(mid[1] - 8)}" text-anchor="middle">${esc(link.v)}</text>`,
+    const xa = (a.l + a.r) / 2;
+    const xb = (b.l + b.r) / 2;
+    let route: { d: string; mid: Pt };
+    if (b.l >= a.r - 4) route = orthPath({ x: a.r, y: ya }, { x: b.l - 1, y: yb }, 'h');
+    else if (b.r <= a.l + 4) route = orthPath({ x: a.l, y: ya }, { x: b.r + 1, y: yb }, 'h');
+    else if (b.t >= a.b - 2) route = orthPath({ x: xa, y: a.b }, { x: xb, y: b.t - 1 }, 'v');
+    else if (b.b <= a.t + 2) route = orthPath({ x: xa, y: a.t }, { x: xb, y: b.b + 1 }, 'v');
+    else route = orthPath({ x: a.l, y: ya }, { x: b.l - 1, y: yb }, 'h', Math.min(a.l, b.l) - 30);
+    const status = link.s ?? 'UNKNOWN';
+    const role: ArrowRole = status === 'CONFIRMED' ? 'emphasis' : status === 'PROBABLE' ? 'dashed' : 'gap';
+    parts.push(
+      arrowSvg('ar', {
+        d: route.d,
+        role,
+        ...(link.c ? { state: link.c } : {}),
+        ...(role === 'emphasis' ? { comet: comet++ } : {}),
+        data: ` data-s="${status.toLowerCase()}"`,
+      }),
+    );
+    if (link.v) {
+      // L'étiquette sur un fond plein, sans bordure, au milieu du segment central.
+      const w = link.v.length * 6.5 + 12;
+      const { x, y } = route.mid;
+      const st = link.c ? ` ${link.c}` : '';
+      labels.push(
+        `<rect class="ar-lb r-${role}${st}" x="${(x - w / 2).toFixed(1)}" y="${(y - 9).toFixed(1)}" width="${w.toFixed(1)}" height="18" rx="4"/><text class="ar-lbl r-${role}${st}" x="${x.toFixed(1)}" y="${(y + 3.5).toFixed(1)}" text-anchor="middle">${esc(link.v)}</text>`,
       );
+    }
   });
-  const marker = (status: string): string =>
-    `<marker id="ar-h-${status}" class="s-${status}" viewBox="0 0 10 8" refX="9" refY="4" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="8" orient="auto"><path d="M0 0L10 4L0 8z"/></marker>`;
-  svg.setAttribute('viewBox', `0 0 ${box.width.toFixed(1)} ${box.height.toFixed(1)}`);
-  svg.innerHTML = parts.length
-    ? `<defs>${['confirmed', 'probable', 'unknown'].map(marker).join('')}</defs>${parts.join('')}`
-    : '';
+  const w = svg.clientWidth || box.width;
+  const h = svg.clientHeight || box.height;
+  svg.setAttribute('viewBox', `0 0 ${w.toFixed(1)} ${h.toFixed(1)}`);
+  svg.innerHTML = parts.length ? `${arrowMarkers('ar')}${parts.join('')}${labels.join('')}` : '';
 }
 
-/** Le choix de présentation du parcours : diagramme d'architecture ou couloirs. */
+/** Le diagramme du parcours dans la présentation choisie (hors couloirs). */
+function diagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathInfo): string {
+  if (st.jStyle === 'seq') return seqDiagram(s, map, st, p);
+  if (st.jStyle === 'flow') return flowDiagram(s, map, st, p);
+  if (st.jStyle === 'data') return dataDiagram(s, map, st, p);
+  return archDiagram(s, map, st, p);
+}
+
+/** Le choix de présentation du parcours : un des diagrammes ou les couloirs. */
 function styleBar(s: JourneyStrings, st: JourneyState): string {
   return `<div class="jr-modes" role="group" aria-label="${esc(s.arch.styleLabel)}">${JOURNEY_STYLES.map((v) => `<button class="jr-mode${st.jStyle === v ? ' on' : ''}" data-action="map-j-style" data-style="${v}" aria-pressed="${String(st.jStyle === v)}">${esc(s.arch.styles[v])}</button>`).join('')}</div>`;
 }
@@ -2033,7 +2638,7 @@ export function journeyTab(st: JourneyState, h: JourneyHelpers): string {
   const center =
     st.jView === 'overview'
       ? `<div class="jr-gh">${viewPicker(s, st)}</div>${overview(s, map, h)}`
-      : `<div class="jr-gh"><h3 class="sr-only">${esc(s.journeyTitle)}</h3>${viewPicker(s, st)}${bar}${toolbar(s, st, archi)}</div>${guide}${archi ? '' : fullWarn}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}${archi ? `<div class="jr-canvas ar-canvas" data-jr-canvas>${st.jStyle === 'seq' ? seqDiagram(s, traced, st, path) : archDiagram(s, traced, st, path)}</div>` : `<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`}`;
+      : `<div class="jr-gh"><h3 class="sr-only">${esc(s.journeyTitle)}</h3>${viewPicker(s, st)}${bar}${toolbar(s, st, archi)}</div>${guide}${archi ? '' : fullWarn}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}${archi ? `<div class="jr-canvas ar-canvas" data-jr-canvas>${diagram(s, traced, st, path)}</div>` : `<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`}`;
   const loading = h.loading ? `<span class="spin jr-busy" aria-label="${esc(s.loading)}"></span>` : '';
   return `<section class="card jr${st.jFull ? ' full' : ''}" data-jr><div class="jr-head">${featurePicker(s, map, h)}${loading}${kpis(s, map)}</div>${h.paneError(h.error)}<div class="jr-body">${aside}<div class="jr-main">${center}</div></div>${bottom(s, map, st, h, path)}</section>`;
 }
@@ -2232,12 +2837,12 @@ export const JOURNEY_CSS = `
 .ar-head .btn{font-family:inherit}
 .ar-pulse{width:10px;height:10px;border-radius:50%;background:#0891b2;flex:none;animation:ar-pulse 2s infinite}
 .ar-scroll{overflow-x:auto;padding:4px 2px}
-.ar-stage{position:relative;display:flex;gap:36px;align-items:stretch;min-width:max-content;padding:16px;border-radius:10px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
+.ar-stage{position:relative;display:flex;gap:80px;align-items:stretch;min-width:max-content;padding:16px;border-radius:10px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
 .ar-links{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
 .ar-region{position:relative;display:flex;flex-direction:column;gap:12px;padding:38px 18px 18px;border:1.5px dashed #d97706;border-radius:8px;background:rgba(251,191,36,.05)}
 .ar-rl{position:absolute;top:9px;left:12px;margin:0;font-size:11px;font-weight:600;color:#b45309;display:flex;gap:6px;align-items:baseline}
 .ar-rl small{font-weight:400;color:var(--ar-mu);font-size:10px}
-.ar-col{display:grid;gap:30px 36px;align-items:stretch}.ar-col.c1{grid-template-columns:220px}.ar-col.c2{grid-template-columns:repeat(2,200px)}
+.ar-col{display:grid;gap:56px 80px;align-items:stretch}.ar-col.c1{grid-template-columns:180px}.ar-col.c2{grid-template-columns:repeat(2,170px)}
 .ar-rail{flex:0 0 44px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:14px;border:1.5px dashed #94a3b8;border-radius:8px;background:rgba(148,163,184,.06)}
 .ar-rail span{writing-mode:vertical-rl;transform:rotate(180deg);font-size:11px;font-weight:600;color:var(--ar-mu);white-space:nowrap}
 .ar-box{--glow:rgba(8,145,178,.45);position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:4px;min-height:52px;padding:10px 14px;border:1.5px solid;border-radius:6px;font:inherit;text-align:center;cursor:pointer;transition:opacity .25s ease,transform .2s ease,box-shadow .2s ease,filter .25s ease}
@@ -2257,17 +2862,6 @@ export const JOURNEY_CSS = `
 .ar-box.cur{box-shadow:0 0 0 3px var(--glow)}
 .ar-box.sel{transform:translateY(-2px) scale(1.03);border-width:2.5px;z-index:3;animation:ar-ring 1.6s ease-out infinite}
 .ar-box.dim{opacity:.28;filter:saturate(.4)}
-.ar-e{fill:none;stroke-width:2;transition:opacity .25s ease,stroke-width .2s ease}
-.ar-e.s-confirmed{stroke:#059669}
-.ar-f{fill:none;stroke:#6ee7b7;stroke-width:2;stroke-linecap:round;stroke-dasharray:8 40;animation:ar-flow 1.4s linear infinite;transition:opacity .25s}
-.ar-f.on{stroke-width:3;animation-duration:.7s}.ar-f.off{opacity:0;animation:none}
-.ar-e.s-probable{stroke:#7c3aed;stroke-dasharray:4 4}
-.ar-e.s-unknown{stroke:#e11d48;stroke-dasharray:2 4}
-.ar-e.on{stroke-width:3}
-.ar-e.off,.ar-lbl.off{opacity:.12}
-.ar-links marker.s-confirmed path{fill:#059669}.ar-links marker.s-probable path{fill:#7c3aed}.ar-links marker.s-unknown path{fill:#e11d48}
-.ar-lbl{font-size:10.5px;font-weight:600;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round;transition:opacity .25s}
-.ar-lbl.s-confirmed{fill:#047857}.ar-lbl.s-probable{fill:#6d28d9}.ar-lbl.s-unknown{fill:#be123c}
 .ar-legend{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:11px;color:#475569}
 .ar-legend span{display:inline-flex;gap:8px;align-items:center}
 .ar-sw{display:inline-block;width:14px;height:10px;border:1.5px solid;border-radius:3px;font-style:normal}
@@ -2284,9 +2878,34 @@ export const JOURNEY_CSS = `
 .ar-card ul{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--ar-mu);line-height:1.45}
 .ar-card li{overflow-wrap:anywhere}.ar-card li::before{content:"• "}
 @keyframes ar-pulse{0%,100%{opacity:1}50%{opacity:.5}}
-@keyframes ar-flow{to{stroke-dashoffset:-48}}
 @keyframes ar-ring{0%{box-shadow:0 0 0 0 var(--glow)}70%{box-shadow:0 0 0 12px rgba(0,0,0,0)}100%{box-shadow:0 0 0 0 rgba(0,0,0,0)}}
-@media (prefers-reduced-motion:reduce){.ar-pulse,.ar-f,.ar-box.sel{animation:none}.ar-f{display:none}.ar-box,.ar-e{transition:none}}
+@media (prefers-reduced-motion:reduce){.ar-pulse,.ar-box.sel{animation:none}.ar-box{transition:none}}
+.ar-lb{fill:#f8fafc;transition:opacity .25s}
+.ar-lbl{font-size:10.5px;font-weight:600;transition:opacity .25s}
+.ar-lbl.r-emphasis{fill:#047857}.ar-lbl.r-dashed{fill:#6d28d9}.ar-lbl.r-gap{fill:#64748b}
+.ar-lb.off,.ar-lbl.off{opacity:.12}
+.ar-sw.ln.r-emphasis{border-color:#059669}.ar-sw.ln.r-default{border-color:#64748b}
+.ar-sw.ln.r-dashed{border-color:#7c3aed;border-top-style:dashed}.ar-sw.ln.r-security{border-color:#e11d48;border-top-style:dashed}
+.ar-sw.ln.r-gap{border-color:#94a3b8;border-top-style:dotted}
+.dg-stage{position:relative;border-radius:10px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
+.dg-links{position:absolute;left:0;top:0;pointer-events:none;z-index:1;overflow:visible}
+.dg-n{position:absolute;box-sizing:border-box;min-height:0;padding:7px 10px;justify-content:center;gap:2px;overflow:hidden}
+.dg-n .ar-t{font-size:11.5px;line-height:1.25}.dg-n .ar-s{font-size:9.5px}
+.dg-n>.jr-sn{top:-9px;left:-9px;min-width:20px;height:20px;font-size:10px}
+.ar-box.dg-n{overflow:visible}
+.dg-pill{border-radius:999px;cursor:default}.dg-pill:hover{transform:none;box-shadow:none}
+.dg-dec{position:absolute;z-index:2;display:flex;align-items:center;justify-content:center;padding:0;border:0;background:none;font:inherit;cursor:pointer;transition:opacity .25s,filter .25s}
+.dg-dec .dg-dsh{position:absolute;inset:14%;transform:rotate(45deg);border:1.5px solid #e11d48;border-radius:6px;background:linear-gradient(rgba(251,113,133,.15),rgba(251,113,133,.15)),#fff}
+.dg-dec .ar-t{position:relative;font-size:10px;max-width:60px;text-align:center;overflow-wrap:anywhere}
+.dg-dec.sel .dg-dsh{border-width:2.5px;box-shadow:0 0 0 3px rgba(225,29,72,.25)}
+.dg-dec.dim{opacity:.28;filter:saturate(.4)}
+.dg-dec:focus-visible{outline:2px solid var(--ar-ink);outline-offset:3px}
+.dg-lb{position:absolute;z-index:2;transform:translate(-50%,-50%);font-size:10px;font-weight:600;line-height:1.2;background:#f8fafc;border-radius:4px;padding:3px 6px;white-space:nowrap;pointer-events:none;transition:opacity .25s}
+.dg-lb.r-emphasis{color:#047857}.dg-lb.r-default{color:#475569}.dg-lb.r-dashed{color:#6d28d9}.dg-lb.r-gap{color:#64748b}
+.dg-lb.off{opacity:.12}
+.dg-sh{position:absolute;top:8px;font-size:11px;font-weight:600;color:#b45309;text-align:center;text-transform:uppercase;letter-spacing:.06em}
+.ar-sw.dg-sw-dec{width:10px;height:10px;transform:rotate(45deg);border-color:#e11d48;background:rgba(251,113,133,.15);border-radius:2px}
+${ARROW_CSS}
 .sq-stage{position:relative;border-radius:10px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
 .sq-region{position:absolute;top:6px;bottom:6px;border:1.5px dashed #d97706;border-radius:8px;background:rgba(251,191,36,.05)}
 .sq-region .ar-rl{top:6px;left:10px}
