@@ -374,18 +374,24 @@ function dependencyGraph(t: Text, data: JourneyTraceability): string {
       const x1 = x(edge.from);
       const x2 = x(edge.to);
       if (x1 < 80 || x2 < 80) return '';
-      const lift = 40 + (index % 3) * 26;
+      // À angle droit, comme dans Archify : on monte au-dessus des blocs, on passe, on redescend.
+      const lift = 34 + (index % 3) * 26;
       const mid = (x1 + x2) / 2;
-      return `<path class="tc-arc" d="M${String(x1)},150 Q${String(mid)},${String(150 - lift * 2)} ${String(x2)},150" marker-end="url(#tc-arrow)"></path><text x="${String(mid)}" y="${String(150 - lift - 6)}" text-anchor="middle" class="tc-arc-t">${esc((edge.data ?? []).join(', '))}</text>`;
+      const top = 150 - lift;
+      const d = `M${String(x1 - 12)},150 L${String(x1 - 12)},${String(top)} L${String(x2 + 12)},${String(top)} L${String(x2 + 12)},149`;
+      const label = (edge.data ?? []).join(', ');
+      const w = label.length * 6.2 + 12;
+      const delay = `animation-delay:${((index % 12) * 0.35).toFixed(2)}s`;
+      return `<path class="tc-arc" d="${d}" marker-end="url(#tc-arrow)"></path><path class="tc-comet glow" d="${d}" pathLength="100" style="${delay}"></path><path class="tc-comet head" d="${d}" pathLength="100" style="${delay}"></path><rect class="tc-arc-bg" x="${String(mid - w / 2)}" y="${String(top - 9)}" width="${String(w)}" height="18" rx="4"></rect><text x="${String(mid)}" y="${String(top + 4)}" text-anchor="middle" class="tc-arc-t">${esc(label)}</text>`;
     })
     .join('');
   const boxes = nodes
     .map(
       (node) =>
-        `<g class="tc-g ${node.kind.toLowerCase()}"><rect x="${String(x(node.id) - 70)}" y="150" width="140" height="40" rx="8"></rect><text x="${String(x(node.id))}" y="174" text-anchor="middle">${esc(node.label.length > 20 ? `${node.label.slice(0, 19)}…` : node.label)}</text></g>`,
+        `<g class="tc-g ${node.kind.toLowerCase()}"><rect x="${String(x(node.id) - 70)}" y="150" width="140" height="40" rx="6"></rect><text x="${String(x(node.id))}" y="174" text-anchor="middle">${esc(node.label.length > 20 ? `${node.label.slice(0, 19)}…` : node.label)}</text></g>`,
     )
     .join('');
-  return `<p class="mu small">${esc(t.graphNote)}</p><div class="tc-svg-w"><svg class="tc-svg" viewBox="0 0 ${String(width)} 210" width="${String(width)}" height="210" role="img" aria-label="${esc(t.tabs.graph)}"><defs><marker id="tc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z"></path></marker></defs>${arcs}${boxes}</svg></div>`;
+  return `<p class="mu small">${esc(t.graphNote)}</p><div class="tc-svg-w"><svg class="tc-svg" viewBox="0 0 ${String(width)} 210" width="${String(width)}" height="210" role="img" aria-label="${esc(t.tabs.graph)}"><defs><marker id="tc-arrow" viewBox="0 0 10 7" refX="9" refY="3.5" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="9.1" orient="auto"><polygon points="0 0, 10 3.5, 0 7"></polygon></marker></defs>${arcs}${boxes}</svg></div>`;
 }
 
 /** Le panneau de droite de la vue : la fiche de la donnée choisie (ou ce qu'il faut faire pour l'avoir). */
@@ -466,13 +472,13 @@ export const TRACE_VIEW_CSS = `
 .tc-flow{border:1px solid var(--qa-color-border);border-radius:10px;padding:8px 10px;min-width:0}
 .tc-flow h4{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:0 0 6px;font-size:13px}
 .tc-legend{display:inline-flex;align-items:center;gap:6px;font-weight:400;color:var(--qa-color-muted)}
-.tc-ctl{display:inline-block;width:22px;border-top:2px solid var(--qa-color-text)}
-.tc-dl{display:inline-block;width:22px;border-top:2px dashed var(--qa-color-data,#2F7DE1)}
+.tc-ctl{display:inline-block;width:22px;border-top:1.4px solid var(--qa-arch-ext,#64748b)}
+.tc-dl{display:inline-block;width:22px;border-top:1.8px solid var(--qa-arch-be,#059669)}
 .tc .tc-strip{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:flex-start;gap:6px;overflow-x:auto;padding-bottom:4px}
-.tc-arrow{align-self:center;color:var(--qa-color-muted)}
-.tc-term{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--qa-color-primary);border-radius:999px;font-size:12px;align-self:center;white-space:nowrap}
+.tc-arrow{align-self:center;color:var(--qa-arch-be,#059669);font-weight:700}
+.tc-term{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1.5px solid var(--qa-arch-ext,#64748b);background:var(--qa-arch-ext-bg,#f1f5f9);border-radius:999px;font-size:12px;align-self:center;white-space:nowrap}
 .tc-node{display:flex;flex-direction:column;gap:4px;flex:none;width:170px}
-.tc-card{display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--jn-node-bd,var(--qa-color-border));border-radius:8px;background:var(--jn-node-bg,var(--qa-color-surface))}
+.tc-card{display:flex;align-items:center;gap:6px;padding:6px 8px;border:1.5px solid var(--jn-node-bd,var(--qa-arch-fe,#0891b2));border-radius:6px;background:var(--jn-node-bg,var(--qa-arch-fe-bg,#e0f7fb))}
 .tc-node.wait .tc-card{border-color:var(--jn-wait);background:var(--jn-wait-soft)}
 .tc-node.loop .tc-card,.tc-node.in-loop .tc-card{border-color:var(--jn-loop);background:var(--jn-loop-soft)}
 .tc-node.in-loop .tc-card{border-style:dashed}
@@ -480,7 +486,7 @@ export const TRACE_VIEW_CSS = `
 .tc-t b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tc-ios{display:flex;flex-direction:column;gap:3px}
 .tc-io{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:2px 6px;border-radius:6px;font:inherit;font-size:11px;cursor:pointer;border:1px solid currentColor;background:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tc-io.out{color:var(--qa-color-data,#2F7DE1)}
+.tc-io.out{color:var(--qa-arch-be,#059669)}
 .tc-io.in{color:var(--jn-loop)}
 .tc-io.sel{background:color-mix(in srgb,currentColor 12%,transparent);font-weight:600}
 .tc-io svg{width:11px;height:11px;flex:none}
@@ -534,11 +540,18 @@ export const TRACE_VIEW_CSS = `
 .tc-col-in{align-items:flex-end}
 .tc-vkey{display:flex;align-items:center;gap:6px}
 .tc-svg-w{overflow-x:auto}
-.tc-svg .tc-arc{fill:none;stroke:var(--qa-color-data,#2F7DE1);stroke-width:1.6;stroke-dasharray:5 4}
-.tc-svg marker path{fill:var(--qa-color-data,#2F7DE1)}
-.tc-svg .tc-arc-t{font-size:11px;fill:var(--qa-color-data,#2F7DE1)}
-.tc-svg rect{fill:var(--qa-color-surface);stroke:var(--qa-color-primary)}
-.tc-svg .loop rect{stroke:#7C3AED}
-.tc-svg .wait rect{stroke:var(--qa-color-warning)}
-.tc-svg text{font-size:11.5px;fill:var(--qa-color-text)}
+.tc-svg-w{background-color:var(--qa-arch-canvas,#f8fafc);background-image:linear-gradient(var(--qa-arch-grid,#e2e8f0) .5px,transparent .5px),linear-gradient(90deg,var(--qa-arch-grid,#e2e8f0) .5px,transparent .5px);background-size:40px 40px;border-radius:8px}
+.tc-svg .tc-arc{fill:none;stroke:var(--qa-arch-be,#059669);stroke-width:1.8;stroke-linejoin:round;stroke-linecap:round}
+.tc-svg .tc-arc-bg{fill:var(--qa-arch-canvas,#f8fafc)}
+.tc-comet{fill:none;stroke-linecap:round;pointer-events:none;animation:tc-comet 4s linear infinite backwards}
+.tc-comet.glow{stroke:var(--qa-arch-be,#059669);stroke-width:8;stroke-dasharray:12 88;filter:blur(2.5px);opacity:.38}
+.tc-comet.head{stroke:var(--qa-arch-comet,#035f43);stroke-width:2.8;stroke-dasharray:5 95}
+@keyframes tc-comet{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
+@media (prefers-reduced-motion:reduce){.tc-comet{display:none}}
+.tc-svg marker polygon{fill:var(--qa-arch-be,#059669)}
+.tc-svg .tc-arc-t{font-size:10.5px;font-weight:600;fill:var(--qa-arch-be,#059669)}
+.tc-svg .tc-g rect{fill:var(--qa-arch-fe-bg,#e0f7fb);stroke:var(--qa-arch-fe,#0891b2);stroke-width:1.5}
+.tc-svg .loop rect{stroke:var(--qa-arch-db,#7c3aed);fill:var(--qa-arch-db-bg,#efe9fe)}
+.tc-svg .wait rect{stroke:var(--qa-arch-region,#d97706);fill:#fef3c7}
+.tc-svg text{font-size:11.5px;fill:#0f172a}
 `;

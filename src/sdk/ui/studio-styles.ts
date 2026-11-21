@@ -141,4 +141,19 @@ pre.code{margin:6px 0 0;max-height:260px;overflow:auto;padding:8px 10px;border-r
 .node:focus{outline:none}
 
 @container (max-width:760px){.side{width:100%;border-left:0;border-top:1px solid var(--qa-color-border);max-height:45%}.body{flex-direction:column}.search{min-width:0;flex:1}}
+/* Style Archify : fond quadrillé, étapes en boîtes teintées (coins 6 px, bord 1,5 px), liens à angle
+   droit : séquence ardoise, données en tirets violets, violation en tirets roses, pointes 10 × 7. */
+.canvas{background:linear-gradient(#e2e8f0 .5px,transparent .5px) 0 0/40px 40px,linear-gradient(90deg,#e2e8f0 .5px,transparent .5px) 0 0/40px 40px,#f8fafc}
+.e{stroke-width:1.4;stroke-linejoin:round;stroke-linecap:round}
+.e-sequence{stroke:#64748b}
+.e-data{stroke:#7c3aed;stroke-dasharray:4 4;opacity:.55}
+.e-violation{stroke:#e11d48;stroke-dasharray:5 5;stroke-width:1.6}
+.e.on{opacity:1;stroke-width:2.4}
+.ek{fill:#6d28d9;font-weight:600;stroke:#f8fafc}
+.e-violation+.ek{fill:#be123c}
+.mk-seq{fill:#64748b}.mk-data{fill:#7c3aed}.mk-bad{fill:#e11d48}
+.node .card{fill:#e0f7fb;stroke:#0891b2;stroke-width:1.5}
+.frame>rect{fill:rgba(251,191,36,.05);stroke:#d97706;stroke-width:1.5;stroke-dasharray:6 4}
+.frame.on>rect{stroke:#b45309;stroke-width:2}
+.frame .fn{fill:#b45309}
 ${darkThemeCss()}`;

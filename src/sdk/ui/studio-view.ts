@@ -119,7 +119,7 @@ export function renderGraph(state: StudioState): string {
       const count = group?.stepIds.length ?? 0;
       const toggle = frame.collapsed ? t.expand : t.collapse;
       return `<g class="frame${on ? ' on' : ''}${frame.collapsed ? ' folded' : ''}" data-frame="${esc(frame.key)}" data-group="${esc(frame.groupId)}">
-<rect x="${String(frame.x)}" y="${String(frame.y)}" width="${String(frame.width)}" height="${String(frame.height)}" rx="14"/>
+<rect x="${String(frame.x)}" y="${String(frame.y)}" width="${String(frame.width)}" height="${String(frame.height)}" rx="8"/>
 <g class="fh" data-select-group="${esc(frame.groupId)}" tabindex="0" role="button" aria-pressed="${String(on)}" aria-label="${esc(`${t.group} ${frame.name}${frame.continued ? ' (2)' : ''} — ${String(count)} ${t.steps}`)}">
 <rect class="hit" x="${String(frame.x)}" y="${String(frame.y)}" width="${String(frame.width)}" height="34" rx="14"/>
 <text class="fn" x="${String(frame.x + 14)}" y="${String(frame.y + 22)}">${esc(short(frame.name, 22))}${frame.continued ? ' ↺' : ''}</text>
@@ -159,7 +159,7 @@ export function renderGraph(state: StudioState): string {
         (step.produces.length > 0 ? `<tspan class="dp">◆${String(step.produces.length)}</tspan>` : '') +
         (step.consumes.length > 0 ? `<tspan class="dc"> ◇${String(step.consumes.length)}</tspan>` : '');
       return `<g class="${cls}" data-node="${esc(id)}" transform="translate(${String(x)} ${String(y)})" tabindex="0" role="button" aria-pressed="${String(selected.has(id))}" aria-label="${esc(stepLabel(step, group, t))}">
-<rect class="card" width="${String(NODE_WIDTH)}" height="${String(NODE_HEIGHT)}" rx="9"/>
+<rect class="card" width="${String(NODE_WIDTH)}" height="${String(NODE_HEIGHT)}" rx="6"/>
 <rect class="kind" x="0" y="0" width="4" height="${String(NODE_HEIGHT)}" rx="2"/>
 <text class="pos" x="12" y="21">${String(step.position)}</text>
 <text class="lb" x="34" y="21">${esc(short(step.description))}</text>
@@ -173,7 +173,7 @@ export function renderGraph(state: StudioState): string {
       (
         summary,
       ) => `<g class="node summary${summary.stepIds.some((id) => selected.has(id)) ? ' sel' : ''}" data-summary="${esc(summary.groupId)}" transform="translate(${String(summary.x)} ${String(summary.y)})" tabindex="0" role="button" aria-label="${esc(`${groupById.get(summary.groupId)?.name ?? ''} — ${t.summary(summary.count)}`)}">
-<rect class="card" width="${String(NODE_WIDTH)}" height="${String(NODE_HEIGHT)}" rx="9"/>
+<rect class="card" width="${String(NODE_WIDTH)}" height="${String(NODE_HEIGHT)}" rx="6"/>
 <text class="lb" x="14" y="21">${esc(t.summary(summary.count))}</text>
 </g>`,
     )
@@ -541,9 +541,9 @@ ${state.moved ? `<button class="btn" data-cmd="reset-positions">${esc(t.resetVie
 <div class="canvas" tabindex="0" role="group" aria-label="${esc(t.graph)}" aria-roledescription="graph">
 <svg class="g" xmlns="http://www.w3.org/2000/svg">
 <defs>
-<marker id="m-seq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-seq"/></marker>
-<marker id="m-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-data"/></marker>
-<marker id="m-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-bad"/></marker>
+<marker id="m-seq" viewBox="0 0 10 7" refX="9" refY="3.5" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="9.1" orient="auto-start-reverse"><polygon points="0 0, 10 3.5, 0 7" class="mk-seq"/></marker>
+<marker id="m-data" viewBox="0 0 10 7" refX="9" refY="3.5" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="9.1" orient="auto-start-reverse"><polygon points="0 0, 10 3.5, 0 7" class="mk-data"/></marker>
+<marker id="m-bad" viewBox="0 0 10 7" refX="9" refY="3.5" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="9.1" orient="auto-start-reverse"><polygon points="0 0, 10 3.5, 0 7" class="mk-bad"/></marker>
 </defs>
 <g class="vp" transform="${viewportTransform(state.viewport)}">${renderGraph(state)}</g>
 </svg>

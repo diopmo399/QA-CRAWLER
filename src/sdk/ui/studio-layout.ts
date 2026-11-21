@@ -97,12 +97,20 @@ function chunks<T>(items: T[], size: number): T[][] {
 const right = (x: number, y: number): [number, number] => [x + NODE_WIDTH, y + NODE_HEIGHT / 2];
 const left = (x: number, y: number): [number, number] => [x, y + NODE_HEIGHT / 2];
 
+/**
+ * Un lien à angle droit, comme dans Archify : horizontal, vertical au coude, horizontal ; un lien de données
+ * (`lift`) passe au-dessus des étapes, par un palier.
+ */
 function curve(from: [number, number], to: [number, number], lift = 0): string {
   const [x1, y1] = from;
   const [x2, y2] = to;
-  if (Math.abs(x1 - x2) < 1) return `M${x1} ${y1}L${x2} ${y2}`;
-  const bend = Math.max(36, Math.abs(x2 - x1) / 2);
-  return `M${x1} ${y1}C${x1 + bend} ${y1 - lift} ${x2 - bend} ${y2 - lift} ${x2} ${y2}`;
+  if (Math.abs(x1 - x2) < 1 || (lift === 0 && Math.abs(y1 - y2) < 1)) return `M${x1} ${y1}L${x2} ${y2}`;
+  if (lift > 0) {
+    const top = Math.min(y1, y2) - lift;
+    return `M${x1} ${y1}L${x1 + 14} ${y1}L${x1 + 14} ${top}L${x2 - 14} ${top}L${x2 - 14} ${y2}L${x2} ${y2}`;
+  }
+  const mid = Math.round((x1 + x2) / 2);
+  return `M${x1} ${y1}L${mid} ${y1}L${mid} ${y2}L${x2} ${y2}`;
 }
 
 function middle(
