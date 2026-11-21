@@ -1590,9 +1590,7 @@ describe('incident graph — « Disposition » : couloirs horizontaux', () => {
     const top = alone.nodes.find((laid) => laid.node.id === N.request.id);
     const drop = alone.edges.find((laid) => laid.id === edgeId(N.request.id, N.controller.id));
     const x = String((top?.x ?? 0) + NODE_W / 2);
-    expect(drop?.d).toMatch(
-      new RegExp(`^M${x},${String((top?.y ?? 0) + NODE_H)} C${x},[\\d.]+ ${x},[\\d.]+ ${x},[\\d.]+$`),
-    );
+    expect(drop?.d).toMatch(new RegExp(`^M${x},${String((top?.y ?? 0) + NODE_H)} L${x},[\\d.]+$`));
   });
 
   it('is deterministic and keeps the same relations, statuses and dangling count as the columns', () => {
