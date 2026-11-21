@@ -4,6 +4,19 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Tous les diagrammes au style Archify
+
+- Un même langage visuel pour tous les schémas de l'outil : flèches à angle droit aux coins arrondis, pointe
+  10 × 7 à taille fixe, fond quadrillé, boîtes à coins de 6 px teintées par couche (front cyan, BFF bleu,
+  backend vert, base violette, externe ardoise), régions en tirets ambre.
+- Force des liens identique partout : démontré en vert parcouru d'une comète, probable en tirets violets,
+  non démontré en pointillés gris, chemin d'erreur en rose. La comète se tait si l'utilisateur demande moins
+  d'animations.
+- Diagrammes concernés : couloirs de l'onglet API & Services et de Structure, vue « Couloirs » du parcours,
+  graphe complet et carte de la chaîne de l'explorateur, graphe de l'espace d'investigation (jetons
+  `--qa-arch-*`), compositeur de parcours, graphe de traçabilité, Flow Studio et carte des écrans visités du
+  rapport HTML (comète seulement sur les transitions principales validées).
+
 ### Cartographie : diagrammes Archify dans « Champs & Réutilisations »
 
 - La fiche d'un concept de données montre le parcours de la donnée en diagramme Archify : une région par

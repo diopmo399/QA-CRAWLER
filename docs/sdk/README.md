@@ -1173,6 +1173,12 @@ Résumé, Champs, Traçabilité (vue graphe), Réutilisations et Scénarios ; à
 d'impact (le détail et le rejeu préparé s'ouvrent sur « Voir l'impact détaillé » ; rien n'est lancé
 sans action).
 
+Tous les diagrammes du tableau de bord (cartographie, investigation, compositeur, traçabilité, Flow
+Studio) et la carte des écrans visités du rapport HTML partagent le style d'Archify : flèches à angle
+droit, fond quadrillé, boîtes teintées par couche, régions en tirets ambre ; un lien démontré est vert et
+parcouru d'une comète, un lien probable en tirets violets, un lien non démontré en pointillés gris. Les
+couleurs passent par les jetons `--qa-arch-*` du thème.
+
 Dans **Champs & Réutilisations**, la fiche d'un concept de données est dessinée dans le style d'Archify :
 le **parcours de la donnée**, une région par couche (Front, BFF, Backend, API, base de données), un nœud
 par champ du concept dans son conteneur (composant, DTO, table) avec son type, et une flèche à angle
