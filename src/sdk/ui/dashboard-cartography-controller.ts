@@ -1083,6 +1083,14 @@ export class CartographyController {
    * des cartes, de l'échelle et de la largeur).
    */
   afterPaint(): void {
+    // Les diagrammes d'un concept (Champs & Réutilisations) sont réduits à la largeur de leur carte, sans
+    // descendre sous 60 % ; au-delà, ils défilent dans leur zone.
+    for (const el of this.host.root.querySelectorAll<HTMLElement>('.cf-stage')) {
+      const room = el.parentElement?.clientWidth ?? 0;
+      const width = Number(el.dataset.w);
+      if (room > 0 && width > 0)
+        el.style.zoom = String(Math.max(0.6, Math.min(1, Math.floor(((room - 4) / width) * 100) / 100)));
+    }
     // Le bandeau d'étapes tient sur une ligne qui défile : l'étape active y est amenée au centre.
     const crumbs = this.host.root.querySelector<HTMLElement>('[data-path] .jr-crumbs');
     const on = crumbs?.querySelector<HTMLElement>('.jr-gs.on');
@@ -1644,9 +1652,17 @@ export class CartographyController {
         }
         return true;
       }
+      case 'map-cf-spot': {
+        // Un champ du parcours du concept : mis en avant avec ses liens ; le recliquer (ou « Tout afficher ») rend tout net.
+        const spot = target.dataset.spot ?? '';
+        ui.conceptSpot = spot && ui.conceptSpot !== spot ? spot : undefined;
+        this.host.paint();
+        return true;
+      }
       case 'map-concept':
         ui.concept = target.dataset.concept;
         ui.conceptSheet = undefined;
+        ui.conceptSpot = undefined;
         ui.tab = 'fields';
         void this.run(() => this.loadTab());
         return true;

@@ -46,6 +46,7 @@ import {
   type StructTab,
 } from './dashboard-cartography-structure.js';
 import { impactView, SCAN_CSS, scanView, type ScanViewHelpers } from './dashboard-cartography-scan.js';
+import { CONCEPT_CSS, conceptDiagrams } from './dashboard-cartography-concept.js';
 import { emptyJourney, JOURNEY_CSS, journeyTab, type JourneyState } from './dashboard-cartography-journey.js';
 import { emptyUnresolved, unresolvedTab, type UnresolvedUi } from './dashboard-cartography-unresolved.js';
 import { header, icon } from './dashboard-parts.js';
@@ -167,6 +168,8 @@ export interface CartographyUi extends JourneyState, UnresolvedUi {
   conceptCriteria: ListCriteria;
   concept?: string;
   conceptSheet?: FieldSheet;
+  /** Le champ mis en avant dans le parcours du concept (diagramme). */
+  conceptSpot?: string;
   issues?: MapPage<FieldIssue>;
   issuesPage: number;
   /** Sources, scan. */
@@ -1360,7 +1363,7 @@ function fieldsTab(m: MapStrings, state: MapState): string {
       ? `<button class="btn small" data-action="map-decide" data-kind="VALIDATE_CONCEPT" data-target="${esc(sheet.concept.id)}">${icon('check')}<span>${esc(m.decide.validateConcept)}</span></button>`
       : '';
   const right = sheet
-    ? `<section class="card map-concept"><div class="card-h"><h2>${esc(sheet.concept.name)} ${conf(m, sheet.concept.status)}</h2>${validate}</div><p class="mu small">${esc(m.conceptFlow)}</p>${graphSvg(m, sheet.graph, sheet.node.id)}<p>${sheet.reuse.map((f) => `<button class="map-mod" data-action="map-feature" data-feature="${esc(f.id)}">${esc(f.name)}</button>`).join(' ')}</p>${sheet.concept.gaps.length ? `<h3>${esc(m.gaps)}</h3><ul class="map-why warn-t">${sheet.concept.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : ''}<h3>${esc(m.edgesTitle(sheet.sequence.length))}</h3>${sequenceList(m, state, sheet)}${sheet.concept.homonyms.length ? `<h3>${esc(m.homonyms)}</h3><ul class="map-reuse-l">${sheet.concept.homonyms.map((h) => `<li><button class="lnk" data-action="map-concept" data-concept="${esc(h.id)}">${esc(h.name)}</button> <small class="mu">${esc(h.layers.map((l) => m.layers[l] ?? l).join(' → '))}</small></li>`).join('')}</ul>` : ''}</section>`
+    ? `<section class="card map-concept"><div class="card-h"><h2>${esc(sheet.concept.name)} ${conf(m, sheet.concept.status)}</h2>${validate}</div><p class="mu small">${esc(m.conceptFlow)}</p>${conceptDiagrams(m, sheet, ui.conceptSpot)}${sheet.concept.gaps.length ? `<h3>${esc(m.gaps)}</h3><ul class="map-why warn-t">${sheet.concept.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : ''}<h3>${esc(m.edgesTitle(sheet.sequence.length))}</h3>${sequenceList(m, state, sheet)}</section>`
     : `<section class="card">${ui.loading.conceptSheet ? spinner(m) : `${paneError(ui.errors.conceptSheet)}<p class="mu">${esc(m.pickConcept)}</p>`}</section>`;
   const issues = ui.issues;
   const issueRows = (issues?.items ?? [])
@@ -1369,7 +1372,7 @@ function fieldsTab(m: MapStrings, state: MapState): string {
         `<li>${chip(issue.kind === 'UNUSED' || issue.kind === 'DUPLICATE' ? 'PROPOSED' : 'NOT_COVERED', m.issueKinds[issue.kind] ?? issue.kind)} <span>${esc(issue.message)}</span>${issue.concept ? ` <button class="lnk" data-action="map-concept" data-concept="${esc(issue.concept)}" aria-label="${esc(m.conceptFlow)}">${icon('eye')}</button>` : ''}</li>`,
     )
     .join('');
-  return `<div class="map-split right"><section class="card map-concepts"><h2>${icon('merge')}<span>${esc(m.concepts(page?.total ?? 0))}</span></h2>${filters}${paneError(ui.errors.concepts)}${ui.loading.concepts && !page ? spinner(m) : `<ul class="map-c-l">${list}</ul>`}${page ? pager(m, 'concepts', page, [10, 20, 50]) : ''}</section>${right}</div><section class="card map-issues"><h2>${icon('alert')}<span>${esc(m.issues)} (${String(issues?.total ?? 0)})</span></h2>${issueRows ? `<ul class="map-issue-l">${issueRows}</ul>` : `<p class="mu">${esc(m.noIssue)}</p>`}${issues ? pager(m, 'issues', issues, [20]) : ''}</section>`;
+  return `<div class="map-split right cf-wide"><section class="card map-concepts"><h2>${icon('merge')}<span>${esc(m.concepts(page?.total ?? 0))}</span></h2>${filters}${paneError(ui.errors.concepts)}${ui.loading.concepts && !page ? spinner(m) : `<ul class="map-c-l">${list}</ul>`}${page ? pager(m, 'concepts', page, [10, 20, 50]) : ''}</section>${right}</div><section class="card map-issues"><h2>${icon('alert')}<span>${esc(m.issues)} (${String(issues?.total ?? 0)})</span></h2>${issueRows ? `<ul class="map-issue-l">${issueRows}</ul>` : `<p class="mu">${esc(m.noIssue)}</p>`}${issues ? pager(m, 'issues', issues, [20]) : ''}</section>`;
 }
 
 // ── Scénarios & Couverture ────────────────────────────────────────────────────────────────────────
@@ -1439,7 +1442,7 @@ function evidencePanel(m: MapStrings, ui: CartographyUi): string {
   return `<aside class="map-ev" role="dialog" aria-label="${esc(e ? m.evidenceTitle(e.file, e.line) : m.evidence)}"><div class="card-h"><h2 class="mono">${esc(e ? `${e.source} · ${m.evidenceTitle(e.file, e.line)}` : m.evidence)}</h2><button class="btn small ghost icon-only" data-action="map-evidence-close" aria-label="${esc(m.closeEvidence)}">${icon('close')}</button></div>${code}</aside>`;
 }
 
-export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}${SCAN_CSS}${INVESTIGATION_CSS}${JOURNEY_CSS}
+export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}${SCAN_CSS}${INVESTIGATION_CSS}${JOURNEY_CSS}${CONCEPT_CSS}
 .sd-note{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sd-note span{flex:1 1 auto}
 .map{display:flex;flex-direction:column;gap:14px}
 .map-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
@@ -1462,6 +1465,7 @@ export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_C
 .map .card h2{display:flex;flex-wrap:nowrap;gap:8px;align-items:center;font-size:15px;margin:0 0 10px;text-transform:none;letter-spacing:0;color:var(--qa-color-text)}
 .map .card h2 .ico{color:var(--qa-color-primary);flex:none}
 .map-split.right{grid-template-columns:minmax(280px,1fr) minmax(360px,1.7fr)}
+.map-split.right.cf-wide{grid-template-columns:minmax(260px,.75fr) minmax(0,2.25fr)}
 .map-step{display:inline-flex;gap:6px;align-items:center;white-space:nowrap;max-width:100%}
 .map-step .map-box{white-space:normal}
 .map-edges{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}

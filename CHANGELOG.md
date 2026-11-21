@@ -4,6 +4,17 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : diagrammes Archify dans « Champs & Réutilisations »
+
+- La fiche d'un concept de données montre le parcours de la donnée en diagramme Archify : une région par
+  couche, un nœud par champ dans son conteneur (composant, DTO, table), une flèche à angle droit par lien
+  justifié (vert avec comète si démontré, tirets si probable). Elle remplace l'ancien graphe du concept.
+- La réutilisation devient un diagramme : le concept relié à chaque fonctionnalité qui l'emploie, de la force
+  du lien. Les homonymes sont montrés à part, en pointillés et sans flèche (aucun lien n'est créé sur un
+  nom) ; un clic ouvre leur propre parcours.
+- Clic sur un champ : ses liens s'allument, le reste s'estompe ; « Tout afficher » rend tout net. Les
+  diagrammes sont réduits à la largeur de la carte (60 % au moins), la liste des concepts est plus étroite.
+
 ### Cartographie : parcours en workflow et en flux de données, flèches Archify
 
 - Deux nouvelles présentations du parcours : « Workflow » (toute la trace aval en arbre, du clic à la

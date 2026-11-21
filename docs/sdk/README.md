@@ -1173,6 +1173,16 @@ Résumé, Champs, Traçabilité (vue graphe), Réutilisations et Scénarios ; à
 d'impact (le détail et le rejeu préparé s'ouvrent sur « Voir l'impact détaillé » ; rien n'est lancé
 sans action).
 
+Dans **Champs & Réutilisations**, la fiche d'un concept de données est dessinée dans le style d'Archify :
+le **parcours de la donnée**, une région par couche (Front, BFF, Backend, API, base de données), un nœud
+par champ du concept dans son conteneur (composant, DTO, table) avec son type, et une flèche à angle
+droit par lien justifié (transmet, transforme, écrit…) — verte avec sa comète si le lien est démontré, en
+tirets s'il est probable ; la **réutilisation**, le concept relié à chaque fonctionnalité qui l'emploie
+(un clic ouvre sa fiche) ; les **homonymes** à part, en pointillés et sans aucune flèche : un même nom ne
+fait pas un lien. Cliquer un champ l'allume avec ses liens et estompe le reste ; les diagrammes sont
+réduits à la largeur de la carte (jusqu'à 60 %), puis défilent dans leur zone. La liste des liens
+justifiés et leurs preuves restent sous les diagrammes.
+
 La **Traçabilité (vue graphe)** d'un champ a deux vues :
 
 - **Parcours principal** (par défaut) : les nœuds atteints depuis le champ par des liens de flux
