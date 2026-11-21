@@ -1707,6 +1707,10 @@ export interface FeatureMapRelation {
   status: MapConfidence;
   reason: string;
   evidence?: Evidence;
+  /** La garde de code sous laquelle la relation a lieu (« this.etat.value.valide »), si le scan l'a lue. */
+  condition?: string;
+  /** Le moment asynchrone de la relation (« après await this.api.valider(commande) »), si le scan l'a lu. */
+  async?: string;
 }
 
 /** Un faisceau : les relations d'une même catégorie entre deux groupes, comptées exactement. */
@@ -1776,6 +1780,10 @@ export interface FeatureTraceStep {
     status: MapConfidence;
     reason: string;
     evidence?: Evidence;
+    /** La garde de code sous laquelle l'étape est atteinte, si le scan l'a lue. */
+    condition?: string;
+    /** Le moment asynchrone de la relation, si le scan l'a lu. */
+    async?: string;
   };
   /** Avec `end: 'JOIN'` : l'étape déjà tracée que cette branche rejoint. */
   joins?: string;

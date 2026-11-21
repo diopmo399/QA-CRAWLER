@@ -354,6 +354,31 @@ describe('Dashboard — functional map, in Chromium', () => {
     const sheet = dashboard().locator('.map-concept');
     await sheet.locator('h2', { hasText: 'Company name' }).waitFor();
     expect(await sheet.locator('h3', { hasText: 'Homonymes' }).count()).toBe(1);
+    // Les diagrammes Archify du concept : le parcours par couche, la réutilisation, les homonymes sans flèche.
+    const flow = sheet.locator('[data-cf-stage="cf-flow"]');
+    await flow.waitFor();
+    expect(await flow.locator('.cf-region .ar-rl').allTextContents()).toEqual(
+      expect.arrayContaining(['Front', 'BFF', 'Backend', 'Base de données']),
+    );
+    const fieldBoxes = await flow.locator('button.dg-n').count();
+    expect(fieldBoxes).toBeGreaterThanOrEqual(4);
+    expect(await flow.locator('path.dg-e').count()).toBeGreaterThanOrEqual(fieldBoxes - 1);
+    expect(
+      await sheet.locator('[data-cf-stage="cf-reuse"] button[data-action="map-feature"]').count(),
+    ).toBeGreaterThan(0);
+    expect(await sheet.locator('[data-cf-stage="cf-hom"] path').count()).toBe(0);
+    // Réduit à la largeur de la carte : la page ne défile pas en largeur.
+    const zoom = Number(await flow.evaluate((el) => (el as HTMLElement).style.zoom || '1'));
+    expect(zoom).toBeGreaterThanOrEqual(0.6);
+    expect(zoom).toBeLessThanOrEqual(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // Un clic sur un champ : il s'allume avec ses liens, le reste s'estompe ; « Tout afficher » rend tout net.
+    await flow.locator('button.dg-n').nth(1).click();
+    await expect.poll(async () => flow.locator('button.dg-n.sel').count()).toBe(1);
+    expect(await flow.locator('path.dg-e.on').count()).toBeGreaterThan(0);
+    expect(await flow.locator('button.dg-n.dim').count()).toBeGreaterThan(0);
+    await sheet.locator('.ar-head [data-action="map-cf-spot"]').click();
+    await expect.poll(async () => flow.locator('button.dg-n.dim').count()).toBe(0);
     expect(await dashboard().locator('.map-issues').textContent()).toContain(
       'longueurs maximales différentes (120 / 100)',
     );

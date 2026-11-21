@@ -1173,6 +1173,16 @@ Résumé, Champs, Traçabilité (vue graphe), Réutilisations et Scénarios ; à
 d'impact (le détail et le rejeu préparé s'ouvrent sur « Voir l'impact détaillé » ; rien n'est lancé
 sans action).
 
+Dans **Champs & Réutilisations**, la fiche d'un concept de données est dessinée dans le style d'Archify :
+le **parcours de la donnée**, une région par couche (Front, BFF, Backend, API, base de données), un nœud
+par champ du concept dans son conteneur (composant, DTO, table) avec son type, et une flèche à angle
+droit par lien justifié (transmet, transforme, écrit…) — verte avec sa comète si le lien est démontré, en
+tirets s'il est probable ; la **réutilisation**, le concept relié à chaque fonctionnalité qui l'emploie
+(un clic ouvre sa fiche) ; les **homonymes** à part, en pointillés et sans aucune flèche : un même nom ne
+fait pas un lien. Cliquer un champ l'allume avec ses liens et estompe le reste ; les diagrammes sont
+réduits à la largeur de la carte (jusqu'à 60 %), puis défilent dans leur zone. La liste des liens
+justifiés et leurs preuves restent sous les diagrammes.
+
 La **Traçabilité (vue graphe)** d'un champ a deux vues :
 
 - **Parcours principal** (par défaut) : les nœuds atteints depuis le champ par des liens de flux
@@ -1267,6 +1277,42 @@ ou `status` est refusée (400), une fonctionnalité inconnue répond 404.
   écran ; un bouton, un store, un service SPA, un endpoint, un contrat, un contrôleur ou un client sans
   suite est une rupture, sauf si une branche voisine va plus loin. Au plus 5 000 éléments par sens et
   400 étapes, avec un avertissement si la trace est coupée.
+- **Diagramme d'architecture.** Le parcours de l'élément choisi s'affiche par défaut en diagramme
+  (« Architecture » ; « Couloirs » rend la présentation précédente, avec ses modes) : une région par
+  couche atteinte (un rail « non atteint » pour les autres), une boîte par étape du chemin principal,
+  numérotée comme dans le bandeau et teintée par couche (persistance en violet, actions NgRx en orange),
+  rangée en U sur deux colonnes au-delà de cinq étapes. Les flèches sont tracées d'après la place réelle
+  des boîtes, à angle droit comme dans Archify (80 px entre régions et entre boîtes) : trait vert parcouru
+  d'une comète (confirmée), tirets violets (probable), pointillés gris (non démontrée), avec le verbe aux
+  passages de couche, sur un fond plein. Cliquer une boîte rend son étape active et la met en
+  avant avec ses deux voisines ; le reste s'estompe et son détail s'affiche dans « Détails de l'étape ».
+  Un second clic, un clic dans le vide ou « Tout afficher » rend tout visible. Sous le diagramme, la
+  légende et trois cartes tirées de la trace : chemin principal, relations à vérifier, lacunes du scan.
+  Les animations s'arrêtent si le système demande moins de mouvement.
+- **Diagramme de séquence.** « Séquence » montre le même chemin dans le temps : les étapes de structure
+  qui l'ouvrent (page, composant, conteneurs) en une ligne « où se trouve l'élément », puis une ligne de
+  vie par étape suivante, rangée dans la région de sa couche (un rail pour une couche traversée sans être
+  atteinte), avec sa barre d'activité ; un message par relation, de haut en bas dans l'ordre du chemin,
+  numéroté comme le bandeau, avec son verbe et son niveau de preuve. Un bouton est précédé du clic de
+  l'utilisateur, marqué comme une action et non comme une relation du code. Seuls les appels démontrés
+  sont dessinés : aucune réponse (retour) n'est inventée. Cliquer une ligne de vie ou un message rend son
+  étape active : ses messages s'allument, le reste s'estompe, et « Détails de l'étape » la décrit.
+- **Workflow.** « Workflow » déroule toute la trace aval de l'élément en arbre de gauche à droite : le clic
+  de l'utilisateur (pour un bouton), puis une colonne par profondeur, le chemin principal sur la première
+  rangée et les branches dessous. Les étapes atteintes sous une même garde du code (lue par le scan, par
+  ex. `this.etat.value.valide`) passent par un losange de décision ; seule la branche démontrée (« vrai »)
+  est dessinée, la branche contraire n'est jamais inventée. Flèches : chemin principal en vert avec sa
+  comète, branche en ardoise, asynchrone (après `await` ou `subscribe`) ou probable en tirets violets, non
+  démontré en pointillés. Cliquer une étape ou une décision allume ses entrées et sorties ; une branche
+  hors du chemin principal se met en avant sans changer l'étape active.
+- **Data flow.** « Data flow » range les mêmes étapes en colonnes par rôle — source, état (stores),
+  transport (services HTTP, endpoints), traitement (contrôleurs, services, règles), stockage (dépôts,
+  tables), externe, affichage (une interface atteinte après un store) — et dessine chaque relation dans le
+  sens des données : une lecture part de la table vers qui la lit, une écriture ou un envoi va vers sa
+  cible. Une branche garde sa rangée en traversant les colonnes ; le verbe est écrit entre deux colonnes.
+- **Garde et moment asynchrone dans la trace.** Une relation (`FeatureMapRelation`) et l'étape qu'elle
+  atteint (`FeatureTraceStep.via`) portent, quand le scan les a lus, `condition` (la garde de code) et
+  `async` (le moment asynchrone) ; absents sinon.
 - **Tableau des liens.** Type, source, cible, statut (confirmé, probable, non démontré) et preuve
   (« Voir le code »), par pages de 25 ; listes de catégorie, de couche, de statut et recherche. Aucune
   relation n'est perdue : tout ce que le graphe agrège est ici, page par page.

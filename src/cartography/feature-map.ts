@@ -262,6 +262,8 @@ export function featureMap(
         ? 'PERSISTENCE'
         : base;
     const evidence = firstEvidence(edge.evidence);
+    const condition = str(edge.detail?.condition);
+    const async = str(edge.detail?.async);
     return {
       id: edge.id,
       kind: edge.kind,
@@ -277,6 +279,8 @@ export function featureMap(
       status: edge.confidence,
       reason: edge.reason,
       ...(evidence ? { evidence } : {}),
+      ...(condition ? { condition } : {}),
+      ...(async ? { async } : {}),
     };
   };
   const seen = new Set<string>();
@@ -623,6 +627,8 @@ function pathOf(
               status: via.status,
               reason: via.reason,
               ...(via.evidence ? { evidence: via.evidence } : {}),
+              ...(via.condition ? { condition: via.condition } : {}),
+              ...(via.async ? { async: via.async } : {}),
             },
           }
         : {}),

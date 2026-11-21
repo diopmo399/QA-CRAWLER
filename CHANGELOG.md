@@ -4,6 +4,54 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : diagrammes Archify dans « Champs & Réutilisations »
+
+- La fiche d'un concept de données montre le parcours de la donnée en diagramme Archify : une région par
+  couche, un nœud par champ dans son conteneur (composant, DTO, table), une flèche à angle droit par lien
+  justifié (vert avec comète si démontré, tirets si probable). Elle remplace l'ancien graphe du concept.
+- La réutilisation devient un diagramme : le concept relié à chaque fonctionnalité qui l'emploie, de la force
+  du lien. Les homonymes sont montrés à part, en pointillés et sans flèche (aucun lien n'est créé sur un
+  nom) ; un clic ouvre leur propre parcours.
+- Clic sur un champ : ses liens s'allument, le reste s'estompe ; « Tout afficher » rend tout net. Les
+  diagrammes sont réduits à la largeur de la carte (60 % au moins), la liste des concepts est plus étroite.
+
+### Cartographie : parcours en workflow et en flux de données, flèches Archify
+
+- Deux nouvelles présentations du parcours : « Workflow » (toute la trace aval en arbre, du clic à la
+  table ; les gardes du code deviennent des losanges de décision, seule la branche démontrée « vrai » est
+  dessinée) et « Data flow » (les étapes en colonnes source, état, transport, traitement, stockage, externe,
+  affichage ; une lecture va de la table vers qui la lit). Mises en page au rendu, cliquables : une étape ou
+  une décision allume ses entrées et sorties, une branche hors du chemin se met en avant sans changer
+  l'étape active.
+- Les flèches de l'architecture et des nouveaux diagrammes suivent Archify : tracé à angle droit, pointe
+  10 × 7, chemin démontré en vert parcouru d'une comète, probable ou asynchrone en tirets violets, non
+  démontré en pointillés gris ; étiquettes sur fond plein au milieu du segment central. Espacement Archify
+  (80 px) entre régions et entre boîtes de l'architecture.
+- La trace porte la garde de code (`condition`) et le moment asynchrone (`async`) d'une relation quand le
+  scan les a lus (`FeatureMapRelation`, `FeatureTraceStep.via`).
+
+### Cartographie : parcours en diagrammes d'architecture et de séquence
+
+- Le parcours de l'élément choisi s'affiche par défaut en diagramme d'architecture (« Architecture ») ; les
+  couloirs restent un clic plus loin (« Couloirs »). Une région par couche atteinte, un rail titré pour une
+  couche non atteinte, une boîte par étape du chemin principal, numérotée comme dans le bandeau et teintée par
+  couche (persistance en violet, actions NgRx en orange). Au-delà de cinq étapes, une région les range en U
+  sur deux colonnes.
+- Les flèches suivent la place réelle des boîtes : trait plein parcouru d'impulsions si la relation est
+  confirmée, tirets si elle est probable, pointillés si elle n'est pas démontrée ; le verbe est écrit aux
+  passages de couche. Les animations s'arrêtent si le système demande moins de mouvement.
+- Cliquer une boîte rend son étape active et la met en avant (halo) avec ses deux voisines ; le reste
+  s'estompe, ses deux flèches s'épaississent, son détail s'affiche sous le graphe. Un second clic, un clic dans
+  le vide ou « Tout afficher » rend tout visible.
+- Sous le diagramme : la légende, et trois cartes tirées de la trace (chemin principal, relations à vérifier,
+  lacunes du scan). Le diagramme s'ajuste à la largeur à sa première apparition.
+- Présentation « Séquence » : les étapes de structure (page, composant, conteneurs) en une ligne « où se
+  trouve l'élément », puis une ligne de vie par étape du chemin principal, dans la région de sa couche, avec
+  sa barre d'activité ; un message par relation, de haut en bas, numéroté comme le bandeau, avec son verbe et
+  son niveau de preuve ; le clic de l'utilisateur devant un bouton (une action, pas une relation du code).
+  Aucune réponse n'est dessinée : le scan ne les démontre pas. Cliquer une ligne de vie ou un message rend
+  son étape active : ses messages s'allument, le reste s'estompe.
+
 ### Cartographie : affichage de « Parcours & Graphe »
 
 - Le chemin principal est tracé dans les couloirs, d'une étape numérotée à la suivante : flèche pleine d'un
