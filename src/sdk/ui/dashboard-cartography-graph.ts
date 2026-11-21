@@ -8,7 +8,15 @@ import type {
   MapSummary,
 } from '../core/cartography.js';
 import type { MapStrings } from './dashboard-cartography-i18n.js';
+import { type ArrowRole, arrowMarkers, orthPath } from './dashboard-cartography-arrows.js';
 import { icon } from './dashboard-parts.js';
+
+/** La classe de flèche Archify d'un niveau de preuve. */
+const GRAPH_ROLE: Record<MapConfidence, ArrowRole> = {
+  CONFIRMED: 'emphasis',
+  PROBABLE: 'dashed',
+  UNKNOWN: 'gap',
+};
 import { esc } from './view.js';
 
 /**
@@ -463,6 +471,12 @@ export function fullGraphSvg(
   for (const e of graph.edges)
     bundles.set(`${e.from}|${e.to}`, [...(bundles.get(`${e.from}|${e.to}`) ?? []), e]);
   const lines: string[] = [];
+  // La comète d'Archify sur les relations confirmées, décalée d'une flèche à l'autre.
+  let comets = 0;
+  const comet = (d: string): string => {
+    const delay = `animation-delay:${((comets++ % 12) * 0.35).toFixed(2)}s`;
+    return `<path class="dg-c glow" d="${d}" pathLength="100" style="${delay}"/><path class="dg-c head" d="${d}" pathLength="100" style="${delay}"/>`;
+  };
   for (const bundle of bundles.values()) {
     const first = bundle[0];
     if (!first) continue;
@@ -476,10 +490,12 @@ export function fullGraphSvg(
       const x2 = b.x + (b.x >= a.x ? 0 : W);
       const y1 = a.y + H / 2 + offset;
       const y2 = b.y + H / 2 + offset;
+      // À angle droit, comme dans Archify : horizontal-vertical-horizontal d'une colonne à l'autre, par le
+      // bord droit dans une même colonne.
       const d =
         a.x === b.x
-          ? `M${String(a.x + W)} ${String(y1)} C${String(a.x + W + 44)} ${String(y1)} ${String(b.x + W + 44)} ${String(y2)} ${String(b.x + W)} ${String(y2)}`
-          : `M${String(x1)} ${String(y1)} C${String((x1 + x2) / 2)} ${String(y1)} ${String((x1 + x2) / 2)} ${String(y2)} ${String(x2)} ${String(y2)}`;
+          ? orthPath({ x: a.x + W, y: y1 }, { x: b.x + W + 1, y: y2 }, 'h', a.x + W + 30 + offset).d
+          : orthPath({ x: x1, y: y1 }, { x: x2 + (b.x >= a.x ? -1 : 1), y: y2 }, 'h').d;
       const conf = weakest(edges.map((e) => e.confidence));
       const ids = edges.map((e) => e.id);
       const lit = selEdges
@@ -499,7 +515,7 @@ export function fullGraphSvg(
           ? `<text class="map-g-cnt" x="${String((x1 + x2) / 2)}" y="${String((y1 + y2) / 2 - 4)}">${esc(m.g.links(edges.length))}</text>`
           : '';
       lines.push(
-        `<g class="map-g-eg${state}"><path class="map-g-e c-${conf.toLowerCase()}" d="${d}" marker-end="url(#map-arrow-${conf.toLowerCase()})"/><path class="map-g-hit" d="${d}" data-action="map-g-select" data-kind="edge" data-ids="${esc(idList(ids))}"><title>${esc(title)}</title></path>${label}</g>`,
+        `<g class="map-g-eg${state}"><path class="map-g-e dg-e r-${GRAPH_ROLE[conf]} c-${conf.toLowerCase()}" d="${d}" marker-end="url(#map-${GRAPH_ROLE[conf]})"/>${conf === 'CONFIRMED' && !state.includes('dim') ? comet(d) : ''}<path class="map-g-hit" d="${d}" data-action="map-g-select" data-kind="edge" data-ids="${esc(idList(ids))}"><title>${esc(title)}</title></path>${label}</g>`,
       );
     });
   }
@@ -520,9 +536,7 @@ export function fullGraphSvg(
       return `<g class="map-g-n${n.id === focus ? ' focus' : ''}${n.id === selNode ? ' sel' : ''}${field ? ' field' : ''} l-${esc(n.layer.toLowerCase())}${state}" data-action="map-g-select" data-kind="node" data-id="${esc(n.id)}" tabindex="0" role="button" aria-label="${esc(`${n.label ?? n.name} (${sub})`)}"><rect x="${String(p.x)}" y="${String(p.y)}" width="${String(W)}" height="${String(H)}" rx="9"/><text x="${String(p.x + 12)}" y="${String(p.y + 21)}" >${esc(trim(n.label ?? text.name, 28))}</text><text x="${String(p.x + 12)}" y="${String(p.y + 38)}" class="sub">${esc(trim(sub, 34))}</text><title>${esc(`${n.kind} · ${n.id}`)}</title></g>`;
     })
     .join('');
-  const marker = (tone: string): string =>
-    `<marker id="map-arrow-${tone}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="map-g-m c-${tone}"/></marker>`;
-  return `<svg class="map-graph" width="${String(width)}" height="${String(height)}" viewBox="0 0 ${String(width)} ${String(height)}" role="img" aria-label="${esc(m.g.fullGraph)}"><defs>${marker('confirmed')}${marker('probable')}${marker('unknown')}</defs>${heads}${lines.join('')}${boxes}</svg>`;
+  return `<svg class="map-graph" width="${String(width)}" height="${String(height)}" viewBox="0 0 ${String(width)} ${String(height)}" role="img" aria-label="${esc(m.g.fullGraph)}">${arrowMarkers('map')}${heads}${lines.join('')}${boxes}</svg>`;
 }
 
 const trim = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
@@ -677,7 +691,7 @@ export const GRAPH_CSS = `
 .map-gbtns{display:inline-flex;gap:4px;align-items:center}
 .map-gbtns .btn.icon-only{width:30px;height:30px;min-height:30px;padding:0}
 .map-gzoom{font-size:11px;color:var(--qa-color-muted);min-width:38px;text-align:center}
-.map-canvas{position:relative;overflow:hidden;border:1px solid var(--qa-color-border);border-radius:10px;background:linear-gradient(var(--qa-color-surface),var(--qa-color-surface)) padding-box,radial-gradient(circle,var(--qa-color-border) 1px,transparent 1px) 0 0/16px 16px;cursor:grab;touch-action:none}
+.map-canvas{position:relative;overflow:hidden;border:1px solid var(--qa-color-border);border-radius:10px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px;color:#0f172a;cursor:grab;touch-action:none}
 .map-canvas.path{min-height:200px}
 .map-canvas.full{height:420px}
 .map-canvas.dragging{cursor:grabbing}
@@ -686,22 +700,22 @@ export const GRAPH_CSS = `
 .map-canvas.path .map-canvas-in{width:100%;min-width:0;padding:20px 14px}
 .map-path{list-style:none;margin:0;padding:0;display:grid;align-items:start;gap:0}
 .map-pcard{display:flex;flex-direction:column;align-items:center;gap:10px;min-width:0}
-.map-pc{position:relative;width:100%;display:flex;flex-direction:column;gap:6px;padding:10px 10px 12px;border:1px solid color-mix(in srgb,var(--lane-b,#7c5cd6) 45%,var(--qa-color-border));border-radius:12px;background:var(--lane,var(--qa-color-surface-2));box-shadow:0 1px 2px rgba(15,40,30,.06)}
-.map-pcard.l-frontend{--lane:color-mix(in srgb,#7c5cd6 12%,var(--qa-color-surface));--lane-b:#7c5cd6}
-.map-pcard.l-bff{--lane:color-mix(in srgb,#2f80c8 12%,var(--qa-color-surface));--lane-b:#2f80c8}
-.map-pcard.l-backend{--lane:color-mix(in srgb,var(--qa-color-success) 14%,var(--qa-color-surface));--lane-b:var(--qa-color-success)}
-.map-pcard.l-api{--lane:color-mix(in srgb,#5b6b7a 10%,var(--qa-color-surface));--lane-b:#5b6b7a}
-.map-pcard.l-database{--lane:color-mix(in srgb,var(--qa-color-warning) 16%,var(--qa-color-surface));--lane-b:var(--qa-color-warning)}
+.map-pc{position:relative;width:100%;display:flex;flex-direction:column;gap:6px;padding:10px 10px 12px;border:1.5px solid var(--lane-b,#64748b);border-radius:6px;background:linear-gradient(var(--lane,transparent),var(--lane,transparent)),#fff}
+.map-pcard.l-frontend{--lane:rgba(34,211,238,.15);--lane-b:#0891b2}
+.map-pcard.l-bff{--lane:rgba(96,165,250,.15);--lane-b:#2563eb}
+.map-pcard.l-backend{--lane:rgba(52,211,153,.18);--lane-b:#059669}
+.map-pcard.l-api{--lane:rgba(148,163,184,.18);--lane-b:#64748b}
+.map-pcard.l-database{--lane:rgba(167,139,250,.2);--lane-b:#7c3aed}
 .map-pc-h{display:flex;gap:8px;align-items:center;padding-right:18px}
 .map-pc-h .ico{width:22px;height:22px;flex:none;color:var(--lane-b)}
 .map-pc-h span{display:flex;flex-direction:column;line-height:1.15}
-.map-pc-h b{font-size:12.5px}
+.map-pc-h b{font-size:12px;font-weight:600;color:#0f172a}
 .map-pc-h small{font-size:11px;color:var(--qa-color-muted)}
 .map-pc-st{position:absolute;top:-8px;right:-8px;display:grid;place-items:center;width:20px;height:20px;border-radius:50%;color:#fff;border:2px solid var(--qa-color-surface)}
 .map-pc-st .ico{width:12px;height:12px}
-.map-pc-st.c-confirmed{background:var(--qa-color-success)}
-.map-pc-st.c-probable{background:var(--qa-color-warning)}
-.map-pc-st.c-unknown{background:var(--qa-color-muted)}
+.map-pc-st.c-confirmed{background:#059669}
+.map-pc-st.c-probable{background:#7c3aed}
+.map-pc-st.c-unknown{background:#94a3b8}
 .map-pc-b{display:flex;flex-direction:column;gap:4px}
 .map-pn{display:flex;flex-direction:column;align-items:center;gap:1px;width:100%;padding:6px 4px;border:1px solid transparent;border-radius:8px;background:color-mix(in srgb,var(--qa-color-surface) 70%,transparent);color:inherit;cursor:pointer;text-align:center;font:inherit}
 .map-pn span{font-size:11px;line-height:1.3}
@@ -720,18 +734,18 @@ export const GRAPH_CSS = `
 .map-plink{align-self:stretch;display:flex;align-items:flex-start;padding:46px 3px 0}
 .map-pl{display:flex;flex-direction:column;gap:3px;align-items:center;width:100%;border:0;background:transparent;padding:4px 0;cursor:pointer;color:var(--qa-color-muted)}
 .map-pl small{font-size:10px}
-.map-pa{position:relative;display:block;width:100%;height:0;border-top:2px solid var(--qa-color-success)}
-.map-pa::after{content:"";position:absolute;right:-1px;top:-6px;border:5px solid transparent;border-left:8px solid var(--qa-color-success);border-right:0}
-.map-pa.c-probable{border-top:2px dashed var(--qa-color-warning)}
-.map-pa.c-probable::after{border-left-color:var(--qa-color-warning)}
-.map-pa.c-unknown{border-top:2px dashed var(--qa-color-muted)}
-.map-pa.c-unknown::after{border-left-color:var(--qa-color-muted)}
-.map-plink.hl .map-pa{border-top-width:3px}
+.map-pa{position:relative;display:block;width:100%;height:0;border-top:1.8px solid #059669}
+.map-pa::after{content:"";position:absolute;right:-1px;top:-4.5px;border:3.5px solid transparent;border-left:10px solid #059669;border-right:0}
+.map-pa.c-probable{border-top:1.4px dashed #7c3aed}
+.map-pa.c-probable::after{border-left-color:#7c3aed}
+.map-pa.c-unknown{border-top:1.4px dotted #94a3b8}
+.map-pa.c-unknown::after{border-left-color:#94a3b8}
+.map-plink.hl .map-pa{border-top-width:2.6px}
 .map-legend2{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font-size:12px;padding:8px 12px;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface)}
 .map-legend2 .lg{display:inline-flex;gap:5px;align-items:center}
 .map-legend2 .lg .ico{width:14px;height:14px}
-.map-legend2 .c-confirmed .ico{color:var(--qa-color-success)}
-.map-legend2 .c-probable .ico{color:var(--qa-color-warning)}
+.map-legend2 .c-confirmed .ico{color:#059669}
+.map-legend2 .c-probable .ico{color:#7c3aed}
 .map-legend2 .c-unknown i{width:14px;height:14px;border:2px dashed var(--qa-color-muted);border-radius:4px}
 .map-legend2 .flow i{width:22px;border-top:2px solid var(--qa-color-text);position:relative}
 .map-legend2 .flow i::after{content:"";position:absolute;right:-2px;top:-5px;border:4px solid transparent;border-left:6px solid var(--qa-color-text);border-right:0}
@@ -757,21 +771,15 @@ export const GRAPH_CSS = `
 .map-rel-t .map-ev-btn{white-space:nowrap;font-size:11px}
 .map-rel-t tr.sel td{background:var(--qa-color-primary-soft-2)}
 .map-rel-ev .map-loc{font-size:11px}
-.map-graph .map-g-n.field rect{stroke-width:1.5}
-.map-graph .map-g-n.l-frontend rect{fill:color-mix(in srgb,#7c5cd6 9%,var(--qa-color-surface))}
-.map-graph .map-g-n.l-bff rect{fill:color-mix(in srgb,#2f80c8 9%,var(--qa-color-surface))}
-.map-graph .map-g-n.l-backend rect{fill:color-mix(in srgb,var(--qa-color-success) 10%,var(--qa-color-surface))}
-.map-graph .map-g-n.l-database rect{fill:color-mix(in srgb,var(--qa-color-warning) 12%,var(--qa-color-surface))}
-.map-graph .map-g-n.sel rect{stroke:var(--qa-color-primary);stroke-width:3}
+.map-graph .map-g-n.l-frontend rect{fill:#e0f7fb;stroke:#0891b2}
+.map-graph .map-g-n.l-bff rect{fill:#e5effe;stroke:#2563eb}
+.map-graph .map-g-n.l-backend rect{fill:#dcf6ec;stroke:#059669}
+.map-graph .map-g-n.l-database rect{fill:#efe9fe;stroke:#7c3aed}
+.map-graph .map-g-n.sel rect{stroke-width:2.5;filter:drop-shadow(0 0 4px rgba(8,145,178,.45))}
 .map-graph .dim{opacity:.3}
-.map-graph .map-g-eg.hl .map-g-e{stroke-width:3}
+.map-graph .map-g-eg.hl .map-g-e{stroke-width:2.6}.map-graph .dim .dg-c{display:none}
 .map-graph .map-g-hit{fill:none;stroke:transparent;stroke-width:12;cursor:pointer;pointer-events:stroke}
-.map-graph .map-g-cnt{font-size:10px;fill:var(--qa-color-muted);text-anchor:middle}
-.map-graph .map-g-m.c-confirmed{fill:var(--qa-color-success)}
-.map-graph .map-g-m.c-probable{fill:var(--qa-color-warning)}
-.map-graph .map-g-m.c-unknown{fill:var(--qa-color-muted)}
-.map-graph .map-g-e.c-unknown{stroke:var(--qa-color-muted)}
-.map-graph .map-g-e.c-confirmed{stroke:var(--qa-color-success)}
+.map-graph .map-g-cnt{font-size:10px;font-weight:600;fill:#475569;text-anchor:middle;paint-order:stroke;stroke:#f8fafc;stroke-width:5px;stroke-linejoin:round}
 .map-graph:hover .map-g-eg:not(:hover):not(.hl) .map-g-e{opacity:.55}
 @media (max-width:640px){.map-gtitle{flex-direction:column;align-items:flex-start}.map-switch{margin-left:0}}
 `;
