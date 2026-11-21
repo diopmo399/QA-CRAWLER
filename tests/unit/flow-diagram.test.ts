@@ -42,11 +42,23 @@ describe('flow diagrams (SVG)', () => {
     const svg = renderFlowMap(result, 'fr');
     expect(svg).toContain('<svg');
     expect(svg.match(/<rect[^>]*rx=/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
-    expect(svg).toContain('stroke="#2e7d32"'); // Users → PASS
-    expect(svg).toContain('stroke="#c62828"'); // Open → FAIL, et l'écran en erreur
+    expect(svg).toContain('stroke="#059669"'); // Users → PASS
+    expect(svg).toContain('stroke="#e11d48"'); // Open → FAIL, et l'écran en erreur
     expect(svg).toContain('Users &lt;b&gt;');
     expect(svg).not.toContain('Users <b>');
     expect(svg).not.toMatch(/<script/i);
+  });
+
+  it('flow map: the comet runs only along validated main transitions, never on dashed side links', () => {
+    const html = renderFlowMap(branching(), 'fr');
+    const edges = [...html.matchAll(/<g class="fm-edge fm-(\w+)"[\s\S]*?<\/g>/g)].map((m) => ({
+      kind: m[1] ?? '',
+      comet: m[0].includes('fm-comet'),
+      pass: m[0].includes('stroke="#059669"'),
+    }));
+    expect(edges.some((e) => e.comet)).toBe(true);
+    for (const e of edges) expect(e.comet).toBe(e.kind === 'tree' && e.pass);
+    expect(edges.some((e) => e.kind === 'link' && e.pass)).toBe(true);
   });
 
   it('flow map: every screen has its details (actions, checks, issues, screenshot); the fragment holds no script', () => {
@@ -142,7 +154,7 @@ describe('flow diagrams (SVG)', () => {
     const svg = renderFlowSteps(flow);
     expect(svg).toContain('aria-label="Créer &lt;x&gt;"');
     expect(svg).toContain('2. FAILED');
-    expect(svg).toContain('#c62828');
+    expect(svg).toContain('#e11d48');
     expect(svg).toContain('(Timeout)');
     expect(renderFlowSteps({ ...flow, steps: [] })).toBe('');
   });
