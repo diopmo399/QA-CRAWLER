@@ -1304,20 +1304,16 @@ export function drawRoute(svg: SVGSVGElement): void {
     };
   };
   const across = (a: RouteSpot, b: RouteSpot): boolean => b.left >= a.right - 4 || b.right <= a.left + 4;
+  // À angle droit, comme dans Archify : d'un couloir à l'autre horizontal-vertical-horizontal, coudé au
+  // milieu ; dans un même couloir, par le bord gauche des cartes.
   const curve = (a: RouteSpot, b: RouteSpot): string => {
-    const f = (n: number): string => n.toFixed(1);
-    if (b.left >= a.right - 4) {
-      const c = Math.max(16, (b.left - a.right) / 2);
-      return `M${f(a.right)} ${f(a.y)}C${f(a.right + c)} ${f(a.y)} ${f(b.left - c)} ${f(b.y)} ${f(b.left)} ${f(b.y)}`;
-    }
-    if (b.right <= a.left + 4) {
-      const c = Math.max(16, (a.left - b.right) / 2);
-      return `M${f(a.left)} ${f(a.y)}C${f(a.left - c)} ${f(a.y)} ${f(b.right + c)} ${f(b.y)} ${f(b.right)} ${f(b.y)}`;
-    }
+    if (b.left >= a.right - 4) return orthPath({ x: a.right, y: a.y }, { x: b.left - 1, y: b.y }, 'h').d;
+    if (b.right <= a.left + 4) return orthPath({ x: a.left, y: a.y }, { x: b.right + 1, y: b.y }, 'h').d;
     const x = Math.min(a.left, b.left);
-    const bulge = Math.min(22, 8 + Math.abs(b.y - a.y) / 12);
-    return `M${f(x)} ${f(a.y)}C${f(x - bulge)} ${f(a.y)} ${f(x - bulge)} ${f(b.y)} ${f(x)} ${f(b.y)}`;
+    const bulge = Math.min(14, 6 + Math.abs(b.y - a.y) / 16);
+    return orthPath({ x, y: a.y }, { x, y: b.y }, 'h', x - bulge).d;
   };
+  let comet = 0;
   const paths: string[] = [];
   let last: { spot: RouteSpot; index: number } | undefined;
   route.forEach((step, index) => {
@@ -1329,18 +1325,23 @@ export function drawRoute(svg: SVGSVGElement): void {
       const on = index === active + 1 ? ' on' : '';
       // D'un couloir à l'autre : une flèche pleine. Dans un même couloir : un trait fin sans pointe, le long
       // du bord des cartes (les numéros disent l'ordre ; des pointes empilées ne le diraient pas mieux).
-      paths.push(
-        across(last.spot, spot)
-          ? `<path class="s-${status}${on}" d="${curve(last.spot, spot)}" marker-end="url(#jr-arrow)"/>`
-          : `<path class="in s-${status}${on}" d="${curve(last.spot, spot)}"/>`,
-      );
+      const role: ArrowRole = status === 'confirmed' ? 'emphasis' : status === 'probable' ? 'dashed' : 'gap';
+      if (across(last.spot, spot)) {
+        paths.push(
+          arrowSvg('jr', {
+            d: curve(last.spot, spot),
+            role,
+            ...(on ? { state: 'on' as const } : {}),
+            ...(role === 'emphasis' ? { comet: comet++ } : {}),
+            data: ` data-s="${status}"`,
+          }).replace('class="dg-e ', `class="s-${status} dg-e `),
+        );
+      } else paths.push(`<path class="in s-${status} dg-e r-${role}${on}" d="${curve(last.spot, spot)}"/>`);
     }
     last = { spot, index };
   });
   svg.setAttribute('viewBox', `0 0 ${box.width.toFixed(1)} ${box.height.toFixed(1)}`);
-  svg.innerHTML = paths.length
-    ? `<defs><marker id="jr-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L8 4L0 8z"/></marker></defs>${paths.join('')}`
-    : '';
+  svg.innerHTML = paths.length ? `${arrowMarkers('jr')}${paths.join('')}` : '';
 }
 
 // ── Diagramme d'architecture du parcours ─────────────────────────────────────────────────────────────
@@ -2678,17 +2679,19 @@ export const JOURNEY_CSS = `
 .jr-gh h3{display:flex;gap:6px;align-items:center;margin:0;font-size:15px}.jr-gh h3 .ico{color:var(--qa-color-primary)}
 .jr-tools{display:flex;gap:4px;align-items:center}.jr-zoom{min-width:48px;text-align:center;font-size:12.5px}
 .jr-focus{display:flex;gap:6px;align-items:center;margin:0;font-size:12.5px;color:var(--qa-color-muted)}
-.jr-canvas{overflow:auto;border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);padding:10px;max-height:calc(100vh - 60px);background:var(--qa-color-surface)}
+.jr-canvas{overflow:auto;border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);padding:10px;max-height:calc(100vh - 60px);background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px;color:#0f172a}
 .jr.full .jr-canvas{max-height:none}
 .jr-lanes{display:flex;align-items:stretch;gap:0;width:100%;position:relative}
-.jr-lane{flex:1 1 0;min-width:180px;max-width:440px;border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;border:1px solid}
+.jr-lane{flex:1 1 0;min-width:180px;max-width:440px;border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px;border:1px solid}
 .jr-lane header{display:flex;gap:8px;align-items:center;justify-content:center;text-align:center}
 .jr-lane header .ico{width:22px;height:22px}
 .jr-lane h3{margin:0;font-size:14.5px}.jr-lane header small{color:var(--qa-color-muted);font-size:11.5px}
-.l-frontend{background:#f4effc;border-color:#ddd0f6}.l-frontend header .ico{color:#c0392b}
-.l-bff{background:#ecf4fd;border-color:#c8dcf4}.l-bff header .ico{color:#2f6fd1}
-.l-backend{background:#ecf8f0;border-color:#c6e7d2}.l-backend header .ico{color:#2f7d4f}
-.l-external{background:#fdf3e7;border-color:#f2d6b0}.l-external header .ico{color:#d97a0a}
+.jr-lane.l-frontend,.jr-lane.l-bff,.jr-lane.l-backend,.jr-lane.l-external{background:rgba(251,191,36,.05);border:1.5px dashed #d97706}
+.jr-lane header .ico{color:#b45309}.jr-lane h3{color:#b45309;font-size:12.5px;font-weight:600}
+.jr-lane.l-frontend .jr-card{background:linear-gradient(rgba(34,211,238,.15),rgba(34,211,238,.15)),#fff;border:1.5px solid #0891b2}
+.jr-lane.l-bff .jr-card{background:linear-gradient(rgba(96,165,250,.15),rgba(96,165,250,.15)),#fff;border:1.5px solid #2563eb}
+.jr-lane.l-backend .jr-card{background:linear-gradient(rgba(52,211,153,.18),rgba(52,211,153,.18)),#fff;border:1.5px solid #059669}
+.jr-lane.l-external .jr-card{background:linear-gradient(rgba(148,163,184,.18),rgba(148,163,184,.18)),#fff;border:1.5px solid #64748b}
 .jr-lane.empty{flex:0 0 46px;min-width:46px;max-width:46px;padding:10px 4px;align-items:center;border-style:dashed}
 .jr-lane.empty header{flex-direction:column;gap:8px}.jr-lane.empty header div{display:flex;justify-content:center}
 .jr-lane.empty h3{writing-mode:vertical-rl;transform:rotate(180deg);font-size:12.5px;white-space:nowrap;color:var(--qa-color-muted)}
@@ -2698,7 +2701,7 @@ export const JOURNEY_CSS = `
 .jr-sec h4{display:flex;gap:6px;align-items:center;margin:0;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--qa-color-muted)}
 .jr-sec h4 .ico{width:13px;height:13px}.jr-sec h4 i{font-style:normal;margin-left:auto}
 .jr-sec.dim,.jr-card.dim{opacity:.38}
-.jr-card{background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:9px;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:opacity .15s;position:relative;z-index:2}
+.jr-card{background:#fff;border:1.5px solid #64748b;border-radius:6px;transition:opacity .15s;position:relative;z-index:2}
 .jr-sec>h4,.jr-fold,.jr-lane>header,.jr-persist,.jr-pill,.jr-hidden,.jr-folded{position:relative;z-index:2}
 .jr-card.sel{outline:2px solid var(--qa-color-primary)}.jr-card.zero{border-style:dashed}
 .jr-ch{display:flex;gap:6px;align-items:flex-start;width:100%;border:0;background:none;padding:5px 7px;text-align:left}
@@ -2746,7 +2749,7 @@ export const JOURNEY_CSS = `
 .jr-gs .jr-crb>span{max-width:100%}
 .jr-gk{display:inline-flex;align-items:center;color:var(--qa-color-muted)}.jr-gk .ico{width:13px;height:13px}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.jr-gs.l-frontend .jr-crb{background:#f4effc}.jr-gs.l-bff .jr-crb{background:#ecf4fd}.jr-gs.l-backend .jr-crb{background:#ecf8f0}.jr-gs.l-external .jr-crb{background:#fdf3e7}
+:is(.jr-gs,.jr-cr).l-frontend .jr-crb{background:rgba(34,211,238,.13);border-color:#0891b2}:is(.jr-gs,.jr-cr).l-bff .jr-crb{background:rgba(96,165,250,.13);border-color:#2563eb}:is(.jr-gs,.jr-cr).l-backend .jr-crb{background:rgba(52,211,153,.16);border-color:#059669}:is(.jr-gs,.jr-cr).l-external .jr-crb{background:rgba(148,163,184,.16);border-color:#64748b}
 .jr-gs.on .jr-crb{outline:2px solid var(--qa-color-primary);box-shadow:0 2px 6px rgba(0,0,0,.12)}
 .jr-gs.next .jr-crb{outline:2px dashed #5aa87a}
 .jr-gs.stop .jr-crb{border-color:#f0a59d}
@@ -2824,12 +2827,7 @@ export const JOURNEY_CSS = `
 .jr-ov2{display:grid;grid-template-columns:minmax(160px,240px) minmax(0,1fr);gap:12px}
 .jr-busy{width:16px;height:16px}
 .jr-route{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
-.jr-route path{fill:none;stroke:var(--qa-color-primary);stroke-width:2.2;stroke-linecap:round;opacity:.7}
-.jr-route path.on{stroke-width:3.2;opacity:.95}
-.jr-route path.in{stroke-width:1.5;opacity:.45}.jr-route path.in.on{stroke-width:2.4;opacity:.9}
-.jr-route path.s-probable{stroke:#b7791f;stroke-dasharray:7 5}
-.jr-route path.s-unknown{stroke:#c0392b;stroke-dasharray:2 5}
-.jr-route path.s-gap{stroke:#8a96a3;stroke-dasharray:2 6}
+.jr-route path.in{opacity:.55}.jr-route path.in.on{opacity:1}
 .jr-route marker path{fill:context-stroke;stroke:none;opacity:1}
 .ar-canvas{max-height:none;overflow:visible;border:0;padding:0;background:none}
 .ar{--ar-ink:#0f172a;--ar-mu:#64748b;--ar-line:#e2e8f0;display:flex;flex-direction:column;gap:14px;background:#fff;border:1px solid var(--ar-line);border-radius:14px;padding:16px;color:var(--ar-ink);font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
