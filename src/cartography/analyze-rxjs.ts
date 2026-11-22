@@ -14,7 +14,7 @@ import { ClassIdentity } from '../static-analysis/class-identity.js';
  * réponses qui alimentent un flux. Un Observable est paresseux : un appel dont le résultat n'est jamais
  * souscrit n'est pas présenté comme exécuté. Rien n'est exécuté ; une URL non résolue garde son expression.
  */
-export const RXJS_ANALYZER = 'rxjs-8';
+export const RXJS_ANALYZER = 'rxjs-9';
 
 const SUBJECTS = new Set(['Subject', 'BehaviorSubject', 'ReplaySubject', 'AsyncSubject']);
 const CREATION = new Set([
@@ -147,7 +147,7 @@ const NGRX_STORE = 'Store';
 const NGRX_ACTIONS = 'actions';
 /** La dépendance (cachée) par laquelle une classe d'effets ou un réducteur atteint le store d'actions. */
 const NGRX_DEP = 'ngrx:store';
-const NGRX_FILE = '@ngrx/store';
+export const NGRX_FILE = '@ngrx/store';
 const NGRX_SOURCE = `export class ${NGRX_STORE} {
   readonly ${NGRX_ACTIONS} = new Subject();
   dispatch(action: unknown): void {
@@ -1258,6 +1258,8 @@ function reducersOf(
             {
               name: 'state',
               kind: 'DERIVED',
+              // La nature de ce flux pour l'affichage : l'état tenu par `createReducer`.
+              type: 'createReducer',
               sources: [{ via: NGRX_DEP, name: NGRX_ACTIONS }],
               calls: [],
               http: [],
@@ -1518,6 +1520,8 @@ function classOf(
       // Un effet : le flux rendu par son rappel ; les actions qu'il fabrique repartent dans le store, sauf
       // `dispatch: false`. Le module d'effets le souscrit dès son enregistrement.
       info.deps.set(NGRX_DEP, NGRX_STORE);
+      // La nature de ce flux pour l'affichage : un effet NgRx (`createEffect`).
+      stream.type = 'createEffect';
       stream.init = effect.body;
       readStream(
         effect.dispatch ? { ...ctx, emitsTo: { via: NGRX_DEP, name: NGRX_ACTIONS } } : ctx,

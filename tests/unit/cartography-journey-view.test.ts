@@ -170,7 +170,8 @@ describe('onglet Parcours & Graphe', () => {
   it('chaque vue ouvre son onglet du bas, sans erreur de rendu', () => {
     for (const view of JOURNEY_VIEWS) {
       const html = render({ jView: view, jBottom: VIEW_PRESET[view].bottom });
-      expect(html).toContain(`data-view="${view}" aria-selected="true"`);
+      // La vue se choisit dans une liste (« Afficher »), dans l'en-tête du graphe.
+      expect(html).toContain(`<option value="${view}" selected>`);
     }
     const rules = render({ jView: 'rules', jBottom: 'rules' });
     expect(rules).toContain('!state.canValidate');
@@ -246,12 +247,18 @@ describe('onglet Parcours & Graphe', () => {
     const html = at({});
     // Les noms longs se coupent entre les mots (camelCase, points), jamais en plein mot ni tronqués.
     expect(html).toContain('Request<wbr>Create<wbr>Component');
-    expect(html).toContain('Request<wbr>Service.<wbr>refuse');
+    // Le bandeau tient sur une ligne qui défile : chaque nom y est entier (ni coupé ni tronqué).
+    expect(html).toContain('<span>RequestService.refuse</span></button>');
     expect(html).not.toContain('text-overflow:ellipsis;white-space:nowrap}.jr-crb');
+    // Le verbe de la relation qui mène à une étape est dans la même entrée que l'étape (un retour à la ligne
+    // ne le laisse jamais seul en bout de ligne).
     expect(html).toMatch(
-      /<li class="jr-gs l-frontend on"><button class="jr-crb" data-action="map-j-step" data-step="3"[^>]*aria-current="step"/,
+      /<li class="jr-gs l-frontend on"><span class="jr-cl[^]*?<\/span><button class="jr-crb" data-action="map-j-step" data-step="3"[^>]*aria-current="step"/,
     );
-    expect(html).toMatch(/<li class="jr-gs l-frontend next"><button[^>]*data-step="4"/);
+    expect(html).toMatch(
+      /<li class="jr-gs l-frontend next"><span class="jr-cl[^>]*>[^]*?<button[^>]*data-step="4"/,
+    );
+    expect(html).not.toContain('<li class="jr-cl');
     // Les commandes : début, précédent, suivant (l'étape visée), suivre le parcours (actif par défaut).
     expect(html).toMatch(/data-step="0"[^>]*aria-label="Revenir au début"/);
     expect(html).toMatch(/data-step="2"[^>]*aria-label="Étape précédente"/);
@@ -277,13 +284,45 @@ describe('onglet Parcours & Graphe', () => {
     expect(last.slice(last.indexOf('data-step-detail'))).toMatch(/Étape 12\/12[^]*REQUEST[^]*Table atteinte/);
     // La fiche de l'élément choisi sous l'arbre ; les modes et la mini-carte des couches.
     expect(html).toMatch(/data-info>[^]*Refuse[^]*Boutons[^]*Angular \(SPA\)/);
-    expect(html).toMatch(/data-mode="main" aria-pressed="true">Parcours principal/);
-    expect(html).toMatch(/Branches alternatives \(\d+\)/);
-    expect(count(html, 'data-action="map-j-lane"')).toBe(4);
+    expect(html).toMatch(/data-mode="main" aria-pressed="true">Principal/);
+    expect(html).toMatch(/Branches \(\d+\)/);
+    // Simplifié : ni mini-carte des couches (les rails la remplacent), ni tuiles de chiffres, ni seconde barre
+    // d'onglets, ni colonne de droite sous le graphe ; les modes et la vue sont dans l'en-tête du graphe.
+    expect(html).not.toContain('data-action="map-j-lane"');
+    expect(html).not.toContain('class="jr-kpi"');
+    expect(html).not.toContain('data-action="map-j-view"');
+    expect(html).not.toContain('class="jr-side"');
+    expect(html).toMatch(
+      /<div class="jr-gh">[^]*?data-map="j-view"[^]*?class="jr-modes"[^]*?class="jr-tools"/,
+    );
+    expect(html).toMatch(/<p class="jr-sum"><span><b>\d+<\/b> Liens<\/span>/);
     // Sans parcours (carte d'une autre sélection) : ni onglet de l'étape ni bandeau d'étapes.
     const plain = render({ jBottom: 'step' });
     expect(plain).not.toContain('data-step-detail');
     expect(plain).not.toContain('Détails de l’étape');
+  });
+
+  it('le chemin principal est tracé dans les couloirs, dans l’ordre du bandeau', () => {
+    const t = traced.trace;
+    const html = render({ jMap: traced, jSelect: t?.item ?? '' });
+    // Le calque du tracé porte les étapes du chemin principal dans l'ordre, avec le statut de chaque relation.
+    const raw = /data-jr-route="([^"]*)"/.exec(html)?.[1] ?? '';
+    const route = JSON.parse(raw.replaceAll('&quot;', '"').replaceAll('&amp;', '&')) as {
+      id: string;
+      s?: string;
+    }[];
+    const ribbon = html.slice(html.indexOf('data-path'), html.indexOf('data-jr-canvas'));
+    const order = [
+      ...ribbon.matchAll(/class="jr-crb" data-action="map-j-step" data-step="\d+" data-item="([^"]*)"/g),
+    ].map((m) => m[1]);
+    expect(route.map((r) => r.id)).toEqual(order.map((id) => id?.replaceAll('&amp;', '&')));
+    expect(route[0]?.s).toBeUndefined();
+    expect(route.slice(1).every((r) => ['CONFIRMED', 'PROBABLE', 'UNKNOWN'].includes(r.s ?? ''))).toBe(true);
+    // Sans élément choisi : ni parcours ni tracé.
+    expect(render()).not.toContain('data-jr-route');
+    // Les quatre couloirs sont atteints ici : aucun rail, et la largeur minimale est celle de quatre couloirs.
+    expect(html).not.toContain('jr-lane l-external empty');
+    expect(html).toContain('min-width:954px');
   });
 
   it('le tableau des liens montre la page demandée avec la preuve de chaque relation', () => {
