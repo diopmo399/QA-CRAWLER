@@ -366,7 +366,7 @@ const FLOW_MAP_CSS = `
 .fm-hit{fill:none;stroke:transparent;stroke-width:10}
 .fm-edge:hover .fm-line,.fm-edge.fm-on .fm-line{stroke-width:2.8}
 .fm-label rect{fill:#f8fafc;stroke:none}
-.fm-label text{font-size:10.5px;font-weight:600;fill:#475569}
+.fm-label text{font-size:10.5px;fill:#475569}
 .fm .fm-dim{opacity:.16}
 .fm-panel{display:none;min-width:0;max-height:min(78vh,920px);overflow:auto;padding:14px 16px;border:1px solid var(--border,#e2e8f0);border-radius:12px;background:var(--surface,#fff);font-size:13px}
 .fm-panel:has(.fm-detail:target),.fm.fm-sel .fm-panel{display:block}
