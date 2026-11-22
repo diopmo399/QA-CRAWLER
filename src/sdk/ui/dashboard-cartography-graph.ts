@@ -762,7 +762,10 @@ export const GRAPH_CSS = `
 .map-gsel p{margin:4px 0}
 .map-gsel-e+.map-gsel-e{border-top:1px solid var(--qa-color-border);margin-top:6px;padding-top:6px}
 .map-rel{border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface)}
-.map-rel summary{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 12px;font-weight:600;cursor:pointer}
+.map-rel summary{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 12px;font-weight:600;cursor:pointer;list-style:none}
+.map-rel summary::-webkit-details-marker{display:none}
+.map-rel summary::before{content:'';width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .15s;flex:none;opacity:.7}
+.map-rel[open] summary::before{transform:rotate(45deg)}
 .map-rel-scope{font-weight:400;font-size:12px;color:var(--qa-color-muted)}
 .map-rel .tbl-w{max-height:280px;overflow:auto}
 .map-rel-t{table-layout:fixed;width:100%}

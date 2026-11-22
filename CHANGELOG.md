@@ -4,6 +4,14 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : « Graphe seul » pour voir tout le graphe en couloirs
+
+- Nouveau bouton « Graphe seul » dans la barre du graphe en couloirs (API & Services, Structure & Conditions) :
+  la légende, la sélection, les notes, le tableau « Toutes les relations » (et, dans Structure, les détails et
+  les onglets du bas) sont repliés en une ligne qui les nomme ; le graphe prend la hauteur de l'écran, son
+  titre remonte en haut et il est cadré en entier. « Afficher les détails » rouvre tout d'un clic.
+- Le tableau des relations montre un chevron : on voit qu'il se replie.
+
 ### Tous les diagrammes au style Archify
 
 - Un même langage visuel pour tous les schémas de l'outil : flèches à angle droit aux coins arrondis, pointe

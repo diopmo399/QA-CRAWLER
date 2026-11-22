@@ -1006,9 +1006,12 @@ export class CartographyController {
     const height = content.offsetHeight + 44;
     const cw = canvas.clientWidth;
     if (width <= 0 || cw <= 0) return;
-    // En plein écran la zone a sa hauteur propre : le graphe y tient aussi en hauteur, si c'est lisible.
-    const scale = ui.fullscreen ? Math.min(cw / width, canvas.clientHeight / height) : cw / width;
-    ui.zoom = Math.min(1, Math.max(least, Math.floor(scale * 100) / 100));
+    // En plein écran ou en « graphe seul » la zone a sa hauteur propre : le graphe y tient aussi en hauteur
+    // (en « graphe seul », tout le graphe, quitte à descendre sous l'échelle habituelle).
+    const whole = ui.fullscreen || ui.graphOnly;
+    const scale = whole ? Math.min(cw / width, canvas.clientHeight / height) : cw / width;
+    const floor = ui.graphOnly ? Math.min(least, 0.25) : least;
+    ui.zoom = Math.min(1, Math.max(floor, Math.floor(scale * 100) / 100));
     ui.panX = Math.max(0, Math.round((cw - width * ui.zoom) / 2));
     ui.panY = 0;
     this.host.paint();
@@ -1505,6 +1508,23 @@ export class CartographyController {
         this.host.paint();
         this.fitSoon();
         this.host.root.querySelector<HTMLElement>('[data-action="map-g-full"]')?.focus();
+        return true;
+      case 'map-g-only':
+        ui.graphOnly = !ui.graphOnly;
+        // Le graphe se recadre en entier dans sa nouvelle hauteur (ou revient à la largeur à la sortie).
+        ui.autoFit = true;
+        this.host.paint();
+        this.fitSoon();
+        this.host.root.querySelector<HTMLElement>('.map-gtools [data-action="map-g-only"]')?.focus();
+        // Après l'ajustement (qui redessine) : le titre du graphe en haut de l'écran, le graphe entier dessous.
+        if (ui.graphOnly && typeof requestAnimationFrame === 'function')
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              this.host.root
+                .querySelector<HTMLElement>('.map-trace.g-only .map-gtitle')
+                ?.scrollIntoView({ block: 'start' });
+            }),
+          );
         return true;
       case 'map-g-collapse':
         ui.expansion = undefined;

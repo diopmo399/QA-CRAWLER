@@ -1179,6 +1179,10 @@ droit, fond quadrillé, boîtes teintées par couche, régions en tirets ambre ;
 parcouru d'une comète, un lien probable en tirets violets, un lien non démontré en pointillés gris. Les
 couleurs passent par les jetons `--qa-arch-*` du thème.
 
+Dans le graphe en couloirs (API & Services, Structure & Conditions), **Graphe seul** replie la légende,
+la sélection et les tableaux (dont « Toutes les relations ») en une ligne, et donne au graphe la hauteur de
+l'écran, cadré en entier ; **Afficher les détails** rouvre tout.
+
 Dans **Champs & Réutilisations**, la fiche d'un concept de données est dessinée dans le style d'Archify :
 le **parcours de la donnée**, une région par couche (Front, BFF, Backend, API, base de données), un nœud
 par champ du concept dans son conteneur (composant, DTO, table) avec son type, et une flèche à angle

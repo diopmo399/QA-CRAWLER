@@ -1030,6 +1030,17 @@ export function laneLegend(m: MapStrings, model: LaneModel): string {
   return `<div class="ln-legend" role="group" aria-label="${esc(m.ln.legend)}"><b>${esc(m.ln.legend)} :</b><span class="lg s-confirmed"><i class="ar-sw ln r-emphasis" aria-hidden="true"></i>${esc(m.g.legendConfirmed(count('CONFIRMED')))}</span><span class="lg s-probable"><i class="ar-sw ln r-dashed" aria-hidden="true"></i>${esc(m.g.legendProbable(count('PROBABLE')))}</span><span class="lg s-unknown"><i class="ar-sw ln r-gap" aria-hidden="true"></i>${esc(m.g.legendUnknown(count('UNKNOWN')))}</span><span class="lg n-flow"><i></i>${esc(m.g.legendFlow)}</span><span class="lg n-external"><i></i>${esc(m.ln.legendExternal)}</span><span class="lg n-db"><i></i>${esc(m.ln.legendDb)}</span><span class="ln-total">${esc(m.ln.total(model.shown.length))}</span></div>`;
 }
 
+/** Le bouton « Graphe seul » / « Afficher les détails » de la barre du graphe en couloirs. */
+export function graphOnlyButton(m: MapStrings, on: boolean): string {
+  const label = on ? m.g.showDetails : m.g.graphOnly;
+  return `<button class="btn small ln-only${on ? ' on' : ''}" data-action="map-g-only" aria-pressed="${String(on)}" title="${esc(on ? m.g.showDetails : m.g.graphOnlyTitle)}">${icon(on ? 'eye' : 'network')}<span>${esc(label)}</span></button>`;
+}
+
+/** En « Graphe seul » : une ligne dit ce qui est replié (relations comprises) et rouvre tout d'un clic. */
+export function hiddenPartsBar(m: MapStrings, parts: readonly string[]): string {
+  return `<div class="ln-folded" role="note">${icon('eye')}<span>${esc(m.g.hiddenParts(parts.join(' · ')))}</span><button class="btn small" data-action="map-g-only" aria-pressed="true">${esc(m.g.showDetails)}</button></div>`;
+}
+
 /** Les critères d'affichage : couches présentes, natures, statuts, profondeur (masquer n'efface aucune relation). */
 export function laneFilters(m: MapStrings, sheet: LaneInput, view: GraphView, filters: LaneFilters): string {
   const present = laneModel(sheet, view, NO_FILTERS).lanes.map((l) => l.id);
@@ -1110,6 +1121,13 @@ export const LANES_CSS = `
 @media (max-width:860px){.map-explorer.map-apis.trace{grid-template-columns:1fr}}
 .map-canvas.lanes{height:var(--ln-h,420px);background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
 .map-trace.full .map-canvas.lanes{height:calc(100vh - 250px);min-height:320px}
+.map-trace.g-only .map-canvas.lanes{height:calc(100vh - 150px);min-height:360px}
+.map-trace.st-trace.g-only .map-canvas.lanes{height:calc(100vh - 230px)}
+.map-trace.g-only.full .map-canvas.lanes{height:calc(100vh - 170px)}
+.ln-only.on{background:var(--qa-color-primary-soft-2);border-color:var(--qa-color-primary)}
+.ln-folded{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding:6px 10px;border:1px dashed var(--qa-color-border);border-radius:8px;font-size:12px;color:var(--qa-color-muted)}
+.ln-folded .ico{width:14px;height:14px}
+.ln-folded .btn{margin-left:auto}
 .ln-g{position:relative;font-size:12px;color:#0f172a}
 .ln-lane{position:absolute;border-radius:8px;border:1.5px dashed #d97706;background:rgba(251,191,36,.05);box-sizing:border-box}
 .ln-lane header{display:flex;gap:10px;align-items:center;padding:10px 12px 0;height:44px;box-sizing:border-box}

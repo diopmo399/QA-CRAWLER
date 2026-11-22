@@ -153,6 +153,8 @@ export interface CartographyUi extends JourneyState, UnresolvedUi {
   panX: number;
   panY: number;
   fullscreen: boolean;
+  /** Graphe seul : légende, sélection, notes et tableaux repliés ; le graphe prend la hauteur de l'écran. */
+  graphOnly?: boolean;
   graphSel?: GraphSelection;
   /** L'étape dont les relations sont listées (compteur « N liens » cliqué). */
   relStep?: string;
