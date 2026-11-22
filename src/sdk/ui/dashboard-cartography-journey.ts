@@ -17,6 +17,14 @@ import type {
   MapConfidence,
 } from '../core/cartography.js';
 import { FEATURE_CATEGORIES, FEATURE_LANES, traceMainPath, traceSteps } from '../core/cartography.js';
+import {
+  ARROW_CSS,
+  type ArrowRole,
+  arrowMarkers,
+  arrowSvg,
+  orthPath,
+  type Pt,
+} from './dashboard-cartography-arrows.js';
 import { icon } from './dashboard-parts.js';
 import { esc } from './view.js';
 
@@ -47,6 +55,9 @@ export type JourneyBottom = (typeof JOURNEY_BOTTOMS)[number];
 /** Ce que le graphe montre de l'élément choisi : son chemin principal, toutes ses branches, ou tout. */
 export const JOURNEY_MODES = ['main', 'alt', 'full'] as const;
 export type JourneyMode = (typeof JOURNEY_MODES)[number];
+/** La présentation du parcours de l'élément choisi : diagramme d'architecture, de séquence, ou couloirs. */
+export const JOURNEY_STYLES = ['archi', 'flow', 'seq', 'data', 'lanes'] as const;
+export type JourneyStyle = (typeof JOURNEY_STYLES)[number];
 
 export interface JourneyState {
   jView: JourneyView;
@@ -68,6 +79,12 @@ export interface JourneyState {
   jMode: JourneyMode;
   /** Suivre le parcours : changer d'étape amène son élément au centre du graphe. */
   jFollow: boolean;
+  /** La présentation du parcours (diagramme d'architecture par défaut). */
+  jStyle: JourneyStyle;
+  /** Dans le diagramme : l'étape active est mise en avant avec ses voisines, le reste s'estompe. */
+  jSpot: boolean;
+  /** Le nœud mis en avant hors du chemin principal (branche, décision), dans le workflow et le flux. */
+  jSpotId?: string;
 }
 
 export const emptyJourney = (): JourneyState => ({
@@ -81,6 +98,8 @@ export const emptyJourney = (): JourneyState => ({
   jDetail: false,
   jMode: 'main',
   jFollow: true,
+  jStyle: 'archi',
+  jSpot: false,
 });
 
 /** Ce qu'une vue met au premier plan : l'onglet du bas, la catégorie du tableau, les groupes mis en avant. */
@@ -402,6 +421,86 @@ const FR = {
   noFlow: 'Aucun flux de données démontré.',
   gapsTitle: 'Ce que le scan ne démontre pas',
   noGaps: 'Aucune lacune relevée pour cette fonctionnalité.',
+  flow: {
+    title: (name: string) => `Workflow du parcours de ${name}`,
+    hint: 'Cliquez une étape ou une décision : ses entrées et sorties s’allument, le reste s’estompe.',
+    start: 'Clic',
+    startSub: 'utilisateur',
+    decision: 'Décision',
+    decisionSub: 'garde du code',
+    yes: 'vrai',
+    joins: (n: number) => `rejoint l’étape ${String(n)}`,
+    legend: {
+      main: 'Chemin principal',
+      branch: 'Branche',
+      async: 'Asynchrone (après une réponse)',
+      probable: 'Probable',
+      gap: 'Non démontré',
+      decision: 'Décision (garde du code)',
+    },
+    note: 'Les décisions sont les gardes lues dans le code ; seule la branche démontrée (« vrai ») est dessinée.',
+  },
+  data: {
+    title: (name: string) => `Flux de données du parcours de ${name}`,
+    hint: 'Cliquez un nœud : les données qui y entrent et en sortent s’allument, le reste s’estompe.',
+    stages: {
+      src: 'Source',
+      state: 'État',
+      transport: 'Transport',
+      proc: 'Traitement',
+      store: 'Stockage',
+      ext: 'Externe',
+      cons: 'Affichage',
+    },
+    legend: {
+      write: 'Envoi / écriture',
+      read: 'Lecture',
+      async: 'Asynchrone',
+      probable: 'Probable',
+      gap: 'Non démontré',
+    },
+    note: 'Les étapes du parcours rangées par rôle dans le flux ; une lecture est dessinée de la table vers qui la lit.',
+  },
+  seq: {
+    title: (name: string) => `Séquence du parcours de ${name}`,
+    hint: 'Cliquez une ligne de vie ou un message : son étape s’allume avec ses messages, le reste s’estompe.',
+    where: 'Où se trouve l’élément',
+    user: 'Utilisateur',
+    userSub: 'acteur',
+    click: 'clic',
+    action: 'Action utilisateur',
+    activity: 'Activité (premier → dernier message)',
+    noReturn:
+      'Seuls les appels démontrés par le scan sont dessinés, dans l’ordre déduit du code : les réponses (retours) ne le sont pas.',
+  },
+  arch: {
+    styles: {
+      archi: 'Architecture',
+      flow: 'Workflow',
+      seq: 'Séquence',
+      data: 'Data flow',
+      lanes: 'Couloirs',
+    } satisfies Record<JourneyStyle, string>,
+    styleLabel: 'Présentation du parcours',
+    title: (name: string) => `Architecture du parcours de ${name}`,
+    hint: 'Cliquez une boîte : ses liens s’allument, le reste s’estompe et son détail s’affiche sous le graphe.',
+    showAll: 'Tout afficher',
+    notReached: (lane: string) => `${lane} · non atteint`,
+    legend: { CONFIRMED: 'Chemin confirmé', PROBABLE: 'Probable', UNKNOWN: 'Non démontré' },
+    legendTitle: 'Légende',
+    legendBus: 'Actions du store',
+    legendDb: 'Persistance',
+    main: 'Chemin principal',
+    check: 'À vérifier',
+    gaps: 'Lacunes du scan',
+    confirmed: (ok: number, all: number) =>
+      all === 0 ? 'Aucune relation à suivre' : `${String(ok)} relation(s) confirmée(s) sur ${String(all)}`,
+    layers: (names: string) => `Couches : ${names}`,
+    noEnd: 'Ni table ni API externe atteinte',
+    allConfirmed: 'Toutes les relations du chemin sont confirmées.',
+    elsewhere: (n: number) => `${String(n)} relation(s) probable(s) ou non démontrée(s) hors du chemin`,
+    noGap: 'Aucune lacune ni rupture relevée.',
+  },
   gaps: {
     LANE_NO_SOURCE: 'Couche sans source',
     LANE_NOT_REACHED: 'Couche non atteinte',
@@ -703,6 +802,80 @@ const EN: JourneyStrings = {
   noFlow: 'No data flow demonstrated.',
   gapsTitle: 'What the scan does not demonstrate',
   noGaps: 'No gap found for this feature.',
+  flow: {
+    title: (name) => `Workflow of the journey of ${name}`,
+    hint: 'Click a step or a decision: its inputs and outputs light up, the rest fades.',
+    start: 'Click',
+    startSub: 'user',
+    decision: 'Decision',
+    decisionSub: 'code guard',
+    yes: 'true',
+    joins: (n) => `joins step ${String(n)}`,
+    legend: {
+      main: 'Main path',
+      branch: 'Branch',
+      async: 'Asynchronous (after a response)',
+      probable: 'Probable',
+      gap: 'Not demonstrated',
+      decision: 'Decision (code guard)',
+    },
+    note: 'Decisions are the guards read in the code; only the demonstrated branch (“true”) is drawn.',
+  },
+  data: {
+    title: (name) => `Data flow of the journey of ${name}`,
+    hint: 'Click a node: the data flowing in and out lights up, the rest fades.',
+    stages: {
+      src: 'Source',
+      state: 'State',
+      transport: 'Transport',
+      proc: 'Processing',
+      store: 'Storage',
+      ext: 'External',
+      cons: 'Display',
+    },
+    legend: {
+      write: 'Send / write',
+      read: 'Read',
+      async: 'Asynchronous',
+      probable: 'Probable',
+      gap: 'Not demonstrated',
+    },
+    note: 'The journey steps arranged by role in the flow; a read is drawn from the table to its reader.',
+  },
+  seq: {
+    title: (name) => `Sequence of the journey of ${name}`,
+    hint: 'Click a lifeline or a message: its step lights up with its messages, the rest fades.',
+    where: 'Where the element is',
+    user: 'User',
+    userSub: 'actor',
+    click: 'click',
+    action: 'User action',
+    activity: 'Activity (first → last message)',
+    noReturn:
+      'Only the calls demonstrated by the scan are drawn, in the order inferred from the code: responses (returns) are not.',
+  },
+  arch: {
+    styles: { archi: 'Architecture', flow: 'Workflow', seq: 'Sequence', data: 'Data flow', lanes: 'Lanes' },
+    styleLabel: 'Journey layout',
+    title: (name) => `Architecture of the journey of ${name}`,
+    hint: 'Click a box: its links light up, the rest fades and its detail shows below the graph.',
+    showAll: 'Show all',
+    notReached: (lane) => `${lane} · not reached`,
+    legend: { CONFIRMED: 'Confirmed path', PROBABLE: 'Probable', UNKNOWN: 'Not demonstrated' },
+    legendTitle: 'Legend',
+    legendBus: 'Store actions',
+    legendDb: 'Persistence',
+    main: 'Main path',
+    check: 'To check',
+    gaps: 'Scan gaps',
+    confirmed: (ok, all) =>
+      all === 0 ? 'No relation to follow' : `${String(ok)} confirmed relation(s) out of ${String(all)}`,
+    layers: (names) => `Layers: ${names}`,
+    noEnd: 'No table nor external API reached',
+    allConfirmed: 'Every relation of the path is confirmed.',
+    elsewhere: (n) => `${String(n)} probable or undemonstrated relation(s) off the path`,
+    noGap: 'No gap or break found.',
+  },
   gaps: {
     LANE_NO_SOURCE: 'Layer without source',
     LANE_NOT_REACHED: 'Layer not reached',
@@ -1131,20 +1304,16 @@ export function drawRoute(svg: SVGSVGElement): void {
     };
   };
   const across = (a: RouteSpot, b: RouteSpot): boolean => b.left >= a.right - 4 || b.right <= a.left + 4;
+  // À angle droit, comme dans Archify : d'un couloir à l'autre horizontal-vertical-horizontal, coudé au
+  // milieu ; dans un même couloir, par le bord gauche des cartes.
   const curve = (a: RouteSpot, b: RouteSpot): string => {
-    const f = (n: number): string => n.toFixed(1);
-    if (b.left >= a.right - 4) {
-      const c = Math.max(16, (b.left - a.right) / 2);
-      return `M${f(a.right)} ${f(a.y)}C${f(a.right + c)} ${f(a.y)} ${f(b.left - c)} ${f(b.y)} ${f(b.left)} ${f(b.y)}`;
-    }
-    if (b.right <= a.left + 4) {
-      const c = Math.max(16, (a.left - b.right) / 2);
-      return `M${f(a.left)} ${f(a.y)}C${f(a.left - c)} ${f(a.y)} ${f(b.right + c)} ${f(b.y)} ${f(b.right)} ${f(b.y)}`;
-    }
+    if (b.left >= a.right - 4) return orthPath({ x: a.right, y: a.y }, { x: b.left - 1, y: b.y }, 'h').d;
+    if (b.right <= a.left + 4) return orthPath({ x: a.left, y: a.y }, { x: b.right + 1, y: b.y }, 'h').d;
     const x = Math.min(a.left, b.left);
-    const bulge = Math.min(22, 8 + Math.abs(b.y - a.y) / 12);
-    return `M${f(x)} ${f(a.y)}C${f(x - bulge)} ${f(a.y)} ${f(x - bulge)} ${f(b.y)} ${f(x)} ${f(b.y)}`;
+    const bulge = Math.min(14, 6 + Math.abs(b.y - a.y) / 16);
+    return orthPath({ x, y: a.y }, { x, y: b.y }, 'h', x - bulge).d;
   };
+  let comet = 0;
   const paths: string[] = [];
   let last: { spot: RouteSpot; index: number } | undefined;
   route.forEach((step, index) => {
@@ -1156,24 +1325,920 @@ export function drawRoute(svg: SVGSVGElement): void {
       const on = index === active + 1 ? ' on' : '';
       // D'un couloir à l'autre : une flèche pleine. Dans un même couloir : un trait fin sans pointe, le long
       // du bord des cartes (les numéros disent l'ordre ; des pointes empilées ne le diraient pas mieux).
-      paths.push(
-        across(last.spot, spot)
-          ? `<path class="s-${status}${on}" d="${curve(last.spot, spot)}" marker-end="url(#jr-arrow)"/>`
-          : `<path class="in s-${status}${on}" d="${curve(last.spot, spot)}"/>`,
-      );
+      const role: ArrowRole = status === 'confirmed' ? 'emphasis' : status === 'probable' ? 'dashed' : 'gap';
+      if (across(last.spot, spot)) {
+        paths.push(
+          arrowSvg('jr', {
+            d: curve(last.spot, spot),
+            role,
+            ...(on ? { state: 'on' as const } : {}),
+            ...(role === 'emphasis' ? { comet: comet++ } : {}),
+            data: ` data-s="${status}"`,
+          }).replace('class="dg-e ', `class="s-${status} dg-e `),
+        );
+      } else paths.push(`<path class="in s-${status} dg-e r-${role}${on}" d="${curve(last.spot, spot)}"/>`);
     }
     last = { spot, index };
   });
   svg.setAttribute('viewBox', `0 0 ${box.width.toFixed(1)} ${box.height.toFixed(1)}`);
-  svg.innerHTML = paths.length
-    ? `<defs><marker id="jr-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L8 4L0 8z"/></marker></defs>${paths.join('')}`
-    : '';
+  svg.innerHTML = paths.length ? `${arrowMarkers('jr')}${paths.join('')}` : '';
 }
 
-function toolbar(s: JourneyStrings, st: JourneyState): string {
+// ── Diagramme d'architecture du parcours ─────────────────────────────────────────────────────────────
+
+/** La teinte d'une boîte : sa couche, sauf la persistance (violet) et les actions du store (orange). */
+function archTone(x: FeatureTraceStep): string {
+  if (x.group === 'REPOSITORY' || x.group === 'ENTITY') return 'db';
+  if (x.nature === 'ACTION' || x.nature === 'DISPATCH' || x.nature === 'EFFECT' || x.nature === 'REDUCER')
+    return 'bus';
+  return laneTone(x.lane);
+}
+const laneTone = (lane: FeatureLane): string =>
+  lane === 'FRONTEND' ? 'fe' : lane === 'BFF' ? 'bff' : lane === 'BACKEND' ? 'be' : 'ext';
+
+/** Une flèche du diagramme : le statut de la relation, son verbe, sa mise en avant. */
+interface ArchLink {
+  s?: MapConfidence;
+  v?: string;
+  c?: 'on' | 'off';
+}
+
+/**
+ * Le parcours de l'élément choisi en diagramme d'architecture : une région par couche atteinte (un rail
+ * titré pour une couche non atteinte), une boîte par étape du chemin principal, dans l'ordre, numérotée
+ * comme dans le bandeau, et les flèches de l'une à la suivante (tracées après le rendu, `drawArch`) : trait
+ * animé si la relation est confirmée, tirets si elle est probable, pointillés si elle n'est pas démontrée.
+ * Cliquer une boîte rend son étape active et la met en avant avec ses voisines ; le reste s'estompe.
+ * Sous le diagramme : la légende et trois cartes (chemin, relations à vérifier, lacunes), toutes tirées
+ * de la trace et de la carte renvoyées par le serveur.
+ */
+function archDiagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathInfo): string {
+  const a = s.arch;
+  const { main, active } = p;
+  const spot = st.jSpot;
+  const state = (i: number): string =>
+    !spot
+      ? i === active
+        ? ' cur'
+        : ''
+      : i === active
+        ? ' sel'
+        : Math.abs(i - active) === 1
+          ? ' near'
+          : ' dim';
+  const box = (x: FeatureTraceStep, i: number, place: string): string => {
+    const kind = kindLabel(s, x.group, x.nature);
+    return `<button class="ar-box t-${archTone(x)}${state(i)}${x.end === 'STOP' ? ' stop' : ''}" data-action="map-j-spot" data-step="${String(i)}" data-item="${esc(x.id)}" data-ar-step="${String(i)}" style="${place}" aria-pressed="${String(spot && i === active)}" title="${esc(`${s.lanes[x.lane][0]} · ${kind}${x.sub ? ` — ${x.sub}` : ''}`)}">${stepBadge(s, p.steps.get(x.id), x.end)}<span class="ar-t">${wb(shownName(x.name, x.nature))}</span><span class="ar-s">${esc(kind)}${x.sub ? ` · ${wb(x.sub)}` : ''}</span></button>`;
+  };
+  const regions = FEATURE_LANES.map((lane) => {
+    const [title, sub] = s.lanes[lane];
+    const steps = main.map((x, i) => ({ x, i })).filter((e) => e.x.lane === lane);
+    if (steps.length === 0)
+      return `<div class="ar-rail" data-lane="${lane}"><span>${esc(a.notReached(title))}</span></div>`;
+    // Au-delà de cinq étapes, la région les range en U sur deux colonnes : la première descend, la seconde
+    // remonte. Les flèches restent courtes, et la dernière étape est en haut à droite, au plus près de la
+    // couche suivante.
+    const cols = steps.length > 5 ? 2 : 1;
+    const rows = Math.ceil(steps.length / cols);
+    const place = (k: number): string => {
+      const col = Math.floor(k / rows);
+      const row = col % 2 === 0 ? k % rows : rows - 1 - (k % rows);
+      return `grid-row:${String(row + 1)};grid-column:${String(col + 1)}`;
+    };
+    return `<section class="ar-region" data-lane="${lane}"><h4 class="ar-rl">${esc(title)}<small>${esc(sub)}</small></h4><div class="ar-col c${String(cols)}">${steps.map((e, k) => box(e.x, e.i, place(k))).join('')}</div></section>`;
+  });
+  const links: ArchLink[] = main.map((_, i) => {
+    if (i === 0) return {};
+    const via = linkInto(p, i);
+    const c = spot ? (i === active || i - 1 === active ? 'on' : 'off') : undefined;
+    // Le verbe n'est écrit que sur le passage d'une couche à l'autre (dans une couche, le numéro suffit).
+    const cross = main[i - 1]?.lane !== main[i]?.lane;
+    return {
+      s: via?.status ?? 'UNKNOWN',
+      ...(via && cross ? { v: verbOf(s, via) } : {}),
+      ...(c ? { c } : {}),
+    };
+  });
+  const head = `<div class="ar-head"><span class="ar-pulse" aria-hidden="true"></span><p>${esc(a.hint)}</p><button class="btn small" data-action="map-j-unspot"${spot ? '' : ' disabled'}>${esc(a.showAll)}</button></div>`;
+  const stage = `<div class="ar-stage" data-ar data-action="map-j-unspot" style="zoom:${String(st.jZoom)}"><svg class="ar-links" data-ar-route="${esc(JSON.stringify(links))}" aria-hidden="true" focusable="false"></svg>${regions.join('')}</div>`;
+  const swatch = (cls: string, label: string): string =>
+    `<span><i class="ar-sw ${cls}" aria-hidden="true"></i>${esc(label)}</span>`;
+  const legend = `<div class="ar-legend" aria-label="${esc(a.legendTitle)}">${FEATURE_LANES.filter((l) =>
+    main.some((x) => x.lane === l),
+  )
+    .map((l) => swatch(`t-${laneTone(l)}`, s.lanes[l][0]))
+    .join(
+      '',
+    )}${main.some((x) => archTone(x) === 'bus') ? swatch('t-bus', a.legendBus) : ''}${main.some((x) => archTone(x) === 'db') ? swatch('t-db', a.legendDb) : ''}${(
+    [
+      ['CONFIRMED', 'emphasis'],
+      ['PROBABLE', 'dashed'],
+      ['UNKNOWN', 'gap'],
+    ] as const
+  )
+    .map(([c, r]) => swatch(`ln r-${r}`, a.legend[c]))
+    .join('')}</div>`;
+  return `<section class="ar" aria-label="${esc(a.title(shownName(main[p.upLen]?.name ?? '', main[p.upLen]?.nature)))}">${head}<div class="ar-scroll">${stage}</div>${legend}${archCards(s, map, p)}</section>`;
+}
+
+/** Les trois cartes sous le diagramme : le chemin principal, les relations à vérifier, les lacunes du scan. */
+function archCards(s: JourneyStrings, map: FeatureMap, p: PathInfo): string {
+  const a = s.arch;
+  const { main } = p;
+  const t = map.trace;
+  const vias = main.slice(1).map((_, k) => ({ i: k + 1, via: linkInto(p, k + 1) }));
+  const ok = vias.filter((e) => e.via?.status === 'CONFIRMED').length;
+  const last = main[main.length - 1];
+  const reached = FEATURE_LANES.filter((l) => main.some((x) => x.lane === l)).map((l) => s.lanes[l][0]);
+  const end =
+    last?.end === 'TABLE' || last?.end === 'EXTERNAL' || last?.end === 'STOP'
+      ? s.trace.ends[last.end]
+      : a.noEnd;
+  const li = (text: string): string => `<li>${esc(text)}</li>`;
+  const name = (x: FeatureTraceStep | undefined): string => (x ? shownName(x.name, x.nature) : '');
+  const weak = vias.filter((e) => e.via?.status !== 'CONFIRMED');
+  const weakAll = (t?.statuses.PROBABLE ?? 0) + (t?.statuses.UNKNOWN ?? 0);
+  const checks = [
+    ...weak
+      .slice(0, 4)
+      .map((e) =>
+        li(`${name(main[e.i - 1])} → ${name(main[e.i])} · ${s.conf[e.via?.status ?? 'UNKNOWN'] ?? ''}`),
+      ),
+    ...(weakAll > weak.length ? [li(a.elsewhere(weakAll - weak.length))] : []),
+  ];
+  const stops = (t?.down ?? []).filter((x) => x.end === 'STOP');
+  const gaps = [
+    ...stops.slice(0, 3).map((x) => li(`${name(x)} : ${x.gap ?? s.trace.noOut}`)),
+    ...map.gaps
+      .slice(0, 3)
+      .map((g) => li(`${s.gaps[g.code] ?? g.code}${g.lane ? ` · ${s.lanes[g.lane][0]}` : ''} : ${g.detail}`)),
+  ];
+  const card = (cls: string, title: string, items: string[], empty: string): string =>
+    `<section class="ar-card ${cls}"><h4><i aria-hidden="true"></i>${esc(title)}</h4><ul>${items.length ? items.join('') : li(empty)}</ul></section>`;
+  return `<div class="ar-cards">${card('k-main', a.main, [li(s.trace.steps(main.length)), li(a.confirmed(ok, vias.length)), li(a.layers(reached.join(' → '))), li(end)], '')}${card('k-check', a.check, checks, a.allConfirmed)}${card('k-gaps', a.gaps, gaps, a.noGap)}</div>`;
+}
+
+// ── Diagramme de séquence du parcours ────────────────────────────────────────────────────────────────
+
+/** Les étapes de structure (page, composant, conteneur) qui ouvrent un parcours : où se trouve l'élément. */
+const SEQ_STRUCTURE = new Set<FeatureGroup>(['PAGE', 'COMPONENT', 'CONTAINER']);
+/** Largeur d'une ligne de vie (boîte) et d'une colonne, hauteur d'une rangée de message. */
+const SEQ_BOX = 112;
+const SEQ_COL = 124;
+const SEQ_ROW = 50;
+
+/** Un message du diagramme de séquence : d'une ligne de vie (ou de l'utilisateur) à l'étape suivante. */
+interface SeqMessage {
+  fromX: number;
+  from?: number;
+  to: number;
+  label: string;
+  status: MapConfidence | 'ACTION';
+  n?: number;
+}
+
+/**
+ * Le parcours de l'élément choisi en diagramme de séquence : les étapes de structure qui l'ouvrent (page,
+ * composant, conteneurs) en une ligne « où se trouve l'élément », puis une ligne de vie par étape suivante
+ * du chemin principal, rangées dans la région de leur couche, et un message par relation, de haut en bas
+ * dans l'ordre du chemin, numéroté comme le bandeau. Un bouton est précédé du clic de l'utilisateur (une
+ * action, pas une relation du code). Seuls les appels démontrés sont dessinés : aucune réponse (retour)
+ * n'est inventée. Cliquer une ligne de vie ou un message rend son étape active et la met en avant.
+ */
+function seqDiagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathInfo): string {
+  const q = s.seq;
+  const { main, active } = p;
+  let prefix = 0;
+  while (prefix < main.length - 1 && SEQ_STRUCTURE.has(main[prefix]?.group ?? 'PAGE')) prefix++;
+  const steps = main.slice(prefix).map((x, k) => ({ x, i: prefix + k }));
+  const first = steps[0];
+  const actor = first?.x.group === 'BUTTON';
+  const spot = st.jSpot && active >= prefix;
+  // Les colonnes : l'utilisateur, puis chaque couche dans l'ordre fixe (un rail si elle n'est pas atteinte).
+  let cursor = 16;
+  let actorX = 0;
+  if (actor) {
+    actorX = cursor + SEQ_BOX / 2;
+    cursor += SEQ_COL + 8;
+  }
+  const xs = new Map<number, number>();
+  const zones: string[] = [];
+  // Un rail pour une couche que le parcours traverse sans l'atteindre (entre deux couches atteintes).
+  const reached = FEATURE_LANES.map((l) => steps.some((e) => e.x.lane === l));
+  const firstLane = reached.indexOf(true);
+  const lastLane = reached.lastIndexOf(true);
+  for (const [rank, lane] of FEATURE_LANES.entries()) {
+    const [title, sub] = s.lanes[lane];
+    const cols = steps.filter((e) => e.x.lane === lane);
+    if (rank < firstLane || rank > lastLane) continue;
+    if (cols.length === 0) {
+      zones.push(
+        `<div class="sq-rail" data-lane="${lane}" style="left:${String(cursor)}px"><span>${esc(s.arch.notReached(title))}</span></div>`,
+      );
+      cursor += 52;
+      continue;
+    }
+    const left = cursor;
+    cursor += 12;
+    for (const e of cols) {
+      xs.set(e.i, cursor + SEQ_BOX / 2);
+      cursor += SEQ_COL;
+    }
+    zones.push(
+      `<div class="sq-region" data-lane="${lane}" style="left:${String(left)}px;width:${String(cursor - left)}px"><span class="ar-rl">${esc(title)}<small>${esc(sub)}</small></span></div>`,
+    );
+    cursor += 16;
+  }
+  const width = cursor;
+  const x = (i: number): number => xs.get(i) ?? 0;
+  const msgs: SeqMessage[] = [];
+  if (actor) msgs.push({ fromX: actorX, to: first.i, label: q.click, status: 'ACTION' });
+  for (const e of steps.slice(1)) {
+    const via = linkInto(p, e.i);
+    msgs.push({
+      fromX: x(e.i - 1),
+      from: e.i - 1,
+      to: e.i,
+      label: via ? verbOf(s, via) : '→',
+      status: via?.status ?? 'UNKNOWN',
+      n: p.steps.get(e.x.id),
+    });
+  }
+  const yOf = (k: number): number => 152 + k * SEQ_ROW;
+  const bottom = yOf(Math.max(0, msgs.length - 1)) + 40;
+  const state = (i: number): string =>
+    !spot
+      ? i === active
+        ? ' cur'
+        : ''
+      : i === active
+        ? ' sel'
+        : Math.abs(i - active) === 1
+          ? ' near'
+          : ' dim';
+  const dimmed = (i: number): string => (spot && state(i) === ' dim' ? ' dim' : '');
+  const lifelines = steps
+    .map(
+      (e) =>
+        `<i class="sq-life${dimmed(e.i)}" style="left:${String(x(e.i) - 1)}px;height:${String(bottom - 106)}px"></i>`,
+    )
+    .join('');
+  const bars = steps
+    .map((e) => {
+      const ys = msgs.flatMap((m, k) => (m.to === e.i || m.from === e.i ? [yOf(k)] : []));
+      if (ys.length === 0) return '';
+      const top = Math.min(...ys) - 10;
+      return `<i class="sq-bar t-${archTone(e.x)}${dimmed(e.i)}" style="left:${String(x(e.i) - 5)}px;top:${String(top)}px;height:${String(Math.max(...ys) + 10 - top)}px"></i>`;
+    })
+    .join('');
+  const people = steps
+    .map((e) => {
+      const kind = kindLabel(s, e.x.group, e.x.nature);
+      return `<button class="sq-p ar-box t-${archTone(e.x)}${state(e.i)}${e.x.end === 'STOP' ? ' stop' : ''}" data-action="map-j-spot" data-step="${String(e.i)}" data-item="${esc(e.x.id)}" data-sq-step="${String(e.i)}" style="left:${String(x(e.i) - SEQ_BOX / 2)}px" aria-pressed="${String(spot && e.i === active)}" title="${esc(`${s.lanes[e.x.lane][0]} · ${kind}${e.x.sub ? ` — ${e.x.sub}` : ''}`)}">${stepBadge(s, p.steps.get(e.x.id), e.x.end)}<span class="ar-t">${wb(shownName(e.x.name, e.x.nature))}</span><span class="ar-s">${esc(kind)}</span></button>`;
+    })
+    .join('');
+  const user = actor
+    ? `<i class="sq-life${spot && active !== first.i ? ' dim' : ''}" style="left:${String(actorX - 1)}px;height:${String(bottom - 106)}px"></i><span class="sq-p ar-box t-ext sq-user${spot ? (active === first.i ? ' near' : ' dim') : ''}" style="left:${String(actorX - SEQ_BOX / 2)}px"><span class="ar-t">${esc(q.user)}</span><span class="ar-s">${esc(q.userSub)}</span></span>`
+    : '';
+  const messages = msgs
+    .map((m, k) => {
+      const xb = x(m.to);
+      const right = xb >= m.fromX;
+      const x1 = m.fromX + (right ? 5 : -5);
+      const x2 = xb + (right ? -5 : 5);
+      const on = spot && (m.to === active || m.from === active);
+      const cls = `sq-msg s-${m.status.toLowerCase()} ${right ? 'r' : 'l'}${spot ? (on ? ' on' : ' off') : ''}${spot && m.to === active ? ' sel' : ''}`;
+      const target = main[m.to];
+      return `<div class="${cls}" style="left:${String(Math.min(x1, x2))}px;top:${String(yOf(k))}px;width:${String(Math.abs(x2 - x1))}px"><i class="ln"></i><i class="pu"></i><i class="hd"></i><button class="sq-lab" data-action="map-j-spot" data-step="${String(m.to)}" data-item="${esc(target?.id ?? '')}" title="${esc(m.status === 'ACTION' ? q.action : (s.conf[m.status] ?? ''))}">${m.n === undefined ? '' : `<b>${String(m.n)}</b>`}<span>${esc(m.label)}</span></button></div>`;
+    })
+    .join('');
+  const where =
+    prefix > 0
+      ? `<div class="sq-where"><span>${esc(q.where)} :</span>${main
+          .slice(0, prefix)
+          .map(
+            (x0, i) =>
+              `<button class="sq-cr" data-action="map-j-step" data-step="${String(i)}" data-item="${esc(x0.id)}">${stepBadge(s, p.steps.get(x0.id), x0.end)}<span>${wb(shownName(x0.name, x0.nature))}</span></button>`,
+          )
+          .join('<i aria-hidden="true">›</i>')}</div>`
+      : '';
+  const head = `<div class="ar-head"><span class="ar-pulse" aria-hidden="true"></span><p>${esc(q.hint)}</p><button class="btn small" data-action="map-j-unspot"${st.jSpot ? '' : ' disabled'}>${esc(s.arch.showAll)}</button></div>`;
+  const stage = `<div class="sq-stage" data-sq data-action="map-j-unspot" style="zoom:${String(st.jZoom)};width:${String(width)}px;height:${String(bottom + 16)}px">${zones.join('')}${lifelines}${user}${bars}${messages}${people}</div>`;
+  const swatch = (cls: string, label: string): string =>
+    `<span><i class="ar-sw ${cls}" aria-hidden="true"></i>${esc(label)}</span>`;
+  const legend = `<div class="ar-legend" aria-label="${esc(s.arch.legendTitle)}">${FEATURE_LANES.filter((l) =>
+    steps.some((e) => e.x.lane === l),
+  )
+    .map((l) => swatch(`t-${laneTone(l)}`, s.lanes[l][0]))
+    .join(
+      '',
+    )}${steps.some((e) => archTone(e.x) === 'db') ? swatch('t-db', s.arch.legendDb) : ''}${swatch('sq-act', q.activity)}${(['CONFIRMED', 'PROBABLE', 'UNKNOWN'] as const).map((c) => swatch(`ln s-${c.toLowerCase()}`, s.arch.legend[c])).join('')}${actor ? swatch('ln s-action', q.action) : ''}</div>`;
+  const name = main[p.upLen];
+  return `<section class="ar sq" aria-label="${esc(q.title(shownName(name?.name ?? '', name?.nature)))}">${head}${where}<div class="ar-scroll">${stage}</div>${legend}<p class="sq-note">${esc(q.noReturn)}</p>${archCards(s, map, p)}</section>`;
+}
+
+// ── Workflow et flux de données du parcours (mis en page au rendu) ───────────────────────────────────
+
+/** Un nœud des diagrammes calculés : une étape de la trace, une décision (garde du code) ou le départ. */
+interface DgNode {
+  /** L'identifiant de mise en avant : celui de l'étape, `dec:…` pour une décision, `start` pour le clic. */
+  id: string;
+  kind: 'step' | 'dec' | 'start';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  step?: FeatureTraceStep;
+  cond?: string;
+}
+
+/** Une flèche des diagrammes calculés, dans le sens où l'on la lit (`from` → `to`). */
+interface DgEdge {
+  from: string;
+  to: string;
+  role: ArrowRole;
+  label?: string;
+  /** Le coude imposé (abscisse) ; sinon au milieu. */
+  c?: number;
+  /** Où partent et arrivent la flèche sur les boîtes. */
+  sides: 'rl' | 'lr' | 'rr' | 'bt';
+}
+
+/** L'élément mis en avant : l'étape active (sur le chemin) ou le nœud cliqué hors du chemin. */
+const spotOf = (st: JourneyState, p: PathInfo): string | undefined =>
+  st.jSpot ? (st.jSpotId ?? p.main[p.active]?.id) : undefined;
+
+/** La classe d'une flèche d'après la relation : non démontrée, probable ou asynchrone, chemin, branche. */
+function roleOf(via: FeatureTraceStep['via'], main: boolean, async = true): ArrowRole {
+  if (!via) return 'default';
+  if (via.status === 'UNKNOWN') return 'gap';
+  if (via.status === 'PROBABLE' || (async && via.async)) return 'dashed';
+  return main ? 'emphasis' : 'default';
+}
+
+/** Le libellé court d'une garde dans son losange : sa dernière propriété (« valide ? »), sinon tronqué. */
+function shortCondition(cond: string): string {
+  const c = cond.replace(/^!?this\./, '').trim();
+  const last = /^[\w$.]+$/.test(c) ? (c.split('.').pop() ?? c) : c;
+  const neg = cond.trim().startsWith('!') ? '!' : '';
+  const text = `${neg}${last}`;
+  return `${text.length > 18 ? `${text.slice(0, 17)}…` : text} ?`;
+}
+
+/**
+ * Le rendu commun des diagrammes calculés : le fond quadrillé à la taille du contenu, les flèches (tracé
+ * orthogonal, comète sur le chemin démontré), leurs étiquettes et les nœuds cliquables. Le nœud mis en
+ * avant s'allume avec ses voisins (à travers une décision) ; le reste s'estompe.
+ */
+function dgStage(
+  s: JourneyStrings,
+  st: JourneyState,
+  p: PathInfo,
+  kind: 'flow' | 'data',
+  nodes: DgNode[],
+  edges: DgEdge[],
+  extra = '',
+): string {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const spot = spotOf(st, p);
+  const lit = new Set<DgEdge>();
+  const near = new Set<string>();
+  if (spot) {
+    const touch = (id: string): void => {
+      for (const e of edges)
+        if (e.from === id || e.to === id) {
+          lit.add(e);
+          const other = e.from === id ? e.to : e.from;
+          if (!near.has(other) && other !== spot) {
+            near.add(other);
+            if (byId.get(other)?.kind === 'dec') touch(other);
+          }
+        }
+    };
+    touch(spot);
+  }
+  const width = Math.max(...nodes.map((n) => n.x + n.w)) + 24;
+  const height = Math.max(...nodes.map((n) => n.y + n.h)) + 24;
+  const state = (id: string): string =>
+    !spot
+      ? id === p.main[p.active]?.id
+        ? ' cur'
+        : ''
+      : id === spot
+        ? ' sel'
+        : near.has(id)
+          ? ' near'
+          : ' dim';
+  const prefix = `dg-${kind}`;
+  let comet = 0;
+  const labels: string[] = [];
+  const arrows = edges
+    .map((e) => {
+      const a = byId.get(e.from);
+      const b = byId.get(e.to);
+      if (!a || !b) return '';
+      const ya = a.y + a.h / 2;
+      const yb = b.y + b.h / 2;
+      const { d, mid } =
+        e.sides === 'bt'
+          ? orthPath({ x: a.x + a.w / 2, y: a.y + a.h }, { x: b.x + b.w / 2, y: b.y - 1 }, 'v')
+          : orthPath(
+              { x: e.sides === 'lr' ? a.x : a.x + a.w, y: ya },
+              { x: e.sides === 'rl' ? b.x - 1 : b.x + b.w + 1, y: yb },
+              'h',
+              e.c,
+            );
+      const on = spot ? (lit.has(e) ? 'on' : 'off') : undefined;
+      if (e.label)
+        labels.push(
+          `<span class="dg-lb r-${e.role}${on ? ` ${on}` : ''}" style="left:${String(Math.round(mid.x))}px;top:${String(Math.round(mid.y))}px">${esc(e.label)}</span>`,
+        );
+      return arrowSvg(prefix, {
+        d,
+        role: e.role,
+        ...(on ? { state: on } : {}),
+        ...(e.role === 'emphasis' ? { comet: comet++ } : {}),
+        data: ` data-from="${esc(e.from)}" data-to="${esc(e.to)}"`,
+      });
+    })
+    .join('');
+  const box = (n: DgNode): string => {
+    const place = `left:${String(n.x)}px;top:${String(n.y)}px;width:${String(n.w)}px;height:${String(n.h)}px`;
+    if (n.kind === 'start')
+      return `<span class="dg-n ar-box t-ext dg-pill${spot ? (near.has(n.id) ? ' near' : ' dim') : ''}" data-dg="start" style="${place}"><span class="ar-t">${esc(s.flow.start)}</span><span class="ar-s">${esc(s.flow.startSub)}</span></span>`;
+    if (n.kind === 'dec')
+      return `<button class="dg-n dg-dec${state(n.id)}" data-action="map-j-spot" data-spot="${esc(n.id)}" data-dg="${esc(n.id)}" style="${place}" aria-pressed="${String(spot === n.id)}" title="${esc(`${s.flow.decision} · ${n.cond ?? ''}`)}"><span class="dg-dsh" aria-hidden="true"></span><span class="ar-t">${esc(shortCondition(n.cond ?? ''))}</span></button>`;
+    const x = n.step;
+    if (!x) return '';
+    const i = p.main.findIndex((m) => m.id === x.id);
+    const kindText = kindLabel(s, x.group, x.nature);
+    const joins = x.end === 'JOIN' && x.joins ? p.steps.get(x.joins) : undefined;
+    const target = i >= 0 ? `data-step="${String(i)}"` : `data-spot="${esc(x.id)}"`;
+    return `<button class="dg-n ar-box t-${archTone(x)}${state(x.id)}${x.end === 'STOP' ? ' stop' : ''}" data-action="map-j-spot" ${target} data-item="${esc(x.id)}" data-dg="${esc(x.id)}" style="${place}" aria-pressed="${String(spot === x.id)}" title="${esc(`${s.lanes[x.lane][0]} · ${kindText}${x.sub ? ` — ${x.sub}` : ''}${x.via?.condition ? ` · ${x.via.condition}` : ''}${x.via?.async ? ` · ${x.via.async}` : ''}`)}">${stepBadge(s, p.steps.get(x.id), x.end)}<span class="ar-t">${wb(shownName(x.name, x.nature))}</span><span class="ar-s">${esc(joins === undefined ? kindText : s.flow.joins(joins))}</span></button>`;
+  };
+  return `<div class="dg-stage dg-${kind}" data-dg-stage data-action="map-j-unspot" style="zoom:${String(st.jZoom)};width:${String(width)}px;height:${String(height)}px">${extra}<svg class="dg-links" width="${String(width)}" height="${String(height)}" viewBox="0 0 ${String(width)} ${String(height)}" aria-hidden="true" focusable="false">${arrowMarkers(prefix)}${arrows}</svg>${labels.join('')}${nodes.map(box).join('')}</div>`;
+}
+
+/** La ligne « où se trouve l'élément » : les étapes de structure qui ouvrent le chemin, cliquables. */
+function whereBar(s: JourneyStrings, p: PathInfo, upTo: number): string {
+  if (upTo <= 0) return '';
+  return `<div class="sq-where"><span>${esc(s.seq.where)} :</span>${p.main
+    .slice(0, upTo)
+    .map(
+      (x0, i) =>
+        `<button class="sq-cr" data-action="map-j-step" data-step="${String(i)}" data-item="${esc(x0.id)}">${stepBadge(s, p.steps.get(x0.id), x0.end)}<span>${wb(shownName(x0.name, x0.nature))}</span></button>`,
+    )
+    .join('<i aria-hidden="true">›</i>')}</div>`;
+}
+
+/** La légende d'un diagramme calculé : les couches présentes et les classes de flèche employées. */
+function dgLegend(
+  s: JourneyStrings,
+  shown: readonly FeatureTraceStep[],
+  roles: ReadonlyMap<ArrowRole, string>,
+  extra = '',
+): string {
+  const swatch = (cls: string, label: string): string =>
+    `<span><i class="ar-sw ${cls}" aria-hidden="true"></i>${esc(label)}</span>`;
+  const tones = FEATURE_LANES.filter((l) => shown.some((x) => x.lane === l))
+    .map((l) => swatch(`t-${laneTone(l)}`, s.lanes[l][0]))
+    .join('');
+  const bus = shown.some((x) => archTone(x) === 'bus') ? swatch('t-bus', s.arch.legendBus) : '';
+  const db = shown.some((x) => archTone(x) === 'db') ? swatch('t-db', s.arch.legendDb) : '';
+  const lines = [...roles].map(([r, label]) => swatch(`ln r-${r}`, label)).join('');
+  return `<div class="ar-legend" aria-label="${esc(s.arch.legendTitle)}">${tones}${bus}${db}${extra}${lines}</div>`;
+}
+
+/** Largeur et hauteur d'une étape, écarts entre colonnes et rangées, taille d'une décision (Workflow). */
+const FLOW_W = 156;
+const FLOW_H = 72;
+const FLOW_GX = 48;
+const FLOW_GY = 26;
+const FLOW_DEC = 72;
+const DG_PAD = 24;
+
+/** Un nœud de l'arbre du workflow, avant sa mise en place. */
+interface FlowTree {
+  id: string;
+  kind: 'step' | 'dec' | 'start';
+  step?: FeatureTraceStep;
+  cond?: string;
+  children: FlowTree[];
+  col: number;
+  row: number;
+}
+
+/**
+ * Le parcours de l'élément choisi en workflow : du clic (pour un bouton) à chaque étape aval de la trace,
+ * en arbre de gauche à droite — une colonne par profondeur, le chemin principal sur la première rangée,
+ * les branches dessous. Les étapes atteintes sous une même garde du code passent par un losange de
+ * décision ; seule la branche démontrée (« vrai ») est dessinée. Flèches : chemin principal en vert (comète),
+ * branches en ardoise, asynchrone ou probable en tirets violets, non démontré en pointillés.
+ */
+function flowDiagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathInfo): string {
+  const t = map.trace;
+  const q = s.flow;
+  const root = t?.down.find((x) => x.id === t.item);
+  if (!t || !root) return '';
+  const kids = new Map<string, FeatureTraceStep[]>();
+  for (const x of t.down)
+    if (x.parent && x.id !== t.item) kids.set(x.parent, [...(kids.get(x.parent) ?? []), x]);
+  const seen = new Set<string>();
+  const build = (x: FeatureTraceStep): FlowTree => {
+    seen.add(x.id);
+    const children: FlowTree[] = [];
+    const groups = new Map<string, FlowTree>();
+    // L'étape du chemin principal d'abord (sa branche reste droite), puis les autres dans l'ordre de la trace.
+    const list = [...(kids.get(x.id) ?? [])]
+      .filter((c) => !seen.has(c.id))
+      .sort((a, b) => Number(!p.mainIds.has(a.id)) - Number(!p.mainIds.has(b.id)));
+    for (const c of list) {
+      const cond = c.via?.condition;
+      const node = build(c);
+      if (!cond) {
+        children.push(node);
+        continue;
+      }
+      let g = groups.get(cond);
+      if (!g) {
+        g = { id: `dec:${x.id}:${String(groups.size)}`, kind: 'dec', cond, children: [], col: 0, row: 0 };
+        groups.set(cond, g);
+        children.push(g);
+      }
+      g.children.push(node);
+    }
+    return { id: x.id, kind: 'step', step: x, children, col: 0, row: 0 };
+  };
+  const tree = build(root);
+  const actor = root.group === 'BUTTON';
+  const top: FlowTree = actor ? { id: 'start', kind: 'start', children: [tree], col: 0, row: 0 } : tree;
+  let rows = 0;
+  const place = (n: FlowTree, col: number): void => {
+    n.col = col;
+    if (n.children.length === 0) {
+      n.row = rows++;
+      return;
+    }
+    for (const c of n.children) place(c, col + 1);
+    n.row = n.children[0]?.row ?? 0;
+  };
+  place(top, 0);
+  const nodes: DgNode[] = [];
+  const edges: DgEdge[] = [];
+  const walk = (n: FlowTree, parent?: FlowTree): void => {
+    const x0 = DG_PAD + n.col * (FLOW_W + FLOW_GX);
+    const y0 = DG_PAD + n.row * (FLOW_H + FLOW_GY);
+    if (n.kind === 'dec')
+      nodes.push({
+        id: n.id,
+        kind: 'dec',
+        x: x0 + (FLOW_W - FLOW_DEC) / 2,
+        y: y0 + (FLOW_H - FLOW_DEC) / 2,
+        w: FLOW_DEC,
+        h: FLOW_DEC,
+        ...(n.cond ? { cond: n.cond } : {}),
+      });
+    else if (n.kind === 'start')
+      nodes.push({ id: n.id, kind: 'start', x: x0 + 20, y: y0 + 8, w: FLOW_W - 40, h: FLOW_H - 16 });
+    else
+      nodes.push({
+        id: n.id,
+        kind: 'step',
+        x: x0,
+        y: y0,
+        w: FLOW_W,
+        h: FLOW_H,
+        ...(n.step ? { step: n.step } : {}),
+      });
+    if (parent) {
+      const c = DG_PAD + parent.col * (FLOW_W + FLOW_GX) + FLOW_W + FLOW_GX / 2;
+      const step = n.step;
+      // Vers une décision : la relation de sa première étape (le chemin principal s'il y passe).
+      const via = n.kind === 'dec' ? n.children[0]?.step?.via : step?.via;
+      const main =
+        n.kind === 'dec'
+          ? n.children.some((k) => k.step && p.mainIds.has(k.step.id))
+          : step
+            ? p.mainIds.has(step.id)
+            : false;
+      const role: ArrowRole =
+        parent.kind === 'start'
+          ? 'emphasis'
+          : roleOf(
+              via,
+              main && p.mainIds.has(parent.step?.id ?? parent.children[0]?.step?.id ?? ''),
+              parent.kind !== 'dec',
+            );
+      edges.push({
+        from: parent.id,
+        to: n.id,
+        role,
+        c,
+        sides: 'rl',
+        ...(parent.kind === 'dec' ? { label: q.yes } : {}),
+      });
+    }
+    for (const k of n.children) walk(k, n);
+  };
+  walk(top);
+  const shown = nodes.flatMap((n) => (n.step ? [n.step] : []));
+  const used = new Set(edges.map((e) => e.role));
+  const roleLabels = new Map<ArrowRole, string>(
+    (
+      [
+        ['emphasis', q.legend.main],
+        ['default', q.legend.branch],
+        ['dashed', `${q.legend.async} · ${q.legend.probable}`],
+        ['gap', q.legend.gap],
+      ] as const
+    ).filter(([r]) => used.has(r)),
+  );
+  const dec = nodes.some((n) => n.kind === 'dec')
+    ? `<span><i class="ar-sw dg-sw-dec" aria-hidden="true"></i>${esc(q.legend.decision)}</span>`
+    : '';
+  const head = `<div class="ar-head"><span class="ar-pulse" aria-hidden="true"></span><p>${esc(q.hint)}</p><button class="btn small" data-action="map-j-unspot"${st.jSpot ? '' : ' disabled'}>${esc(s.arch.showAll)}</button></div>`;
+  const name = p.main[p.upLen];
+  return `<section class="ar dg" aria-label="${esc(q.title(shownName(name?.name ?? '', name?.nature)))}">${head}${whereBar(s, p, p.upLen)}<div class="ar-scroll">${dgStage(s, st, p, 'flow', nodes, edges)}</div>${dgLegend(s, shown, roleLabels, dec)}<p class="sq-note">${esc(q.note)}</p>${archCards(s, map, p)}</section>`;
+}
+
+/** Les étapes d'un flux de données, de la source à l'affichage. */
+const DATA_STAGES = ['src', 'state', 'transport', 'proc', 'store', 'ext', 'cons'] as const;
+type DataStage = (typeof DATA_STAGES)[number];
+const DATA_W = 150;
+const DATA_H = 72;
+const DATA_GX = 96;
+const DATA_GY = 44;
+const DATA_HEAD = 30;
+
+/** Le rôle d'une étape dans le flux : d'après son groupe ; une interface atteinte après un store affiche. */
+function stageOf(x: FeatureTraceStep, afterStore: boolean): DataStage {
+  switch (x.group) {
+    case 'STORE':
+      return 'state';
+    case 'SPA_SERVICE':
+    case 'ENDPOINT':
+    case 'CONTRACT':
+    case 'DTO':
+    case 'MODEL':
+    case 'CLIENT':
+    case 'EXTERNAL_CALL':
+      return 'transport';
+    case 'CONTROLLER':
+    case 'SERVICE':
+    case 'RULE':
+    case 'METHOD':
+      return 'proc';
+    case 'REPOSITORY':
+    case 'ENTITY':
+      return 'store';
+    case 'EXTERNAL_SERVICE':
+      return 'ext';
+    default:
+      return afterStore ? 'cons' : 'src';
+  }
+}
+
+/**
+ * Le parcours de l'élément choisi en flux de données : les mêmes étapes que la trace, rangées en colonnes
+ * par rôle (source, état, transport, traitement, stockage, externe, affichage). Chaque relation de la trace
+ * est une flèche dans le sens où vont les données : une lecture part de la table vers qui la lit, une
+ * écriture ou un envoi va vers sa cible (vert, comète), une lecture est ardoise, l'asynchrone et le probable
+ * en tirets, le non démontré en pointillés ; le verbe est écrit entre deux colonnes.
+ */
+function dataDiagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathInfo): string {
+  const t = map.trace;
+  const q = s.data;
+  if (!t || t.down.length === 0) return '';
+  const byId = new Map(t.down.map((x) => [x.id, x]));
+  const afterStore = (x: FeatureTraceStep): boolean => {
+    for (
+      let y = x.parent ? byId.get(x.parent) : undefined, k = 0;
+      y && k < 200;
+      y = y.parent ? byId.get(y.parent) : undefined, k++
+    )
+      if (y.group === 'STORE') return true;
+    return false;
+  };
+  const order = (x: FeatureTraceStep): number => p.steps.get(x.id) ?? Number.MAX_SAFE_INTEGER;
+  const steps = [...t.down].sort((a, b) => order(a) - order(b));
+  const stage = new Map(steps.map((x) => [x.id, stageOf(x, x.depth > 0 && afterStore(x))]));
+  const cols = DATA_STAGES.filter((k) => steps.some((x) => stage.get(x.id) === k));
+  const colOf = (id: string): number => cols.indexOf(stage.get(id) ?? 'src');
+  // Mise en place gloutonne, en profondeur, chemin principal d'abord : chaque étape prend la rangée de
+  // celle d'où elle vient (la suivante si elles partagent la colonne), ou la première rangée libre
+  // au-dessous. Une branche reste ainsi sur sa rangée en traversant les colonnes : flèches droites.
+  const kids = new Map<string, FeatureTraceStep[]>();
+  for (const x of steps)
+    if (x.parent && byId.has(x.parent)) kids.set(x.parent, [...(kids.get(x.parent) ?? []), x]);
+  const taken = cols.map(() => new Set<number>());
+  const rowOf = new Map<string, number>();
+  const put = (x: FeatureTraceStep, want: number): void => {
+    if (rowOf.has(x.id)) return;
+    const c = colOf(x.id);
+    const used = taken[c] ?? new Set<number>();
+    let r = want;
+    while (used.has(r)) r++;
+    used.add(r);
+    rowOf.set(x.id, r);
+    const list = [...(kids.get(x.id) ?? [])].sort(
+      (a, b) => Number(!p.mainIds.has(a.id)) - Number(!p.mainIds.has(b.id)),
+    );
+    for (const k of list) put(k, colOf(k.id) === c ? r + 1 : r);
+  };
+  for (const x of steps) if (!x.parent || !byId.has(x.parent)) put(x, 0);
+  const nodes: DgNode[] = steps.map((x) => ({
+    id: x.id,
+    kind: 'step',
+    step: x,
+    x: DG_PAD + colOf(x.id) * (DATA_W + DATA_GX),
+    y: DG_PAD + DATA_HEAD + (rowOf.get(x.id) ?? 0) * (DATA_H + DATA_GY),
+    w: DATA_W,
+    h: DATA_H,
+  }));
+  // Les coudes d'un même intervalle sont décalés par source : deux flèches ne partagent pas leur montant.
+  const lane = new Map<string, number>();
+  const offset = (gap: string, src: string): number => {
+    const key = `${gap}|${src}`;
+    let v = lane.get(key);
+    if (v === undefined) {
+      v = [...lane.keys()].filter((k) => k.startsWith(`${gap}|`)).length;
+      lane.set(key, v);
+    }
+    return (v % 5) * 12;
+  };
+  const edges: DgEdge[] = [];
+  for (const x of steps) {
+    const via = x.via;
+    if (!x.parent || !via || !byId.has(x.parent)) continue;
+    const reads = via.kinds.includes('READS') && !via.kinds.includes('WRITES');
+    const [from, to] = reads ? [x.id, x.parent] : [x.parent, x.id];
+    const ca = colOf(from);
+    const cb = colOf(to);
+    const main = p.mainIds.has(x.id) && p.mainIds.has(x.parent);
+    const role: ArrowRole =
+      via.status === 'UNKNOWN'
+        ? 'gap'
+        : via.status === 'PROBABLE' || via.async
+          ? 'dashed'
+          : via.kinds.includes('WRITES') || main
+            ? reads
+              ? 'default'
+              : 'emphasis'
+            : 'default';
+    const left = DG_PAD + Math.min(ca, cb) * (DATA_W + DATA_GX) + DATA_W;
+    const label = ca === cb ? undefined : verbOf(s, via);
+    if (ca < cb)
+      edges.push({
+        from,
+        to,
+        role,
+        sides: 'rl',
+        c: left + 18 + offset(`${String(ca)}>`, from),
+        ...(label ? { label } : {}),
+      });
+    else if (ca > cb)
+      edges.push({
+        from,
+        to,
+        role,
+        sides: 'lr',
+        c: left + DATA_GX - 18 - offset(`${String(cb)}<`, from),
+        ...(label ? { label } : {}),
+      });
+    else if ((rowOf.get(to) ?? 0) - (rowOf.get(from) ?? 0) === 1) edges.push({ from, to, role, sides: 'bt' });
+    else edges.push({ from, to, role, sides: 'rr', c: left + 14 + offset(`${String(ca)}=`, from) / 2 });
+  }
+  const heads = cols
+    .map(
+      (k, c) =>
+        `<span class="dg-sh" style="left:${String(DG_PAD + c * (DATA_W + DATA_GX))}px;width:${String(DATA_W)}px">${esc(q.stages[k])}</span>`,
+    )
+    .join('');
+  const used = new Set(edges.map((e) => e.role));
+  const roleLabels = new Map<ArrowRole, string>(
+    (
+      [
+        ['emphasis', q.legend.write],
+        ['default', q.legend.read],
+        ['dashed', `${q.legend.async} · ${q.legend.probable}`],
+        ['gap', q.legend.gap],
+      ] as const
+    ).filter(([r]) => used.has(r)),
+  );
+  const head = `<div class="ar-head"><span class="ar-pulse" aria-hidden="true"></span><p>${esc(q.hint)}</p><button class="btn small" data-action="map-j-unspot"${st.jSpot ? '' : ' disabled'}>${esc(s.arch.showAll)}</button></div>`;
+  const name = p.main[p.upLen];
+  return `<section class="ar dg" aria-label="${esc(q.title(shownName(name?.name ?? '', name?.nature)))}">${head}${whereBar(s, p, p.upLen)}<div class="ar-scroll">${dgStage(s, st, p, 'data', nodes, edges, heads)}</div>${dgLegend(s, steps, roleLabels)}<p class="sq-note">${esc(q.note)}</p>${archCards(s, map, p)}</section>`;
+}
+
+/** Un rectangle d'étape dans le repère du calque des flèches. */
+interface ArchRect {
+  l: number;
+  r: number;
+  t: number;
+  b: number;
+}
+
+/**
+ * Dessiner les flèches du diagramme d'architecture (dans le navigateur, après le rendu), d'après la place
+ * réelle des boîtes, à angle droit comme dans Archify : horizontal-vertical-horizontal d'une région à
+ * l'autre (avec le verbe de la relation sur le segment central), vertical-horizontal-vertical dans une même
+ * région, par la gauche si les deux boîtes se chevauchent. Relation confirmée : trait vert parcouru d'une
+ * comète ; probable : tirets violets ; non démontrée : pointillés gris.
+ */
+export function drawArch(svg: SVGSVGElement): void {
+  const stage = svg.parentElement;
+  if (!stage) return;
+  let links: ArchLink[];
+  try {
+    links = JSON.parse(svg.dataset.arRoute ?? '[]') as ArchLink[];
+  } catch {
+    return;
+  }
+  const box = svg.getBoundingClientRect();
+  if (box.width <= 0 || box.height <= 0) return;
+  // Les mesures sont à l'échelle affichée (CSS zoom) : on les ramène au repère du calque.
+  const scale = svg.clientWidth > 0 ? box.width / svg.clientWidth : 1;
+  const rect = (i: number): ArchRect | undefined => {
+    const el = stage.querySelector<HTMLElement>(`[data-ar-step="${String(i)}"]`);
+    if (!el || el.offsetParent === null) return undefined;
+    const r = el.getBoundingClientRect();
+    return {
+      l: (r.left - box.left) / scale,
+      r: (r.right - box.left) / scale,
+      t: (r.top - box.top) / scale,
+      b: (r.bottom - box.top) / scale,
+    };
+  };
+  const parts: string[] = [];
+  const labels: string[] = [];
+  let comet = 0;
+  links.forEach((link, i) => {
+    if (i === 0) return;
+    const a = rect(i - 1);
+    const b = rect(i);
+    if (!a || !b) return;
+    const ya = (a.t + a.b) / 2;
+    const yb = (b.t + b.b) / 2;
+    const xa = (a.l + a.r) / 2;
+    const xb = (b.l + b.r) / 2;
+    let route: { d: string; mid: Pt };
+    if (b.l >= a.r - 4) route = orthPath({ x: a.r, y: ya }, { x: b.l - 1, y: yb }, 'h');
+    else if (b.r <= a.l + 4) route = orthPath({ x: a.l, y: ya }, { x: b.r + 1, y: yb }, 'h');
+    else if (b.t >= a.b - 2) route = orthPath({ x: xa, y: a.b }, { x: xb, y: b.t - 1 }, 'v');
+    else if (b.b <= a.t + 2) route = orthPath({ x: xa, y: a.t }, { x: xb, y: b.b + 1 }, 'v');
+    else route = orthPath({ x: a.l, y: ya }, { x: b.l - 1, y: yb }, 'h', Math.min(a.l, b.l) - 30);
+    const status = link.s ?? 'UNKNOWN';
+    const role: ArrowRole = status === 'CONFIRMED' ? 'emphasis' : status === 'PROBABLE' ? 'dashed' : 'gap';
+    parts.push(
+      arrowSvg('ar', {
+        d: route.d,
+        role,
+        ...(link.c ? { state: link.c } : {}),
+        ...(role === 'emphasis' ? { comet: comet++ } : {}),
+        data: ` data-s="${status.toLowerCase()}"`,
+      }),
+    );
+    if (link.v) {
+      // L'étiquette sur un fond plein, sans bordure, au milieu du segment central.
+      const w = link.v.length * 6.5 + 12;
+      const { x, y } = route.mid;
+      const st = link.c ? ` ${link.c}` : '';
+      labels.push(
+        `<rect class="ar-lb r-${role}${st}" x="${(x - w / 2).toFixed(1)}" y="${(y - 9).toFixed(1)}" width="${w.toFixed(1)}" height="18" rx="4"/><text class="ar-lbl r-${role}${st}" x="${x.toFixed(1)}" y="${(y + 3.5).toFixed(1)}" text-anchor="middle">${esc(link.v)}</text>`,
+      );
+    }
+  });
+  const w = svg.clientWidth || box.width;
+  const h = svg.clientHeight || box.height;
+  svg.setAttribute('viewBox', `0 0 ${w.toFixed(1)} ${h.toFixed(1)}`);
+  svg.innerHTML = parts.length ? `${arrowMarkers('ar')}${parts.join('')}${labels.join('')}` : '';
+}
+
+/** Le diagramme du parcours dans la présentation choisie (hors couloirs). */
+function diagram(s: JourneyStrings, map: FeatureMap, st: JourneyState, p: PathInfo): string {
+  if (st.jStyle === 'seq') return seqDiagram(s, map, st, p);
+  if (st.jStyle === 'flow') return flowDiagram(s, map, st, p);
+  if (st.jStyle === 'data') return dataDiagram(s, map, st, p);
+  return archDiagram(s, map, st, p);
+}
+
+/** Le choix de présentation du parcours : un des diagrammes ou les couloirs. */
+function styleBar(s: JourneyStrings, st: JourneyState): string {
+  return `<div class="jr-modes" role="group" aria-label="${esc(s.arch.styleLabel)}">${JOURNEY_STYLES.map((v) => `<button class="jr-mode${st.jStyle === v ? ' on' : ''}" data-action="map-j-style" data-style="${v}" aria-pressed="${String(st.jStyle === v)}">${esc(s.arch.styles[v])}</button>`).join('')}</div>`;
+}
+
+function toolbar(s: JourneyStrings, st: JourneyState, archi = false): string {
   const btn = (action: string, label: string, ic: string, extra = ''): string =>
     `<button class="btn small icon-only" data-action="${action}" aria-label="${esc(label)}" title="${esc(label)}"${extra}>${icon(ic)}</button>`;
-  return `<div class="jr-tools">${btn('map-j-detail', st.jDetail ? s.hideMembers : s.showMembers, 'text', ` aria-pressed="${String(st.jDetail)}"`)}${btn('map-j-center', s.center, 'target')}${btn('map-j-fit', s.fit, 'fit')}${btn('map-j-full', st.jFull ? s.exitFull : s.full, st.jFull ? 'minimize' : 'maximize', ` aria-pressed="${String(st.jFull)}"`)}${btn('map-j-zoom', s.zoomOut, 'minus', ' data-dir="-1"')}<output class="jr-zoom" aria-live="polite">${String(Math.round(st.jZoom * 100))} %</output>${btn('map-j-zoom', s.zoomIn, 'plus', ' data-dir="1"')}</div>`;
+  const detail = archi
+    ? ''
+    : btn(
+        'map-j-detail',
+        st.jDetail ? s.hideMembers : s.showMembers,
+        'text',
+        ` aria-pressed="${String(st.jDetail)}"`,
+      );
+  return `<div class="jr-tools">${detail}${btn('map-j-center', s.center, 'target')}${btn('map-j-fit', s.fit, 'fit')}${btn('map-j-full', st.jFull ? s.exitFull : s.full, st.jFull ? 'minimize' : 'maximize', ` aria-pressed="${String(st.jFull)}"`)}${btn('map-j-zoom', s.zoomOut, 'minus', ' data-dir="-1"')}<output class="jr-zoom" aria-live="polite">${String(Math.round(st.jZoom * 100))} %</output>${btn('map-j-zoom', s.zoomIn, 'plus', ' data-dir="1"')}</div>`;
 }
 
 function aspectLabel(s: JourneyStrings, row: ConditionRow): string {
@@ -1563,7 +2628,10 @@ export function journeyTab(st: JourneyState, h: JourneyHelpers): string {
         : neighbourSet(map, selected.id);
   const aside = `<aside class="jr-aside"><section><h3>${esc(s.feature)} : ${esc(map.feature.name)}</h3>${treeView(map.tree, st, map)}</section>${selected ? infoCard(s, map, h, selected) : ''}${categoryList(s, map, st)}</aside>`;
   const guide = selected ? guideBar(s, traced, st, h, selected, path) : '';
-  const bar = path ? modeBar(s, traced, st, path) : '';
+  // Le parcours en diagramme d'architecture (par défaut), de séquence, ou dans les couloirs ; les modes ne
+  // valent que pour les couloirs (les diagrammes montrent le chemin principal).
+  const archi = path !== undefined && st.jStyle !== 'lanes';
+  const bar = path ? `${styleBar(s, st)}${archi ? '' : modeBar(s, traced, st, path)}` : '';
   const fullWarn =
     path && mode === 'full' && map.itemCount > 150
       ? `<p class="map-note warn-t">${esc(s.guide.fullWarn(map.itemCount))}</p>`
@@ -1571,7 +2639,7 @@ export function journeyTab(st: JourneyState, h: JourneyHelpers): string {
   const center =
     st.jView === 'overview'
       ? `<div class="jr-gh">${viewPicker(s, st)}</div>${overview(s, map, h)}`
-      : `<div class="jr-gh"><h3 class="sr-only">${esc(s.journeyTitle)}</h3>${viewPicker(s, st)}${bar}${toolbar(s, st)}</div>${guide}${fullWarn}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`;
+      : `<div class="jr-gh"><h3 class="sr-only">${esc(s.journeyTitle)}</h3>${viewPicker(s, st)}${bar}${toolbar(s, st, archi)}</div>${guide}${archi ? '' : fullWarn}${map.truncated ? `<p class="map-note warn-t">${esc(s.truncated)}</p>` : ''}${archi ? `<div class="jr-canvas ar-canvas" data-jr-canvas>${diagram(s, traced, st, path)}</div>` : `<div class="jr-canvas" data-jr-canvas>${lanesGraph(s, map, st, near, path)}</div>`}`;
   const loading = h.loading ? `<span class="spin jr-busy" aria-label="${esc(s.loading)}"></span>` : '';
   return `<section class="card jr${st.jFull ? ' full' : ''}" data-jr><div class="jr-head">${featurePicker(s, map, h)}${loading}${kpis(s, map)}</div>${h.paneError(h.error)}<div class="jr-body">${aside}<div class="jr-main">${center}</div></div>${bottom(s, map, st, h, path)}</section>`;
 }
@@ -1611,17 +2679,19 @@ export const JOURNEY_CSS = `
 .jr-gh h3{display:flex;gap:6px;align-items:center;margin:0;font-size:15px}.jr-gh h3 .ico{color:var(--qa-color-primary)}
 .jr-tools{display:flex;gap:4px;align-items:center}.jr-zoom{min-width:48px;text-align:center;font-size:12.5px}
 .jr-focus{display:flex;gap:6px;align-items:center;margin:0;font-size:12.5px;color:var(--qa-color-muted)}
-.jr-canvas{overflow:auto;border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);padding:10px;max-height:calc(100vh - 60px);background:var(--qa-color-surface)}
+.jr-canvas{overflow:auto;border:1px solid var(--qa-color-border);border-radius:var(--qa-radius);padding:10px;max-height:calc(100vh - 60px);background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px;color:#0f172a}
 .jr.full .jr-canvas{max-height:none}
 .jr-lanes{display:flex;align-items:stretch;gap:0;width:100%;position:relative}
-.jr-lane{flex:1 1 0;min-width:180px;max-width:440px;border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;border:1px solid}
+.jr-lane{flex:1 1 0;min-width:180px;max-width:440px;border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px;border:1px solid}
 .jr-lane header{display:flex;gap:8px;align-items:center;justify-content:center;text-align:center}
 .jr-lane header .ico{width:22px;height:22px}
 .jr-lane h3{margin:0;font-size:14.5px}.jr-lane header small{color:var(--qa-color-muted);font-size:11.5px}
-.l-frontend{background:#f4effc;border-color:#ddd0f6}.l-frontend header .ico{color:#c0392b}
-.l-bff{background:#ecf4fd;border-color:#c8dcf4}.l-bff header .ico{color:#2f6fd1}
-.l-backend{background:#ecf8f0;border-color:#c6e7d2}.l-backend header .ico{color:#2f7d4f}
-.l-external{background:#fdf3e7;border-color:#f2d6b0}.l-external header .ico{color:#d97a0a}
+.jr-lane.l-frontend,.jr-lane.l-bff,.jr-lane.l-backend,.jr-lane.l-external{background:rgba(251,191,36,.05);border:1.5px dashed #d97706}
+.jr-lane header .ico{color:#b45309}.jr-lane h3{color:#b45309;font-size:12.5px;font-weight:600}
+.jr-lane.l-frontend .jr-card{background:linear-gradient(rgba(34,211,238,.15),rgba(34,211,238,.15)),#fff;border:1.5px solid #0891b2}
+.jr-lane.l-bff .jr-card{background:linear-gradient(rgba(96,165,250,.15),rgba(96,165,250,.15)),#fff;border:1.5px solid #2563eb}
+.jr-lane.l-backend .jr-card{background:linear-gradient(rgba(52,211,153,.18),rgba(52,211,153,.18)),#fff;border:1.5px solid #059669}
+.jr-lane.l-external .jr-card{background:linear-gradient(rgba(148,163,184,.18),rgba(148,163,184,.18)),#fff;border:1.5px solid #64748b}
 .jr-lane.empty{flex:0 0 46px;min-width:46px;max-width:46px;padding:10px 4px;align-items:center;border-style:dashed}
 .jr-lane.empty header{flex-direction:column;gap:8px}.jr-lane.empty header div{display:flex;justify-content:center}
 .jr-lane.empty h3{writing-mode:vertical-rl;transform:rotate(180deg);font-size:12.5px;white-space:nowrap;color:var(--qa-color-muted)}
@@ -1631,7 +2701,7 @@ export const JOURNEY_CSS = `
 .jr-sec h4{display:flex;gap:6px;align-items:center;margin:0;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--qa-color-muted)}
 .jr-sec h4 .ico{width:13px;height:13px}.jr-sec h4 i{font-style:normal;margin-left:auto}
 .jr-sec.dim,.jr-card.dim{opacity:.38}
-.jr-card{background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:9px;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:opacity .15s;position:relative;z-index:2}
+.jr-card{background:#fff;border:1.5px solid #64748b;border-radius:6px;transition:opacity .15s;position:relative;z-index:2}
 .jr-sec>h4,.jr-fold,.jr-lane>header,.jr-persist,.jr-pill,.jr-hidden,.jr-folded{position:relative;z-index:2}
 .jr-card.sel{outline:2px solid var(--qa-color-primary)}.jr-card.zero{border-style:dashed}
 .jr-ch{display:flex;gap:6px;align-items:flex-start;width:100%;border:0;background:none;padding:5px 7px;text-align:left}
@@ -1679,7 +2749,7 @@ export const JOURNEY_CSS = `
 .jr-gs .jr-crb>span{max-width:100%}
 .jr-gk{display:inline-flex;align-items:center;color:var(--qa-color-muted)}.jr-gk .ico{width:13px;height:13px}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.jr-gs.l-frontend .jr-crb{background:#f4effc}.jr-gs.l-bff .jr-crb{background:#ecf4fd}.jr-gs.l-backend .jr-crb{background:#ecf8f0}.jr-gs.l-external .jr-crb{background:#fdf3e7}
+:is(.jr-gs,.jr-cr).l-frontend .jr-crb{background:rgba(34,211,238,.13);border-color:#0891b2}:is(.jr-gs,.jr-cr).l-bff .jr-crb{background:rgba(96,165,250,.13);border-color:#2563eb}:is(.jr-gs,.jr-cr).l-backend .jr-crb{background:rgba(52,211,153,.16);border-color:#059669}:is(.jr-gs,.jr-cr).l-external .jr-crb{background:rgba(148,163,184,.16);border-color:#64748b}
 .jr-gs.on .jr-crb{outline:2px solid var(--qa-color-primary);box-shadow:0 2px 6px rgba(0,0,0,.12)}
 .jr-gs.next .jr-crb{outline:2px dashed #5aa87a}
 .jr-gs.stop .jr-crb{border-color:#f0a59d}
@@ -1757,12 +2827,124 @@ export const JOURNEY_CSS = `
 .jr-ov2{display:grid;grid-template-columns:minmax(160px,240px) minmax(0,1fr);gap:12px}
 .jr-busy{width:16px;height:16px}
 .jr-route{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
-.jr-route path{fill:none;stroke:var(--qa-color-primary);stroke-width:2.2;stroke-linecap:round;opacity:.7}
-.jr-route path.on{stroke-width:3.2;opacity:.95}
-.jr-route path.in{stroke-width:1.5;opacity:.45}.jr-route path.in.on{stroke-width:2.4;opacity:.9}
-.jr-route path.s-probable{stroke:#b7791f;stroke-dasharray:7 5}
-.jr-route path.s-unknown{stroke:#c0392b;stroke-dasharray:2 5}
-.jr-route path.s-gap{stroke:#8a96a3;stroke-dasharray:2 6}
+.jr-route path.in{opacity:.55}.jr-route path.in.on{opacity:1}
 .jr-route marker path{fill:context-stroke;stroke:none;opacity:1}
+.ar-canvas{max-height:none;overflow:visible;border:0;padding:0;background:none}
+.ar{--ar-ink:#0f172a;--ar-mu:#64748b;--ar-line:#e2e8f0;display:flex;flex-direction:column;gap:14px;background:#fff;border:1px solid var(--ar-line);border-radius:14px;padding:16px;color:var(--ar-ink);font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.ar-head{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}.ar-head p{margin:0;flex:1 1 260px;font-size:12px;color:var(--ar-mu)}
+.ar-head .btn{font-family:inherit}
+.ar-pulse{width:10px;height:10px;border-radius:50%;background:#0891b2;flex:none;animation:ar-pulse 2s infinite}
+.ar-scroll{overflow-x:auto;padding:4px 2px}
+.ar-stage{position:relative;display:flex;gap:80px;align-items:stretch;min-width:max-content;padding:16px;border-radius:10px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
+.ar-links{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
+.ar-region{position:relative;display:flex;flex-direction:column;gap:12px;padding:38px 18px 18px;border:1.5px dashed #d97706;border-radius:8px;background:rgba(251,191,36,.05)}
+.ar-rl{position:absolute;top:9px;left:12px;margin:0;font-size:11px;font-weight:600;color:#b45309;display:flex;gap:6px;align-items:baseline}
+.ar-rl small{font-weight:400;color:var(--ar-mu);font-size:10px}
+.ar-col{display:grid;gap:56px 80px;align-items:stretch}.ar-col.c1{grid-template-columns:180px}.ar-col.c2{grid-template-columns:repeat(2,170px)}
+.ar-rail{flex:0 0 44px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:14px;border:1.5px dashed #94a3b8;border-radius:8px;background:rgba(148,163,184,.06)}
+.ar-rail span{writing-mode:vertical-rl;transform:rotate(180deg);font-size:11px;font-weight:600;color:var(--ar-mu);white-space:nowrap}
+.ar-box{--glow:rgba(8,145,178,.45);position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:4px;min-height:52px;padding:10px 14px;border:1.5px solid;border-radius:6px;font:inherit;text-align:center;cursor:pointer;transition:opacity .25s ease,transform .2s ease,box-shadow .2s ease,filter .25s ease}
+.ar-box:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(15,23,42,.1)}
+.ar-box:focus-visible{outline:2px solid var(--ar-ink);outline-offset:3px}
+.ar-t{font-size:12.5px;font-weight:600;color:var(--ar-ink);overflow-wrap:break-word;min-width:0;max-width:100%}
+.ar-s{font-size:10.5px;color:var(--ar-mu);line-height:1.35;overflow-wrap:break-word;min-width:0;max-width:100%}
+.ar-box>.jr-sn{position:absolute;top:-10px;left:-10px;min-width:22px;height:22px;font-size:11px;background:#059669;box-shadow:0 0 0 3px #f8fafc}
+.ar-box>.jr-sn.goal{background:#7c3aed}.ar-box>.jr-sn.stop{background:#e11d48}
+.ar-box.t-fe{background:linear-gradient(rgba(34,211,238,.15),rgba(34,211,238,.15)),#fff;border-color:#0891b2}
+.ar-box.t-bff{--glow:rgba(37,99,235,.45);background:linear-gradient(rgba(96,165,250,.15),rgba(96,165,250,.15)),#fff;border-color:#2563eb}
+.ar-box.t-be{--glow:rgba(5,150,105,.45);background:linear-gradient(rgba(52,211,153,.18),rgba(52,211,153,.18)),#fff;border-color:#059669}
+.ar-box.t-db{--glow:rgba(124,58,237,.45);background:linear-gradient(rgba(167,139,250,.2),rgba(167,139,250,.2)),#fff;border-color:#7c3aed}
+.ar-box.t-ext{--glow:rgba(100,116,139,.45);background:linear-gradient(rgba(148,163,184,.18),rgba(148,163,184,.18)),#fff;border-color:#64748b}
+.ar-box.t-bus{--glow:rgba(234,88,12,.45);background:linear-gradient(rgba(251,146,60,.15),rgba(251,146,60,.15)),#fff;border-color:#ea580c}
+.ar-box.stop{border-style:dashed;border-color:#e11d48}
+.ar-box.cur{box-shadow:0 0 0 3px var(--glow)}
+.ar-box.sel{transform:translateY(-2px) scale(1.03);border-width:2.5px;z-index:3;animation:ar-ring 1.6s ease-out infinite}
+.ar-box.dim{opacity:.28;filter:saturate(.4)}
+.ar-legend{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:11px;color:#475569}
+.ar-legend span{display:inline-flex;gap:8px;align-items:center}
+.ar-sw{display:inline-block;width:14px;height:10px;border:1.5px solid;border-radius:3px;font-style:normal}
+.ar-sw.t-fe{border-color:#0891b2;background:rgba(34,211,238,.15)}.ar-sw.t-bff{border-color:#2563eb;background:rgba(96,165,250,.15)}
+.ar-sw.t-be{border-color:#059669;background:rgba(52,211,153,.18)}.ar-sw.t-db{border-color:#7c3aed;background:rgba(167,139,250,.2)}
+.ar-sw.t-ext{border-color:#64748b;background:rgba(148,163,184,.18)}.ar-sw.t-bus{border-color:#ea580c;background:rgba(251,146,60,.15)}
+.ar-sw.ln{width:24px;height:0;border-width:1.5px 0 0;border-radius:0;background:none}
+.ar-sw.ln.s-confirmed{border-color:#059669}.ar-sw.ln.s-probable{border-color:#7c3aed;border-top-style:dashed}.ar-sw.ln.s-unknown{border-color:#e11d48;border-top-style:dotted}
+.ar-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.ar-card{border:1px solid var(--ar-line);border-radius:12px;padding:14px 16px;min-width:0}
+.ar-card h4{display:flex;gap:8px;align-items:center;margin:0;font-size:12.5px}
+.ar-card h4 i{width:8px;height:8px;border-radius:50%;flex:none}
+.ar-card.k-main h4 i{background:#059669}.ar-card.k-check h4 i{background:#7c3aed}.ar-card.k-gaps h4 i{background:#e11d48}
+.ar-card ul{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--ar-mu);line-height:1.45}
+.ar-card li{overflow-wrap:anywhere}.ar-card li::before{content:"• "}
+@keyframes ar-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes ar-ring{0%{box-shadow:0 0 0 0 var(--glow)}70%{box-shadow:0 0 0 12px rgba(0,0,0,0)}100%{box-shadow:0 0 0 0 rgba(0,0,0,0)}}
+@media (prefers-reduced-motion:reduce){.ar-pulse,.ar-box.sel{animation:none}.ar-box{transition:none}}
+.ar-lb{fill:#f8fafc;transition:opacity .25s}
+.ar-lbl{font-size:10.5px;font-weight:600;transition:opacity .25s}
+.ar-lbl.r-emphasis{fill:#047857}.ar-lbl.r-dashed{fill:#6d28d9}.ar-lbl.r-gap{fill:#64748b}
+.ar-lb.off,.ar-lbl.off{opacity:.12}
+.ar-sw.ln.r-emphasis{border-color:#059669}.ar-sw.ln.r-default{border-color:#64748b}
+.ar-sw.ln.r-dashed{border-color:#7c3aed;border-top-style:dashed}.ar-sw.ln.r-security{border-color:#e11d48;border-top-style:dashed}
+.ar-sw.ln.r-gap{border-color:#94a3b8;border-top-style:dotted}
+.dg-stage{position:relative;border-radius:10px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
+.dg-links{position:absolute;left:0;top:0;pointer-events:none;z-index:1;overflow:visible}
+.dg-n{position:absolute;box-sizing:border-box;min-height:0;padding:7px 10px;justify-content:center;gap:2px;overflow:hidden}
+.dg-n .ar-t{font-size:11.5px;line-height:1.25}.dg-n .ar-s{font-size:9.5px}
+.dg-n>.jr-sn{top:-9px;left:-9px;min-width:20px;height:20px;font-size:10px}
+.ar-box.dg-n{overflow:visible}
+.dg-pill{border-radius:999px;cursor:default}.dg-pill:hover{transform:none;box-shadow:none}
+.dg-dec{position:absolute;z-index:2;display:flex;align-items:center;justify-content:center;padding:0;border:0;background:none;font:inherit;cursor:pointer;transition:opacity .25s,filter .25s}
+.dg-dec .dg-dsh{position:absolute;inset:14%;transform:rotate(45deg);border:1.5px solid #e11d48;border-radius:6px;background:linear-gradient(rgba(251,113,133,.15),rgba(251,113,133,.15)),#fff}
+.dg-dec .ar-t{position:relative;font-size:10px;max-width:60px;text-align:center;overflow-wrap:anywhere}
+.dg-dec.sel .dg-dsh{border-width:2.5px;box-shadow:0 0 0 3px rgba(225,29,72,.25)}
+.dg-dec.dim{opacity:.28;filter:saturate(.4)}
+.dg-dec:focus-visible{outline:2px solid var(--ar-ink);outline-offset:3px}
+.dg-lb{position:absolute;z-index:2;transform:translate(-50%,-50%);font-size:10px;font-weight:600;line-height:1.2;background:#f8fafc;border-radius:4px;padding:3px 6px;white-space:nowrap;pointer-events:none;transition:opacity .25s}
+.dg-lb.r-emphasis{color:#047857}.dg-lb.r-default{color:#475569}.dg-lb.r-dashed{color:#6d28d9}.dg-lb.r-gap{color:#64748b}
+.dg-lb.off{opacity:.12}
+.dg-sh{position:absolute;top:8px;font-size:11px;font-weight:600;color:#b45309;text-align:center;text-transform:uppercase;letter-spacing:.06em}
+.ar-sw.dg-sw-dec{width:10px;height:10px;transform:rotate(45deg);border-color:#e11d48;background:rgba(251,113,133,.15);border-radius:2px}
+${ARROW_CSS}
+.sq-stage{position:relative;border-radius:10px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
+.sq-region{position:absolute;top:6px;bottom:6px;border:1.5px dashed #d97706;border-radius:8px;background:rgba(251,191,36,.05)}
+.sq-region .ar-rl{top:6px;left:10px}
+.sq-rail{position:absolute;top:6px;bottom:6px;width:40px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:14px;box-sizing:border-box;border:1.5px dashed #94a3b8;border-radius:8px;background:rgba(148,163,184,.06)}
+.sq-rail span{writing-mode:vertical-rl;transform:rotate(180deg);font-size:11px;font-weight:600;color:var(--ar-mu);white-space:nowrap}
+.sq-p{position:absolute;top:38px;width:112px;min-height:62px;box-sizing:border-box;padding:9px 8px 7px;justify-content:center}
+.sq-p .ar-t{font-size:11.5px;line-height:1.25}.sq-p .ar-s{font-size:9.5px}
+.sq-user{cursor:default}.sq-user:hover{transform:none;box-shadow:none}.sq-user.near{opacity:1}
+.sq-life{position:absolute;top:106px;width:0;border-left:1.5px dashed #94a3b8;transition:opacity .25s}
+.sq-bar{position:absolute;width:10px;box-sizing:border-box;border:1.5px solid;border-radius:2px;z-index:1;transition:opacity .25s}
+.sq-bar.t-fe{border-color:#0891b2;background:rgba(34,211,238,.18)}.sq-bar.t-bff{border-color:#2563eb;background:rgba(96,165,250,.18)}
+.sq-bar.t-be{border-color:#059669;background:rgba(52,211,153,.2)}.sq-bar.t-db{border-color:#7c3aed;background:rgba(167,139,250,.22)}
+.sq-bar.t-ext,.sq-bar.t-bus{border-color:#ea580c;background:rgba(251,146,60,.18)}
+.sq-life.dim,.sq-bar.dim{opacity:.25}
+.sq-msg{position:absolute;height:0;z-index:2;transition:opacity .25s}
+.sq-msg .ln{position:absolute;left:0;right:0;top:-1px;border-top:2px solid currentColor}
+.sq-msg .pu{position:absolute;left:0;right:0;top:-1px;height:2px;background:repeating-linear-gradient(90deg,var(--pu) 0 8px,transparent 8px 48px);animation:sq-r 1.4s linear infinite}
+.sq-msg.l .pu{animation-name:sq-l}
+.sq-msg .hd{position:absolute;top:-5px;width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent}
+.sq-msg.r .hd{right:-1px;border-left:9px solid currentColor}.sq-msg.l .hd{left:-1px;border-right:9px solid currentColor}
+.sq-msg.s-confirmed{color:#059669;--pu:#6ee7b7}.sq-msg.s-action{color:#64748b;--pu:#cbd5e1}
+.sq-msg.s-probable{color:#7c3aed}.sq-msg.s-probable .ln{border-top-style:dashed}.sq-msg.s-probable .pu{display:none}
+.sq-msg.s-unknown{color:#e11d48}.sq-msg.s-unknown .ln{border-top-style:dotted}.sq-msg.s-unknown .pu{display:none}
+.sq-msg.on .ln{border-top-width:3px}.sq-msg.on .pu{height:3px;animation-duration:.7s}
+.sq-msg.off{opacity:.12}.sq-msg.off .pu{display:none}
+.sq-lab{position:absolute;left:10px;top:-27px;z-index:3;display:inline-flex;gap:6px;align-items:center;white-space:nowrap;font:inherit;font-size:11px;font-weight:600;color:inherit;background:#fff;border:1px solid #e2e8f0;border-radius:5px;padding:2px 7px 2px 3px;cursor:pointer}
+.sq-lab:hover{border-color:#94a3b8}.sq-lab:focus-visible{outline:2px solid var(--ar-ink);outline-offset:3px}
+.sq-lab b{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 4px;box-sizing:border-box;border-radius:999px;background:currentColor}
+.sq-lab b{color:#fff}.sq-lab span{color:inherit}
+.sq-msg.s-confirmed .sq-lab b{background:#059669}.sq-msg.s-probable .sq-lab b{background:#7c3aed}.sq-msg.s-unknown .sq-lab b{background:#e11d48}
+.sq-msg.s-probable .sq-lab{border-style:dashed}
+.sq-msg.sel .sq-lab{border-color:currentColor;box-shadow:0 0 0 3px rgba(5,150,105,.18)}
+.sq-where{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11.5px;color:var(--ar-mu)}
+.sq-where>i{font-style:normal}
+.sq-cr{display:inline-flex;gap:6px;align-items:center;font:inherit;font-size:11.5px;color:var(--ar-ink);padding:3px 9px 3px 3px;border-radius:999px;border:1px solid #0891b2;background:rgba(34,211,238,.12);cursor:pointer}
+.sq-cr>.jr-sn{background:#059669}
+.ar-sw.sq-act{width:8px;height:16px;border-color:#0891b2;background:rgba(34,211,238,.18);border-radius:2px}
+.ar-sw.ln.s-action{border-color:#64748b}
+.sq-note{margin:0;font-size:11px;color:var(--ar-mu);font-style:italic}
+@keyframes sq-r{from{background-position:0 0}to{background-position:48px 0}}
+@keyframes sq-l{from{background-position:48px 0}to{background-position:0 0}}
+@media (prefers-reduced-motion:reduce){.sq-msg .pu{display:none}}
 @media (max-width:1100px){.jr-body{grid-template-columns:minmax(0,1fr)}.jr-bottom{grid-template-columns:minmax(0,1fr)}.jr-ov2{grid-template-columns:minmax(0,1fr)}}
 `;

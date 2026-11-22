@@ -40,6 +40,11 @@ export const DASHBOARD_CSS = `
   --qa-color-success:#008A4B;--qa-color-success-soft:#E6F4EA;
   --qa-color-warning:#B86E00;--qa-color-warning-soft:#FFF4DF;
   --qa-color-danger:#DC3545;--qa-color-danger-soft:#FDECEC;
+  --qa-arch-fe:#0891b2;--qa-arch-fe-bg:#e0f7fb;--qa-arch-bff:#2563eb;--qa-arch-bff-bg:#e5effe;
+  --qa-arch-be:#059669;--qa-arch-be-bg:#dcf6ec;--qa-arch-db:#7c3aed;--qa-arch-db-bg:#efe9fe;
+  --qa-arch-ext:#64748b;--qa-arch-ext-bg:#f1f5f9;--qa-arch-gap:#94a3b8;--qa-arch-security:#e11d48;--qa-arch-comet:#035f43;
+  --qa-arch-region:#d97706;--qa-arch-region-bg:rgba(251,191,36,.05);--qa-arch-region-t:#b45309;
+  --qa-arch-canvas:#f8fafc;--qa-arch-grid:#e2e8f0;
   --qa-radius:14px;
   --qa-font-family:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --qa-font-family-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;

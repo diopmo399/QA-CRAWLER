@@ -280,7 +280,9 @@ export class WorkspaceMirror {
           if (known && known.size === info.size && known.mtimeMs === info.mtimeMs) {
             if (this.remote.get(relative)?.sha256 === known.sha256) continue;
           }
-          if (Date.now() - info.mtimeMs < settle) {
+          // Sans délai demandé (`settle` nul), jamais en attente : `Date.now()` est arrondi à la milliseconde
+          // alors que `mtimeMs` garde sa fraction, l'écart peut donc être négatif juste après l'écriture.
+          if (settle > 0 && Date.now() - info.mtimeMs < settle) {
             pending += 1;
             continue;
           }

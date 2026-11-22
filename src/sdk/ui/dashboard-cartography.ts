@@ -46,6 +46,7 @@ import {
   type StructTab,
 } from './dashboard-cartography-structure.js';
 import { impactView, SCAN_CSS, scanView, type ScanViewHelpers } from './dashboard-cartography-scan.js';
+import { CONCEPT_CSS, conceptDiagrams } from './dashboard-cartography-concept.js';
 import { emptyJourney, JOURNEY_CSS, journeyTab, type JourneyState } from './dashboard-cartography-journey.js';
 import { emptyUnresolved, unresolvedTab, type UnresolvedUi } from './dashboard-cartography-unresolved.js';
 import { header, icon } from './dashboard-parts.js';
@@ -152,6 +153,8 @@ export interface CartographyUi extends JourneyState, UnresolvedUi {
   panX: number;
   panY: number;
   fullscreen: boolean;
+  /** Graphe seul : légende, sélection, notes et tableaux repliés ; le graphe prend la hauteur de l'écran. */
+  graphOnly?: boolean;
   graphSel?: GraphSelection;
   /** L'étape dont les relations sont listées (compteur « N liens » cliqué). */
   relStep?: string;
@@ -167,6 +170,8 @@ export interface CartographyUi extends JourneyState, UnresolvedUi {
   conceptCriteria: ListCriteria;
   concept?: string;
   conceptSheet?: FieldSheet;
+  /** Le champ mis en avant dans le parcours du concept (diagramme). */
+  conceptSpot?: string;
   issues?: MapPage<FieldIssue>;
   issuesPage: number;
   /** Sources, scan. */
@@ -1360,7 +1365,7 @@ function fieldsTab(m: MapStrings, state: MapState): string {
       ? `<button class="btn small" data-action="map-decide" data-kind="VALIDATE_CONCEPT" data-target="${esc(sheet.concept.id)}">${icon('check')}<span>${esc(m.decide.validateConcept)}</span></button>`
       : '';
   const right = sheet
-    ? `<section class="card map-concept"><div class="card-h"><h2>${esc(sheet.concept.name)} ${conf(m, sheet.concept.status)}</h2>${validate}</div><p class="mu small">${esc(m.conceptFlow)}</p>${graphSvg(m, sheet.graph, sheet.node.id)}<p>${sheet.reuse.map((f) => `<button class="map-mod" data-action="map-feature" data-feature="${esc(f.id)}">${esc(f.name)}</button>`).join(' ')}</p>${sheet.concept.gaps.length ? `<h3>${esc(m.gaps)}</h3><ul class="map-why warn-t">${sheet.concept.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : ''}<h3>${esc(m.edgesTitle(sheet.sequence.length))}</h3>${sequenceList(m, state, sheet)}${sheet.concept.homonyms.length ? `<h3>${esc(m.homonyms)}</h3><ul class="map-reuse-l">${sheet.concept.homonyms.map((h) => `<li><button class="lnk" data-action="map-concept" data-concept="${esc(h.id)}">${esc(h.name)}</button> <small class="mu">${esc(h.layers.map((l) => m.layers[l] ?? l).join(' → '))}</small></li>`).join('')}</ul>` : ''}</section>`
+    ? `<section class="card map-concept"><div class="card-h"><h2>${esc(sheet.concept.name)} ${conf(m, sheet.concept.status)}</h2>${validate}</div><p class="mu small">${esc(m.conceptFlow)}</p>${conceptDiagrams(m, sheet, ui.conceptSpot)}${sheet.concept.gaps.length ? `<h3>${esc(m.gaps)}</h3><ul class="map-why warn-t">${sheet.concept.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : ''}<h3>${esc(m.edgesTitle(sheet.sequence.length))}</h3>${sequenceList(m, state, sheet)}</section>`
     : `<section class="card">${ui.loading.conceptSheet ? spinner(m) : `${paneError(ui.errors.conceptSheet)}<p class="mu">${esc(m.pickConcept)}</p>`}</section>`;
   const issues = ui.issues;
   const issueRows = (issues?.items ?? [])
@@ -1369,7 +1374,7 @@ function fieldsTab(m: MapStrings, state: MapState): string {
         `<li>${chip(issue.kind === 'UNUSED' || issue.kind === 'DUPLICATE' ? 'PROPOSED' : 'NOT_COVERED', m.issueKinds[issue.kind] ?? issue.kind)} <span>${esc(issue.message)}</span>${issue.concept ? ` <button class="lnk" data-action="map-concept" data-concept="${esc(issue.concept)}" aria-label="${esc(m.conceptFlow)}">${icon('eye')}</button>` : ''}</li>`,
     )
     .join('');
-  return `<div class="map-split right"><section class="card map-concepts"><h2>${icon('merge')}<span>${esc(m.concepts(page?.total ?? 0))}</span></h2>${filters}${paneError(ui.errors.concepts)}${ui.loading.concepts && !page ? spinner(m) : `<ul class="map-c-l">${list}</ul>`}${page ? pager(m, 'concepts', page, [10, 20, 50]) : ''}</section>${right}</div><section class="card map-issues"><h2>${icon('alert')}<span>${esc(m.issues)} (${String(issues?.total ?? 0)})</span></h2>${issueRows ? `<ul class="map-issue-l">${issueRows}</ul>` : `<p class="mu">${esc(m.noIssue)}</p>`}${issues ? pager(m, 'issues', issues, [20]) : ''}</section>`;
+  return `<div class="map-split right cf-wide"><section class="card map-concepts"><h2>${icon('merge')}<span>${esc(m.concepts(page?.total ?? 0))}</span></h2>${filters}${paneError(ui.errors.concepts)}${ui.loading.concepts && !page ? spinner(m) : `<ul class="map-c-l">${list}</ul>`}${page ? pager(m, 'concepts', page, [10, 20, 50]) : ''}</section>${right}</div><section class="card map-issues"><h2>${icon('alert')}<span>${esc(m.issues)} (${String(issues?.total ?? 0)})</span></h2>${issueRows ? `<ul class="map-issue-l">${issueRows}</ul>` : `<p class="mu">${esc(m.noIssue)}</p>`}${issues ? pager(m, 'issues', issues, [20]) : ''}</section>`;
 }
 
 // ── Scénarios & Couverture ────────────────────────────────────────────────────────────────────────
@@ -1439,7 +1444,7 @@ function evidencePanel(m: MapStrings, ui: CartographyUi): string {
   return `<aside class="map-ev" role="dialog" aria-label="${esc(e ? m.evidenceTitle(e.file, e.line) : m.evidence)}"><div class="card-h"><h2 class="mono">${esc(e ? `${e.source} · ${m.evidenceTitle(e.file, e.line)}` : m.evidence)}</h2><button class="btn small ghost icon-only" data-action="map-evidence-close" aria-label="${esc(m.closeEvidence)}">${icon('close')}</button></div>${code}</aside>`;
 }
 
-export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}${SCAN_CSS}${INVESTIGATION_CSS}${JOURNEY_CSS}
+export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}${SCAN_CSS}${INVESTIGATION_CSS}${JOURNEY_CSS}${CONCEPT_CSS}
 .sd-note{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sd-note span{flex:1 1 auto}
 .map{display:flex;flex-direction:column;gap:14px}
 .map-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
@@ -1462,6 +1467,7 @@ export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_C
 .map .card h2{display:flex;flex-wrap:nowrap;gap:8px;align-items:center;font-size:15px;margin:0 0 10px;text-transform:none;letter-spacing:0;color:var(--qa-color-text)}
 .map .card h2 .ico{color:var(--qa-color-primary);flex:none}
 .map-split.right{grid-template-columns:minmax(280px,1fr) minmax(360px,1.7fr)}
+.map-split.right.cf-wide{grid-template-columns:minmax(260px,.75fr) minmax(0,2.25fr)}
 .map-step{display:inline-flex;gap:6px;align-items:center;white-space:nowrap;max-width:100%}
 .map-step .map-box{white-space:normal}
 .map-edges{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
@@ -1482,22 +1488,22 @@ export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_C
 .map-src-n b{margin-right:4px}
 .map-src-n small{display:block;color:var(--qa-color-muted);font-size:11px}
 .map-layer{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;background:var(--qa-color-surface-2);border:1px solid var(--qa-color-border)}
-.map-layer.l-frontend,.map-lane.l-frontend{--lane:color-mix(in srgb,#7c5cd6 14%,var(--qa-color-surface))}
-.map-layer.l-bff,.map-lane.l-bff{--lane:color-mix(in srgb,#2f80c8 14%,var(--qa-color-surface))}
-.map-layer.l-backend,.map-lane.l-backend{--lane:color-mix(in srgb,var(--qa-color-success) 16%,var(--qa-color-surface))}
-.map-layer.l-api,.map-lane.l-api{--lane:color-mix(in srgb,var(--qa-color-warning) 18%,var(--qa-color-surface))}
-.map-layer.l-database,.map-lane.l-database{--lane:color-mix(in srgb,#5b6b7a 14%,var(--qa-color-surface))}
+.map-layer.l-frontend,.map-lane.l-frontend{--lane:rgba(34,211,238,.15);--lane-b:#0891b2}
+.map-layer.l-bff,.map-lane.l-bff{--lane:rgba(96,165,250,.15);--lane-b:#2563eb}
+.map-layer.l-backend,.map-lane.l-backend{--lane:rgba(52,211,153,.18);--lane-b:#059669}
+.map-layer.l-api,.map-lane.l-api{--lane:rgba(148,163,184,.18);--lane-b:#64748b}
+.map-layer.l-database,.map-lane.l-database{--lane:rgba(167,139,250,.2);--lane-b:#7c3aed}
 .map-layer[class*="l-"]{background:var(--lane,var(--qa-color-surface-2))}
 .map-lanes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
-.map-lane{display:grid;grid-template-columns:110px 1fr;gap:10px;align-items:center;padding:8px 10px;border-radius:10px;background:var(--lane,var(--qa-color-surface-2))}
-.map-lane-n{font-weight:600;font-size:13px}
+.map-lane{display:grid;grid-template-columns:110px 1fr;gap:10px;align-items:center;padding:8px 10px;border-radius:8px;border:1.5px dashed #d97706;background:rgba(251,191,36,.05)}
+.map-lane-n{font-weight:600;font-size:12px;color:#b45309}
 .map-lane-b{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
-.map-box{display:inline-flex;flex-direction:column;padding:4px 10px;border:1.5px solid var(--qa-color-primary);border-radius:8px;background:var(--qa-color-surface);font-size:12px;max-width:100%;overflow-wrap:anywhere}
+.map-box{display:inline-flex;flex-direction:column;padding:5px 10px;border:1.5px solid var(--lane-b,#059669);border-radius:6px;background:linear-gradient(var(--lane,transparent),var(--lane,transparent)),#fff;color:#0f172a;font-size:12px;font-weight:600;max-width:100%;overflow-wrap:anywhere}
 .map-box small{color:var(--qa-color-muted);font-size:11px}
-.map-box.probable{border-style:dashed;border-color:var(--qa-color-warning)}
-.map-box.gap{border-style:dotted;border-color:var(--qa-color-danger);color:var(--qa-color-danger)}
+.map-box.probable{border-style:dashed;border-color:#7c3aed}
+.map-box.gap{border-style:dotted;border-color:#94a3b8;color:#64748b;background:#fff}
 .map-box.sample{width:18px;height:10px;padding:0;vertical-align:middle;display:inline-block}
-.map-arrow{color:var(--qa-color-muted)}
+.map-arrow{color:#059669;font-weight:700}
 .map-sheet{display:flex;flex-direction:column;gap:8px;min-width:0}
 .map-sheet-h{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:start}
 .map-sheet-h h2{margin:0}
@@ -1611,23 +1617,20 @@ export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_C
 .map-mini{border:1px solid var(--qa-color-border);border-radius:10px;padding:10px;background:var(--qa-color-surface-2);min-width:0}
 .map-mini h3{margin:0;font-size:13px}
 .map-mini-l{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:2px;align-items:stretch}
-.map-mini-l .map-lane{display:flex;flex-direction:column;gap:2px;padding:6px 8px;grid-template-columns:none}
+.map-mini-l .map-lane{display:flex;flex-direction:column;gap:2px;padding:6px 8px;grid-template-columns:none;border:1.5px solid var(--lane-b,#64748b);border-radius:6px;background:linear-gradient(var(--lane,transparent),var(--lane,transparent)),#fff}
 .map-mini-l small{font-size:11px;overflow-wrap:anywhere}
-.map-down{text-align:center;color:var(--qa-color-danger);font-weight:700;line-height:1;transform:rotate(-90deg)}
+.map-down{text-align:center;color:#059669;font-weight:700;line-height:1;transform:rotate(-90deg)}
 @media (min-width:1760px){.map-down{transform:none}}
-.map-graph-w{overflow:auto;max-width:100%;max-height:560px;border:1px solid var(--qa-color-border);border-radius:10px;background:var(--qa-color-surface)}
+.map-graph-w{overflow:auto;max-width:100%;max-height:560px;border:1px solid var(--qa-color-border);border-radius:10px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
 .map-graph{display:block}
 .map-g-t{font-size:12px;font-weight:700;fill:var(--qa-color-muted)}
 .map-g-n{cursor:pointer}
-.map-g-n rect{fill:var(--qa-color-surface-2);stroke:var(--qa-color-border-strong);stroke-width:1}
-.map-g-n.field rect{fill:color-mix(in srgb,var(--qa-color-primary) 8%,var(--qa-color-surface));stroke:var(--qa-color-primary)}
-.map-g-n.focus rect{stroke-width:3}
-.map-g-n text{font-size:12px;fill:var(--qa-color-text);font-weight:600}
-.map-g-n text.sub{font-size:10px;font-weight:400;fill:var(--qa-color-muted)}
-.map-g-e{fill:none;stroke-width:1.6}
-.map-g-e.c-confirmed{stroke:var(--qa-color-primary)}
-.map-g-e.c-probable{stroke:var(--qa-color-warning);stroke-dasharray:6 4}
-.map-g-e.c-unknown{stroke:var(--qa-color-danger);stroke-dasharray:2 4}
+.map-g-n rect{fill:#f1f5f9;stroke:#64748b;stroke-width:1.5}
+
+.map-g-n.focus rect{stroke-width:2.5;filter:drop-shadow(0 0 4px rgba(8,145,178,.45))}
+.map-g-n text{font-size:12px;fill:#0f172a;font-weight:600}
+.map-g-n text.sub{font-size:10px;font-weight:400;fill:#64748b}
+.map-g-e{fill:none}
 #map-arrow path{fill:var(--qa-color-muted)}
 .map-seq{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .map-fdetails{display:flex;flex-direction:column;gap:6px}

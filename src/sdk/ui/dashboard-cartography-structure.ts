@@ -20,6 +20,8 @@ import type { ApiViewHelpers } from './dashboard-cartography-apis.js';
 import { breakable, shortPath } from './dashboard-cartography-graph.js';
 import type { MapStrings } from './dashboard-cartography-i18n.js';
 import {
+  graphOnlyButton,
+  hiddenPartsBar,
   laneLegend,
   laneModel,
   lanesView,
@@ -473,7 +475,7 @@ function graphPane(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, sheet: E
     `<button class="btn small icon-only" data-action="${action}" aria-label="${esc(label)}" title="${esc(label)}"${extra}>${icon(name)}</button>`;
   const kind = m.st.kinds[sheet.element.kind] ?? sheet.element.kind;
   const sub = trace ? (m.st.dirSubs[trace.direction] ?? m.st.traceSub) : m.st.traceSub;
-  const head = `<div class="map-gtitle st-gtitle"><div><h3><span class="st-ic k-${sheet.element.kind.toLowerCase()}">${icon(KIND_ICON[sheet.element.kind] ?? 'layers')}</span>${esc(m.st.traceOf(kind, sheet.element.label ?? sheet.element.name))}</h3><p class="mu small">${esc(sub)}</p></div><div class="map-gtools"><span class="map-gbtns">${btn('map-g-full', ui.fullscreen ? m.g.exitFullscreen : m.g.fullscreen, ui.fullscreen ? 'minimize' : 'maximize', ` aria-pressed="${String(ui.fullscreen)}"`)}${btn('map-g-fit', m.g.fit, 'scan')}${btn('map-g-zoom', m.g.zoomOut, 'minus', ' data-dir="-1"')}<output class="map-gzoom" aria-live="polite">${esc(m.g.zoomLevel(ui.zoom))}</output>${btn('map-g-zoom', m.g.zoomIn, 'plus', ' data-dir="1"')}</span></div></div>`;
+  const head = `<div class="map-gtitle st-gtitle"><div><h3><span class="st-ic k-${sheet.element.kind.toLowerCase()}">${icon(KIND_ICON[sheet.element.kind] ?? 'layers')}</span>${esc(m.st.traceOf(kind, sheet.element.label ?? sheet.element.name))}</h3><p class="mu small">${esc(sub)}</p></div><div class="map-gtools">${graphOnlyButton(m, Boolean(ui.graphOnly))}<span class="map-gbtns">${btn('map-g-full', ui.fullscreen ? m.g.exitFullscreen : m.g.fullscreen, ui.fullscreen ? 'minimize' : 'maximize', ` aria-pressed="${String(ui.fullscreen)}"`)}${btn('map-g-fit', m.g.fit, 'scan')}${btn('map-g-zoom', m.g.zoomOut, 'minus', ' data-dir="-1"')}<output class="map-gzoom" aria-live="polite">${esc(m.g.zoomLevel(ui.zoom))}</output>${btn('map-g-zoom', m.g.zoomIn, 'plus', ' data-dir="1"')}</span></div></div>`;
   const canvas = `<div class="map-canvas full lanes" data-map-canvas tabindex="0" style="--ln-h:${String(height)}px" aria-label="${esc(m.st.traceOf(kind, sheet.element.name))}"><div class="map-canvas-in" style="transform:translate(${String(ui.panX)}px,${String(ui.panY)}px) scale(${String(ui.zoom)})">${drawn.html}</div></div>`;
   // La carte choisie regroupe un ou plusieurs éléments : chacun ouvre sa fenêtre de détail.
   const card = ui.graphSel?.kind === 'node' ? model.cards.get(ui.graphSel.id) : undefined;
@@ -501,6 +503,18 @@ function graphPane(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, sheet: E
         trace?.start ?? sheet.element.id,
       )
     : '';
+  if (ui.graphOnly) {
+    const parts = [
+      m.g.parts.legend,
+      ...(selection ? [m.g.parts.selection] : []),
+      ...(details ? [m.g.parts.details] : []),
+      m.g.parts.tabs,
+    ];
+    return `<div class="map-trace ln-wrap st-trace g-only${ui.fullscreen ? ' full' : ''}" data-map-trace>${head}${traceBar(m, ui, h, trace)}${canvas}${hiddenPartsBar(
+      m,
+      parts.filter((p): p is string => Boolean(p)),
+    )}</div>${modal}`;
+  }
   return `<div class="map-trace ln-wrap st-trace${ui.fullscreen ? ' full' : ''}" data-map-trace>${head}${traceBar(m, ui, h, trace)}${canvas}${laneLegend(m, model)}${laneSelection({ ...options, conf: h.conf, evidence: h.evidence, where: h.where })}${details}${bottomTabs(m, ui, h, sheet)}</div>${modal}`;
 }
 

@@ -319,23 +319,24 @@ export interface LaidLane {
 
 const num = (value: number): string => String(Math.round(value * 10) / 10);
 
+/**
+ * Une relation à angle droit, comme dans Archify : horizontal-vertical-horizontal d'une colonne à l'autre
+ * (coudé au milieu), par le bord droit entre deux nœuds d'une même colonne.
+ */
 function edgePath(a: LaidNode, b: LaidNode): string {
   const y1 = a.y + NODE_H / 2;
   const y2 = b.y + NODE_H / 2;
+  // Horizontal, puis vertical au coude, puis horizontal (un seul segment si les hauteurs coïncident).
+  const hvh = (x1: number, x2: number, elbow: number): string =>
+    Math.abs(y1 - y2) < 0.5
+      ? `M${num(x1)},${num(y1)} L${num(x2)},${num(y2)}`
+      : `M${num(x1)},${num(y1)} L${num(elbow)},${num(y1)} L${num(elbow)},${num(y2)} L${num(x2)},${num(y2)}`;
   if (a.x === b.x) {
     const x = a.x + NODE_W;
-    const bulge = 36 + Math.min(60, Math.abs(y2 - y1) / 4);
-    return `M${num(x)},${num(y1)} C${num(x + bulge)},${num(y1)} ${num(x + bulge)},${num(y2)} ${num(x + 1)},${num(y2)}`;
+    return hvh(x, x + 1, x + 24 + Math.min(24, Math.abs(y2 - y1) / 8));
   }
-  if (b.x > a.x) {
-    const x1 = a.x + NODE_W;
-    const x2 = b.x - 1;
-    const mid = (x1 + x2) / 2;
-    return `M${num(x1)},${num(y1)} C${num(mid)},${num(y1)} ${num(mid)},${num(y2)} ${num(x2)},${num(y2)}`;
-  }
-  const x1 = a.x;
-  const x2 = b.x + NODE_W + 1;
-  return `M${num(x1)},${num(y1)} C${num(x1 - 48)},${num(y1 + 64)} ${num(x2 + 48)},${num(y2 + 64)} ${num(x2)},${num(y2)}`;
+  if (b.x > a.x) return hvh(a.x + NODE_W, b.x - 1, (a.x + NODE_W + b.x) / 2);
+  return hvh(a.x, b.x + NODE_W + 1, (a.x + b.x + NODE_W) / 2);
 }
 
 /**
@@ -417,8 +418,7 @@ function dropPath(a: LaidNode, b: LaidNode): string {
   const down = b.y > a.y;
   const y1 = down ? a.y + NODE_H : a.y;
   const y2 = down ? b.y - 1 : b.y + NODE_H + 1;
-  const bend = (y2 - y1) / 2;
-  return `M${num(x)},${num(y1)} C${num(x)},${num(y1 + bend)} ${num(x)},${num(y2 - bend)} ${num(x)},${num(y2)}`;
+  return `M${num(x)},${num(y1)} L${num(x)},${num(y2)}`;
 }
 
 /** Les relations dessinables (deux extrémités placées, distinctes) et le compte de celles vers le vide. */
@@ -1231,7 +1231,7 @@ function icon(key: keyof typeof ICONS): string {
 function markers(): string {
   return STATUSES.map(
     (status) =>
-      `<marker id="ws-g-m-${status.toLowerCase()}" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ws-graph-mk ws-ge-${status.toLowerCase()}"/></marker>`,
+      `<marker id="ws-g-m-${status.toLowerCase()}" viewBox="0 0 10 7" refX="9" refY="3.5" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="9.1" orient="auto-start-reverse"><polygon points="0 0, 10 3.5, 0 7" class="ws-graph-mk ws-ge-${status.toLowerCase()}"/></marker>`,
   ).join('');
 }
 
@@ -1411,7 +1411,7 @@ export function renderGraph(ctx: WorkspaceContext, ui: GraphUi, options: GraphRe
       ]
         .filter(Boolean)
         .join(' ');
-      return `<g class="${cls}" ${selectable(ctx, 'edge', laid.id)} role="button" tabindex="-1" aria-label="${esc(`${name} : ${partsText(ctx.lang).relations[laid.status]}`)}"><title>${esc(`${name} · ${partsText(ctx.lang).relations[laid.status]} · ${laid.edge.reason}`)}</title><path class="ws-graph-hit" d="${laid.d}"/><path class="ws-graph-line" d="${laid.d}" marker-end="url(#ws-g-m-${status})"/></g>`;
+      return `<g class="${cls}" ${selectable(ctx, 'edge', laid.id)} role="button" tabindex="-1" aria-label="${esc(`${name} : ${partsText(ctx.lang).relations[laid.status]}`)}"><title>${esc(`${name} · ${partsText(ctx.lang).relations[laid.status]} · ${laid.edge.reason}`)}</title><path class="ws-graph-hit" d="${laid.d}"/><path class="ws-graph-line" d="${laid.d}" marker-end="url(#ws-g-m-${status})"/>${status === 'observed' || status === 'statically_resolved' ? `<path class="ws-graph-comet glow" d="${laid.d}" pathLength="100"/><path class="ws-graph-comet head" d="${laid.d}" pathLength="100"/>` : ''}</g>`;
     })
     .join('');
   const nodes = layout.nodes
@@ -1778,4 +1778,35 @@ export const INCIDENT_GRAPH_CSS = `
   .ws-graph-dl{grid-template-columns:minmax(0,1fr)}
 }
 @media (prefers-reduced-motion:reduce){.ws-graph *,.ws-graph-more summary::before,.ws-graph-menu-t::after{transition:none!important}}
+
+/* Style Archify (palette des jetons --qa-arch-*) : régions en pointillés ambre, nœuds teintés par couche,
+   traits à angle droit dont la couleur dit la preuve (observé et résolu en vert avec comète, déduit en
+   tirets violets, inconnu en pointillés gris), chemin de l'erreur en rose ; fond quadrillé. */
+.ws-graph{--ws-g-front:var(--qa-arch-fe);--ws-g-bff:var(--qa-arch-bff);--ws-g-back:var(--qa-arch-be);--ws-g-data:var(--qa-arch-db);--ws-g-http:var(--qa-arch-ext)}
+.ws-graph-canvas,.ws-graph-lanes .ws-graph-canvas{background-color:var(--qa-arch-canvas);background-image:linear-gradient(var(--qa-arch-grid) .5px,transparent .5px),linear-gradient(90deg,var(--qa-arch-grid) .5px,transparent .5px);background-size:40px 40px}
+.ws-graph-band,.ws-graph-lane-bg{fill:var(--qa-arch-region-bg);stroke:var(--qa-arch-region);stroke-width:1.5;stroke-dasharray:6 4}
+.ws-graph-band-t,.ws-graph-lane-t{fill:var(--qa-arch-region-t)}
+.ws-graph-lane-head{fill:none}.ws-graph-lane-bar{display:none}
+.ws-graph-box{fill:var(--qa-color-surface);stroke:var(--qa-arch-ext);stroke-width:1.5}
+.ws-graph-node.ws-gg-frontend .ws-graph-box{fill:var(--qa-arch-fe-bg)}.ws-graph-node.ws-gg-bff .ws-graph-box{fill:var(--qa-arch-bff-bg)}
+.ws-graph-node.ws-gg-backend .ws-graph-box{fill:var(--qa-arch-be-bg)}.ws-graph-node.ws-gg-data .ws-graph-box{fill:var(--qa-arch-db-bg)}
+.ws-graph-stripe{display:none}
+.ws-graph-line{stroke-linejoin:round;stroke-linecap:round}
+.ws-graph-edge.ws-ge-observed .ws-graph-line{stroke:var(--qa-arch-be);stroke-width:2.2}
+.ws-graph-edge.ws-ge-statically_resolved .ws-graph-line{stroke:var(--qa-arch-be);stroke-width:1.8}
+.ws-graph-edge.ws-ge-inferred .ws-graph-line{stroke:var(--qa-arch-db);stroke-width:1.4;stroke-dasharray:4 4}
+.ws-graph-edge.ws-ge-unknown .ws-graph-line{stroke:var(--qa-arch-gap);stroke-width:1.4;stroke-dasharray:2 4}
+.ws-graph-mk.ws-ge-observed,.ws-graph-mk.ws-ge-statically_resolved{fill:var(--qa-arch-be)}.ws-graph-mk.ws-ge-inferred{fill:var(--qa-arch-db)}.ws-graph-mk.ws-ge-unknown{fill:var(--qa-arch-gap)}
+.ws-graph-edge.ws-graph-onpath .ws-graph-line{stroke:var(--qa-arch-security);stroke-width:2.6;stroke-dasharray:5 5}
+.ws-graph-node.ws-graph-onpath .ws-graph-box{stroke:var(--qa-arch-security);stroke-width:2.5}
+.ws-graph-edge:hover .ws-graph-line,.ws-graph-edge:focus-visible .ws-graph-line,.ws-graph-edge.ws-selected .ws-graph-line{stroke-width:2.8}
+.ws-graph-legline.ws-ge-observed,.ws-graph-legline.ws-ge-statically_resolved{border-top:2px solid var(--qa-arch-be)}
+.ws-graph-legline.ws-ge-inferred{border-top:2px dashed var(--qa-arch-db)}
+.ws-graph-legline.ws-ge-unknown{border-top:2px dotted var(--qa-arch-gap)}
+.ws-graph-comet{fill:none;stroke-linecap:round;pointer-events:none;animation:ws-comet 4s linear infinite backwards}
+.ws-graph-comet.glow{stroke:var(--qa-arch-be);stroke-width:8;stroke-dasharray:12 88;filter:blur(2.5px);opacity:.38}
+.ws-graph-comet.head{stroke:var(--qa-arch-comet);stroke-width:2.8;stroke-dasharray:5 95}
+.ws-graph svg .ws-dimmed .ws-graph-comet,.ws-graph-errmode .ws-graph-edge:not(.ws-graph-onpath) .ws-graph-comet{display:none}
+@keyframes ws-comet{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
+@media (prefers-reduced-motion:reduce){.ws-graph-comet{display:none}}
 `;

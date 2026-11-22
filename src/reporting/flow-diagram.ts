@@ -27,10 +27,11 @@ import { translateReason, valueLabel } from './i18n.js';
 const MARGIN = 20;
 
 const COLORS = {
-  PASS: '#2e7d32',
-  FAIL: '#c62828',
-  WARNING: '#ef6c00',
-  UNKNOWN: '#78909c',
+  // La palette Archify : démontré vert, erreur rose, alerte ambre, inconnu gris.
+  PASS: '#059669',
+  FAIL: '#e11d48',
+  WARNING: '#d97706',
+  UNKNOWN: '#94a3b8',
   node: 'var(--surface-2, #f8fafc)',
   border: 'var(--border-strong, #94a3b8)',
   text: 'var(--text, #1f2937)',
@@ -64,7 +65,7 @@ function edgeColor(edge: FlowEdge | undefined): string {
 }
 
 function arrowHead(id: string, color: string): string {
-  return `<marker id="${id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${color}"/></marker>`;
+  return `<marker id="${id}" viewBox="0 0 10 7" refX="9" refY="3.5" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="9.1" orient="auto-start-reverse"><polygon points="0 0, 10 3.5, 0 7" fill="${color}"/></marker>`;
 }
 
 const TEXTS = {
@@ -231,12 +232,12 @@ export function renderFlowMap(
       : t.direct;
     const title = `${nameOf(link.from)} → ${nameOf(link.to)}${link.actions.length > 0 ? ` : ${link.actions.map((text) => `« ${text} »`).join(', ')}` : ''} (${verdict})`;
     const arrow = link.kind === 'direct' ? '' : ` marker-end="url(#fm-a-${color.slice(1)})"`;
-    return `<g class="fm-edge fm-${link.kind}" data-from="${String(indexOf.get(link.from))}" data-to="${String(indexOf.get(link.to))}"><title>${esc(title)}</title><path class="fm-hit" d="${d}"/><path class="fm-line" d="${d}" stroke="${color}"${arrow}/></g>`;
+    return `<g class="fm-edge fm-${link.kind}" data-from="${String(indexOf.get(link.from))}" data-to="${String(indexOf.get(link.to))}"><title>${esc(title)}</title><path class="fm-hit" d="${d}"/><path class="fm-line" d="${d}" stroke="${color}"${arrow}/>${color === COLORS.PASS && link.kind === 'tree' ? `<path class="fm-comet glow" d="${d}" pathLength="100"/><path class="fm-comet head" d="${d}" pathLength="100"/>` : ''}</g>`;
   };
   const labelSvg = (link: MapLink): string => {
     const label = link.label;
     if (!label) return '';
-    return `<g class="fm-label" data-from="${String(indexOf.get(link.from))}" data-to="${String(indexOf.get(link.to))}"><title>${esc(link.actions.join(' · '))}</title><rect x="${round(label.x)}" y="${round(label.y)}" width="${round(label.width)}" height="${round(label.height)}" rx="10"/><text x="${round(label.x + label.width / 2)}" y="${round(label.y + label.height / 2 + 4)}" text-anchor="middle">${esc(label.text)}</text></g>`;
+    return `<g class="fm-label" data-from="${String(indexOf.get(link.from))}" data-to="${String(indexOf.get(link.to))}"><title>${esc(link.actions.join(' · '))}</title><rect x="${round(label.x)}" y="${round(label.y)}" width="${round(label.width)}" height="${round(label.height)}" rx="4"/><text x="${round(label.x + label.width / 2)}" y="${round(label.y + label.height / 2 + 4)}" text-anchor="middle">${esc(label.text)}</text></g>`;
   };
   const nodeSvg = (screen: MapScreen): string => {
     const rows = cardRows(screen);
@@ -248,8 +249,8 @@ export function renderFlowMap(
     const stroke = screen.status === 'FAIL' ? COLORS.FAIL : screen.status === 'WARNING' ? COLORS.WARNING : '';
     const state = byId.get(screen.id);
     return `<a class="fm-node${screen.root ? ' fm-root' : ''}" href="#fm-d-${String(screen.index)}" data-node="${String(screen.index)}" data-status="${screen.status}" aria-label="${esc(`${screen.title} — ${status}`)}"><title>${esc(`${screen.title} — ${state?.url ?? ''}`)}</title>
-<rect class="fm-halo" x="${round(screen.x - 4)}" y="${round(screen.y - 4)}" width="${round(screen.width + 8)}" height="${round(screen.height + 8)}" rx="13"/>
-<rect class="fm-card" x="${round(screen.x)}" y="${round(screen.y)}" width="${round(screen.width)}" height="${round(screen.height)}" rx="10"${stroke ? ` style="stroke:${stroke};stroke-width:2"` : ''}/>
+<rect class="fm-halo" x="${round(screen.x - 4)}" y="${round(screen.y - 4)}" width="${round(screen.width + 8)}" height="${round(screen.height + 8)}" rx="9"/>
+<rect class="fm-card" x="${round(screen.x)}" y="${round(screen.y)}" width="${round(screen.width)}" height="${round(screen.height)}" rx="6"${stroke ? ` style="stroke:${stroke};stroke-width:2"` : ''}/>
 ${screen.titleLines.map((line, index) => `<text class="fm-t" x="${round(screen.x + CARD.padX)}" y="${round(rows.title[index] ?? 0)}">${esc(line)}</text>`).join('')}
 ${screen.routeLines.map((line, index) => `<text class="fm-r" x="${round(screen.x + CARD.padX)}" y="${round(rows.route[index] ?? 0)}">${esc(line)}</text>`).join('')}
 <circle cx="${round(screen.x + CARD.padX + 4)}" cy="${round(rows.stats - 4)}" r="4" fill="${STATUS_COLOR[screen.status]}"/><text class="fm-s" x="${round(screen.x + CARD.padX + 14)}" y="${round(rows.stats)}" fill="${STATUS_COLOR[screen.status]}">${esc(status)}</text><text class="fm-c" x="${round(screen.x + screen.width - CARD.padX)}" y="${round(rows.stats)}" text-anchor="end">${esc(counts)}</text></a>`;
@@ -338,12 +339,12 @@ const FLOW_MAP_CSS = `
 .fm-btn i{width:9px;height:9px;border-radius:50%;display:inline-block}
 .fm-scale{min-width:52px;text-align:center;font-size:12px;color:var(--muted,#64748b);font-variant-numeric:tabular-nums}
 .fm-body{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}
-.fm-view{position:relative;overflow:auto;max-height:min(78vh,920px);min-height:120px;border:1px solid var(--border,#e2e8f0);border-radius:12px;background-color:var(--surface-2,#f8fafc);background-image:radial-gradient(var(--border,#e2e8f0) 1px,transparent 1px);background-size:22px 22px;overscroll-behavior:contain}
+.fm-view{position:relative;overflow:auto;max-height:min(78vh,920px);min-height:120px;border:1px solid var(--border,#e2e8f0);border-radius:12px;background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px;overscroll-behavior:contain}
 .fm.fm-js .fm-view{cursor:grab}
 .fm-view.fm-drag{cursor:grabbing;user-select:none}
 .fm-view:focus-visible{outline:2px solid var(--fm-accent);outline-offset:2px}
 .fm-view svg{display:block;max-width:none}
-.fm-card{fill:var(--surface,#fff);stroke:var(--border-strong,#cbd5e1);stroke-width:1.2}
+.fm-card{fill:#e0f7fb;stroke:#0891b2;stroke-width:1.5}
 .fm-root .fm-card{stroke:var(--fm-accent);stroke-width:1.6}
 .fm-halo{display:none;fill:none;stroke:var(--fm-accent);stroke-width:2.5}
 .fm-node{cursor:pointer;outline:none}
@@ -354,12 +355,18 @@ const FLOW_MAP_CSS = `
 .fm-s{font-size:11px;font-weight:600}
 .fm-c{font-size:11px;fill:var(--muted,#64748b)}
 .fm-line{fill:none;stroke-width:1.8;stroke-linejoin:round;stroke-linecap:round}
-.fm-link .fm-line{stroke-width:1.4;stroke-dasharray:6 5}
+.fm-comet{fill:none;stroke-linecap:round;pointer-events:none;animation:fm-comet 4s linear infinite backwards}
+.fm-comet.glow{stroke:#059669;stroke-width:8;stroke-dasharray:12 88;filter:blur(2.5px);opacity:.38}
+.fm-comet.head{stroke:#035f43;stroke-width:2.8;stroke-dasharray:5 95}
+.fm .fm-dim .fm-comet{display:none}
+@keyframes fm-comet{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
+@media (prefers-reduced-motion:reduce){.fm-comet{display:none}}
+.fm-link .fm-line{stroke-width:1.4;stroke-dasharray:4 4}
 .fm-direct .fm-line{stroke-width:1.2;stroke-dasharray:2 4}
 .fm-hit{fill:none;stroke:transparent;stroke-width:10}
 .fm-edge:hover .fm-line,.fm-edge.fm-on .fm-line{stroke-width:2.8}
-.fm-label rect{fill:var(--surface,#fff);stroke:var(--border,#e2e8f0)}
-.fm-label text{font-size:11px;fill:var(--text-2,#374151)}
+.fm-label rect{fill:#f8fafc;stroke:none}
+.fm-label text{font-size:10.5px;fill:#475569}
 .fm .fm-dim{opacity:.16}
 .fm-panel{display:none;min-width:0;max-height:min(78vh,920px);overflow:auto;padding:14px 16px;border:1px solid var(--border,#e2e8f0);border-radius:12px;background:var(--surface,#fff);font-size:13px}
 .fm-panel:has(.fm-detail:target),.fm.fm-sel .fm-panel{display:block}
@@ -563,10 +570,10 @@ export function renderFlowSteps(flow: FlowRunReport): string {
       index < flow.steps.length - 1
         ? column < STEPS_PER_ROW - 1
           ? `<path d="M${x + STEP_WIDTH},${y + STEP_HEIGHT / 2} L${x + STEP_WIDTH + STEP_GAP - 2},${y + STEP_HEIGHT / 2}" stroke="${COLORS.border}" stroke-width="1.6" marker-end="url(#s-arrow)"/>`
-          : `<path d="M${x + STEP_WIDTH / 2},${y + STEP_HEIGHT} C${x + STEP_WIDTH / 2},${y + STEP_HEIGHT + STEP_GAP / 2} ${MARGIN + STEP_WIDTH / 2},${y + STEP_HEIGHT + STEP_GAP / 2} ${MARGIN + STEP_WIDTH / 2},${y + STEP_HEIGHT + STEP_GAP - 2}" fill="none" stroke="${COLORS.border}" stroke-width="1.6" marker-end="url(#s-arrow)"/>`
+          : `<path d="M${x + STEP_WIDTH / 2},${y + STEP_HEIGHT} L${x + STEP_WIDTH / 2},${y + STEP_HEIGHT + STEP_GAP / 2} L${MARGIN + STEP_WIDTH / 2},${y + STEP_HEIGHT + STEP_GAP / 2} L${MARGIN + STEP_WIDTH / 2},${y + STEP_HEIGHT + STEP_GAP - 2}" fill="none" stroke="${COLORS.border}" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#s-arrow)"/>`
         : '';
     return `<g><title>${esc(`${step.index}. ${step.description} — ${step.status}${step.reason ? ` (${step.reason})` : ''}`)}</title>
-      <rect x="${x}" y="${y}" width="${STEP_WIDTH}" height="${STEP_HEIGHT}" rx="8" fill="${COLORS.node}" stroke="${color}" stroke-width="2"/>
+      <rect x="${x}" y="${y}" width="${STEP_WIDTH}" height="${STEP_HEIGHT}" rx="6" fill="${COLORS.node}" stroke="${color}" stroke-width="1.5"/>
       <rect x="${x}" y="${y}" width="6" height="${STEP_HEIGHT}" rx="3" fill="${color}"/>
       <text x="${x + 14}" y="${y + 20}" font-size="11" font-weight="600" fill="${color}">${step.index}. ${esc(step.status)}</text>
       <text x="${x + 14}" y="${y + 37}" font-size="11" fill="${COLORS.text}">${esc(cut(step.description, 26))}</text></g>${next}`;

@@ -202,4 +202,49 @@ describe('Dashboard — enriched API graph in lanes, in Chromium', () => {
     expect(calls.some((call) => call.startsWith('GET /cartography/api?'))).toBe(true);
     expect(calls.filter((call) => /^GET \/cartography(\?|$)/.test(call))).toEqual([]);
   });
+
+  it('« Graphe seul » folds the legend and the relations away and shows the whole graph; one click brings them back', async () => {
+    const canvas = dashboard().locator('[data-map-canvas]');
+    const before = (await canvas.boundingBox())?.height ?? 0;
+    const title = (await dashboard().locator('.map-rel summary > span').first().textContent()) ?? '';
+    expect(title).toMatch(/^Toutes les relations \(\d+\)/);
+    // Le tableau des relations se replie seul (chevron), et se rouvre.
+    const rel = dashboard().locator('details.map-rel');
+    await rel.locator('summary').click();
+    await expect.poll(() => rel.evaluate((d) => (d as HTMLDetailsElement).open)).toBe(false);
+    await dashboard().locator('details.map-rel summary').click();
+    await expect
+      .poll(() =>
+        dashboard()
+          .locator('details.map-rel')
+          .evaluate((d) => (d as HTMLDetailsElement).open),
+      )
+      .toBe(true);
+
+    await dashboard().locator('.map-gtools [data-action="map-g-only"]').click();
+    await dashboard().locator('.map-trace.g-only').waitFor();
+    expect(await dashboard().locator('.ln-legend').count()).toBe(0);
+    expect(await dashboard().locator('.map-rel').count()).toBe(0);
+    const folded = await dashboard().locator('.ln-folded').textContent();
+    expect(folded).toContain('légende');
+    expect(folded).toContain(title);
+    expect(
+      await dashboard().locator('.map-gtools [data-action="map-g-only"]').getAttribute('aria-pressed'),
+    ).toBe('true');
+    // La zone prend la hauteur de l'écran et le graphe y tient en entier.
+    await expect.poll(async () => (await canvas.boundingBox())?.height ?? 0).toBeGreaterThan(before);
+    await expect
+      .poll(async () => {
+        const box = await canvas.boundingBox();
+        const inner = await dashboard().locator('[data-map-canvas] [data-lanes]').boundingBox();
+        if (!box || !inner) return false;
+        return inner.width <= box.width + 1 && inner.height <= box.height + 1;
+      })
+      .toBe(true);
+
+    await dashboard().locator('.ln-folded [data-action="map-g-only"]').click();
+    await expect.poll(() => dashboard().locator('.map-trace.g-only').count()).toBe(0);
+    expect(await dashboard().locator('.ln-legend').count()).toBe(1);
+    expect(await dashboard().locator('.map-rel summary').textContent()).toContain('Toutes les relations');
+  });
 });

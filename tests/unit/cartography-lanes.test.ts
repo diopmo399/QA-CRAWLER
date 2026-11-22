@@ -198,8 +198,11 @@ describe('the lane graph of the external partner API (real scan)', () => {
     expect(view.html).not.toContain('NaN');
     expect(view.html.match(/class="ln-lane /g)).toHaveLength(5);
     expect(view.html).toContain('>4 liens<');
-    expect(view.html).toContain('marker-end="url(#ln-arrow-external)"');
-    expect(view.html).toContain('marker-end="url(#ln-arrow-db)"');
+    // Les pointes et les traits d'Archify : la classe dit le niveau de preuve ; la nature reste sur l'étiquette.
+    expect(view.html).toContain('marker-end="url(#ln-emphasis)"');
+    expect(view.html).toMatch(/class="ln-p dg-e r-(emphasis|dashed|gap) st-/);
+    expect(view.html).toContain('class="ln-badge n-external');
+    expect(view.html).toContain('class="ln-badge n-db');
     const folded = (view.html.match(/class="ln-e /g) ?? []).length;
     const unfolded = lanesView({ ...options, openBundles: new Set(['BFF>BACKEND>flow']) });
     expect((unfolded.html.match(/class="ln-e /g) ?? []).length).toBe(folded + 3);

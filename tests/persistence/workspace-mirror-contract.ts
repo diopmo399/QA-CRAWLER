@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DatabaseAdapter } from '../../src/persistence/database/database-adapter.js';
 import { FilesystemObjectStore, type ObjectStore } from '../../src/storage/object-store.js';
 import { WorkspaceMirror } from '../../src/storage/workspace-mirror.js';
@@ -152,6 +152,26 @@ export function workspaceMirrorContract(
       await write(root, 'log.txt', 'short');
       await mirror.sync();
       expect(mirror.status().stored).toMatchObject({ documents: 1, objects: 0 });
+    });
+
+    it('without a settle delay, saves a file written within the same millisecond', async () => {
+      const { root, open } = await setup();
+      await write(root, 'a.yaml', 'v: 1\n');
+      await write(root, 'shot.png', PNG);
+      const mirror = await open();
+      await mirror.start();
+      // L'horloge (arrondie à la milliseconde) juste avant la date de modification (fractionnaire).
+      const written = Math.min(
+        (await stat(path.join(root, 'a.yaml'))).mtimeMs,
+        (await stat(path.join(root, 'shot.png'))).mtimeMs,
+      );
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(Math.floor(written) - 1);
+      try {
+        await mirror.sync();
+      } finally {
+        clock.mockRestore();
+      }
+      expect(mirror.status()).toMatchObject({ pending: 0, stored: { documents: 1, objects: 1 } });
     });
 
     it('waits for a file still being written, and saves it at stop', async () => {

@@ -474,6 +474,135 @@ describe('Dashboard — Parcours & Graphe, in Chromium', () => {
     );
     expect(await ribbon.locator('.jr-cx').allTextContents()).toEqual(['BFF', 'Backend (Java)']);
     expect(await ribbon.locator('.jr-crumbs .jr-pend').textContent()).toBe('Table atteinte');
+    // Par défaut, le parcours est un diagramme d'architecture : une boîte par étape, dans les régions des
+    // couches atteintes, et les flèches de chaque relation tracées d'après la place des boîtes.
+    const arch = journey().locator('section.ar');
+    await arch.waitFor();
+    expect(await arch.locator('.ar-box').count()).toBe(12);
+    expect(
+      await arch.locator('.ar-region').evaluateAll((els) => els.map((e) => e.getAttribute('data-lane'))),
+    ).toEqual(['FRONTEND', 'BFF', 'BACKEND']);
+    const arrows = arch.locator('svg[data-ar-route] > path.dg-e');
+    await expect.poll(async () => arrows.count()).toBe(11);
+    expect(await arch.locator('svg[data-ar-route] > text.ar-lbl').count()).toBeGreaterThanOrEqual(2);
+    // Des flèches à angle droit (segments horizontaux et verticaux seulement), comme dans Archify.
+    const ds = await arrows.evaluateAll((els) => els.map((e) => e.getAttribute('d') ?? ''));
+    for (const d of ds) {
+      const pts = [...d.matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+      for (let k = 1; k < pts.length; k++)
+        expect(pts[k]?.[0] === pts[k - 1]?.[0] || pts[k]?.[1] === pts[k - 1]?.[1]).toBe(true);
+    }
+    // Les relations confirmées : trait vert, et une comète (halo et tête) qui parcourt la flèche.
+    const confirmed = await arch.locator('path.dg-e.r-emphasis').count();
+    expect(confirmed).toBeGreaterThan(0);
+    expect(await arch.locator('path.dg-c.head').count()).toBe(confirmed);
+    expect(
+      await arch
+        .locator('path.dg-c.head')
+        .first()
+        .evaluate((el) => getComputedStyle(el).animationName),
+    ).toBe('dg-comet');
+    // Un clic sur une boîte : elle est mise en avant, ses voisines restent nettes, le reste s'estompe ; ses
+    // deux flèches s'épaississent, les autres s'effacent ; son détail s'affiche sous le graphe.
+    const box = arch.locator('.ar-box', { hasText: 'RequestController.refuse' });
+    await box.click();
+    await expect.poll(async () => arch.locator('.ar-box.sel').count()).toBe(1);
+    expect(await arch.locator('.ar-box.sel').textContent()).toContain('RequestController.refuse');
+    expect(await arch.locator('.ar-box.near').count()).toBe(2);
+    expect(await arch.locator('.ar-box.dim').count()).toBe(9);
+    await expect.poll(async () => arch.locator('svg[data-ar-route] > path.dg-e.on').count()).toBe(2);
+    expect(await arch.locator('svg[data-ar-route] > path.dg-e.off').count()).toBe(9);
+    await expect
+      .poll(() =>
+        arch
+          .locator('.ar-box.dim')
+          .first()
+          .evaluate((el) => Number(getComputedStyle(el).opacity)),
+      )
+      .toBeLessThan(0.5);
+    await expect
+      .poll(() => journey().locator('[data-step-detail] h4').textContent())
+      .toBe('Contrôleurs : RequestController.refuse');
+    expect(await ribbon.locator('.jr-gs.on').textContent()).toContain('RequestController.refuse');
+    // « Tout afficher », un clic dans le vide du diagramme, ou un second clic sur la boîte : tout redevient net.
+    await arch.locator('.ar-head [data-action="map-j-unspot"]').click();
+    await expect.poll(async () => arch.locator('.ar-box.dim').count()).toBe(0);
+    await box.click();
+    await expect.poll(async () => arch.locator('.ar-box.sel').count()).toBe(1);
+    await arch.locator('.ar-stage').click({ position: { x: 4, y: 4 } });
+    await expect.poll(async () => arch.locator('.ar-box.dim').count()).toBe(0);
+    await box.click();
+    await expect.poll(async () => arch.locator('.ar-box.sel').count()).toBe(1);
+    await box.click();
+    await expect.poll(async () => arch.locator('.ar-box.sel').count()).toBe(0);
+    // La page ne défile pas en largeur : le diagramme défile dans sa zone.
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // La séquence : une ligne de vie par étape après la structure, un message par relation ; cliquer une
+    // ligne de vie allume ses messages, cliquer un message rend son étape active.
+    await journey().locator('[data-action="map-j-style"][data-style="seq"]').click();
+    const seq = journey().locator('section.sq');
+    await seq.waitFor();
+    expect(await seq.locator('button.sq-p').count()).toBe(9);
+    expect(await seq.locator('.sq-msg').count()).toBe(9);
+    expect(await seq.locator('.sq-cr').count()).toBe(3);
+    const life = seq.locator('button.sq-p', { hasText: 'RequestBffController.refuse' });
+    await life.click();
+    await expect.poll(async () => seq.locator('button.sq-p.sel').count()).toBe(1);
+    expect(await seq.locator('button.sq-p.near').count()).toBe(2);
+    expect(await seq.locator('.sq-msg.on').count()).toBe(2);
+    expect(await seq.locator('.sq-msg.off').count()).toBe(7);
+    await expect
+      .poll(() => journey().locator('[data-step-detail] h4').textContent())
+      .toContain('RequestBffController.refuse');
+    await seq.locator('.sq-msg .sq-lab', { hasText: 'déclenche' }).click();
+    await expect.poll(() => seq.locator('button.sq-p.sel').textContent()).toContain('RequestService.refuse');
+    expect(await seq.locator('.sq-msg.sel .sq-lab').textContent()).toContain('déclenche');
+    await seq.locator('.ar-head [data-action="map-j-unspot"]').click();
+    await expect.poll(async () => seq.locator('.sq-msg.off').count()).toBe(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // Le workflow : du clic à la table, un nœud par étape aval de la trace ; cliquer une branche hors du
+    // chemin principal la met en avant avec son étape d'origine, sans changer l'étape active.
+    await journey().locator('[data-action="map-j-style"][data-style="flow"]').click();
+    const flow = journey().locator('section.ar.dg');
+    await flow.waitFor();
+    expect(await flow.locator('.dg-pill').textContent()).toContain('Clic');
+    const flowNodes = await flow.locator('button.dg-n.ar-box').count();
+    expect(flowNodes).toBeGreaterThanOrEqual(9);
+    expect(await flow.locator('path.dg-e').count()).toBe(flowNodes + (await flow.locator('.dg-dec').count()));
+    expect(await flow.locator('path.dg-e.r-emphasis').count()).toBeGreaterThanOrEqual(8);
+    const mainStep = flow.locator('button.dg-n[data-step]', { hasText: 'RequestBffController.refuse' });
+    await mainStep.click();
+    await expect.poll(async () => flow.locator('.dg-n.sel').count()).toBe(1);
+    expect(await flow.locator('path.dg-e.on').count()).toBeGreaterThanOrEqual(2);
+    await expect
+      .poll(() => journey().locator('[data-step-detail] h4').textContent())
+      .toContain('RequestBffController.refuse');
+    const branch = flow.locator('button.dg-n[data-spot]').first();
+    if ((await branch.count()) > 0) {
+      await branch.click();
+      await expect.poll(async () => flow.locator('button.dg-n[data-spot].sel').count()).toBe(1);
+      expect(await journey().locator('[data-step-detail] h4').textContent()).toContain(
+        'RequestBffController.refuse',
+      );
+    }
+    await flow.locator('.ar-head [data-action="map-j-unspot"]').click();
+    await expect.poll(async () => flow.locator('.dg-n.dim').count()).toBe(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // Le flux de données : des colonnes par rôle, de la source au stockage, une flèche par relation.
+    await journey().locator('[data-action="map-j-style"][data-style="data"]').click();
+    await expect.poll(async () => journey().locator('.dg-stage.dg-data').count()).toBe(1);
+    const heads = await journey().locator('.dg-data .dg-sh').allTextContents();
+    expect(heads[0]).toBe('Source');
+    expect(heads).toContain('Stockage');
+    expect(await journey().locator('.dg-data path.dg-e').count()).toBe(
+      (await journey().locator('.dg-data button.dg-n').count()) - 1,
+    );
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // Les couloirs, sur demande ; l'étape de l'élément choisi redevient active.
+    await journey().locator('[data-action="map-j-style"][data-style="lanes"]').click();
+    await journey().locator('.jr-lanes').waitFor();
+    expect(await journey().locator('section.ar').count()).toBe(0);
+    await ribbon.locator('.jr-crb[data-step="3"]').click();
     // Les mêmes numéros dans le graphe : la méthode du contrôleur backend porte celui du fil.
     const controllerStep = crumbs.find((c) => c.endsWith('RequestController.refuse'))?.replace(/\D+$/, '');
     const backendCard = journey().locator('.jr-card', { hasText: 'RequestController' }).first();

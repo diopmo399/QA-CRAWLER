@@ -370,7 +370,7 @@ describe('flow map layout', () => {
     );
     const link = layoutOf(result).links.find((item) => item.to === 'b');
     expect(link?.edge?.result).toBe('FAILED');
-    expect(renderFlowMap(result, 'fr')).toContain('stroke="#c62828"');
+    expect(renderFlowMap(result, 'fr')).toContain('stroke="#e11d48"');
   });
 
   it('a screen reached without a recorded transition is tied to the start, without an arrow or action', () => {

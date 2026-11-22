@@ -10,6 +10,7 @@ import type {
 } from '../core/cartography.js';
 import { breakable, idList, nodeText, technologyOf, weakest } from './dashboard-cartography-graph.js';
 import type { MapStrings } from './dashboard-cartography-i18n.js';
+import { type ArrowRole, arrowMarkers } from './dashboard-cartography-arrows.js';
 import { icon } from './dashboard-parts.js';
 import { esc } from './view.js';
 
@@ -34,6 +35,20 @@ export const LANE_ORDER = [
   'OTHER',
 ] as const;
 export type LaneId = (typeof LANE_ORDER)[number];
+/** La teinte Archify d'une carte selon son couloir (frontal cyan, BFF bleu, backend vert, base violet…). */
+const LANE_TONE: Record<LaneId, string> = {
+  FRONTEND: 'fe',
+  BFF: 'bff',
+  BACKEND: 'be',
+  EXTERNAL: 'ext',
+  UNCLASSIFIED: 'cloud',
+  API: 'ext',
+  DATABASE: 'db',
+  EVENTS: 'bus',
+  OTHER: 'ext',
+};
+/** La classe de flèche Archify d'un niveau de preuve. */
+const ROLE: Record<MapConfidence, ArrowRole> = { CONFIRMED: 'emphasis', PROBABLE: 'dashed', UNKNOWN: 'gap' };
 /** Les couloirs terminaux : empilés dans la dernière colonne. */
 const STACKED: ReadonlySet<string> = new Set([
   'EXTERNAL',
@@ -958,10 +973,14 @@ export function lanesView(o: LaneRenderOptions): { html: string; width: number; 
       const state = sel ? (near.has(card.key) ? ' hl' : ' dim') : '';
       const selected = sel?.kind === 'node' && sel.id === card.key ? ' sel' : '';
       const tip = `${card.title}${card.sub ? ` · ${card.sub}` : ''} — ${m.ln.statusTip[card.status] ?? card.status}`;
-      return `<div class="ln-card k-${card.kind.toLowerCase()} s-${card.status.toLowerCase()}${card.own ? ' own' : ''}${state}${selected}" style="left:${String(p.x)}px;top:${String(p.y)}px;width:${String(p.w)}px;height:${String(p.h)}px" data-lcard="${id}" data-near="${tok([...(neighbours.get(card.key) ?? [])])}" data-touch="${id}" data-action="map-g-select" data-kind="node" data-id="${esc(card.key)}" role="button" tabindex="0" aria-label="${esc(tip)}"><div class="ln-ch${titleLines(card) > 1 ? ' two' : ''}"><span class="ln-ci">${icon(CARD_ICON[card.kind])}</span><b title="${esc(card.title)}">${titleLines(card) > 1 ? breakable(card.title) : esc(card.title)}</b><span class="ln-st" title="${esc(m.ln.statusTip[card.status] ?? card.status)}">${icon(STATUS_ICON[card.status])}</span></div>${card.sub ? `<small class="ln-sub" title="${esc(card.sub)}">${esc(card.sub)}</small>` : ''}${lines || more ? `<ul>${lines}${more}</ul>` : ''}</div>`;
+      return `<div class="ln-card t-${LANE_TONE[card.lane]} k-${card.kind.toLowerCase()} s-${card.status.toLowerCase()}${card.own ? ' own' : ''}${state}${selected}" style="left:${String(p.x)}px;top:${String(p.y)}px;width:${String(p.w)}px;height:${String(p.h)}px" data-lcard="${id}" data-near="${tok([...(neighbours.get(card.key) ?? [])])}" data-touch="${id}" data-action="map-g-select" data-kind="node" data-id="${esc(card.key)}" role="button" tabindex="0" aria-label="${esc(tip)}"><div class="ln-ch${titleLines(card) > 1 ? ' two' : ''}"><span class="ln-ci">${icon(CARD_ICON[card.kind])}</span><b title="${esc(card.title)}">${titleLines(card) > 1 ? breakable(card.title) : esc(card.title)}</b><span class="ln-st" title="${esc(m.ln.statusTip[card.status] ?? card.status)}">${icon(STATUS_ICON[card.status])}</span></div>${card.sub ? `<small class="ln-sub" title="${esc(card.sub)}">${esc(card.sub)}</small>` : ''}${lines || more ? `<ul>${lines}${more}</ul>` : ''}</div>`;
     })
     .join('');
 
+  // Les traits dans le style d'Archify : la couleur dit le niveau de preuve (vert démontré, tirets violets
+  // probable, pointillés gris non démontré), la nature est portée par l'étiquette du faisceau ; une comète
+  // parcourt les routes entièrement démontrées.
+  let comet = 0;
   const paths = routes
     .map((r) => {
       const lit = sel ? (routeLit(r) ? ' hl' : ' dim') : '';
@@ -969,11 +988,22 @@ export function lanesView(o: LaneRenderOptions): { html: string; width: number; 
       const branches = r.branches
         .map(
           (b) =>
-            `<path class="ln-p st-${b.status.toLowerCase()}" d="${b.d}"${b.arrow ? ` marker-end="url(#ln-arrow-${r.nature})"` : ''}/>`,
+            `<path class="ln-p dg-e r-${ROLE[b.status]} st-${b.status.toLowerCase()}" d="${b.d}"${b.arrow ? ` marker-end="url(#ln-${ROLE[b.status]})"` : ''}/>`,
         )
         .join('');
+      const trunkStatus: MapConfidence = r.branches.some((b) => b.status === 'CONFIRMED')
+        ? 'CONFIRMED'
+        : r.branches.some((b) => b.status === 'PROBABLE')
+          ? 'PROBABLE'
+          : 'UNKNOWN';
       const all = `${r.trunk}${r.branches.map((b) => b.d).join('')}`;
-      return `<g class="ln-e n-${r.nature}${lit}" data-touch="${touch}">${r.trunk ? `<path class="ln-p ln-trunk" d="${r.trunk}"/>` : ''}${branches}<path class="ln-hit" d="${all}" data-action="map-ln-bundle" data-bundle="${esc(r.bundle)}" data-ids="${esc(idList(r.ids))}"><title>${esc(m.ln.bundleHelp)}</title></path></g>`;
+      let tail = '';
+      if (r.branches.length > 0 && r.branches.every((b) => b.status === 'CONFIRMED')) {
+        const delay = `animation-delay:${((comet % 12) * 0.35).toFixed(2)}s`;
+        comet += 1;
+        tail = `<path class="dg-c glow" d="${all}" pathLength="100" style="${delay}"/><path class="dg-c head" d="${all}" pathLength="100" style="${delay}"/>`;
+      }
+      return `<g class="ln-e n-${r.nature}${lit}" data-touch="${touch}">${r.trunk ? `<path class="ln-p ln-trunk dg-e r-${ROLE[trunkStatus]}" d="${r.trunk}"/>` : ''}${branches}${tail}<path class="ln-hit" d="${all}" data-action="map-ln-bundle" data-bundle="${esc(r.bundle)}" data-ids="${esc(idList(r.ids))}"><title>${esc(m.ln.bundleHelp)}</title></path></g>`;
     })
     .join('');
   const badges = routes
@@ -987,10 +1017,8 @@ export function lanesView(o: LaneRenderOptions): { html: string; width: number; 
       return `<button class="ln-badge n-${r.nature}${lit}${open ? ' open' : ''}" style="left:${String(b.x)}px;top:${String(b.y)}px" data-action="map-ln-bundle" data-bundle="${esc(r.bundle)}" data-ids="${esc(idList(r.ids))}" data-touch="${tok(r.touch)}" title="${esc(`${m.ln.natures[r.nature] ?? r.nature} · ${m.g.legendConfirmed(b.statuses.CONFIRMED)} · ${m.g.legendProbable(b.statuses.PROBABLE)} · ${m.g.legendUnknown(b.statuses.UNKNOWN)} — ${m.ln.bundleHelp}`)}">${esc(m.g.links(b.count))}${warn ? `<span class="ln-bw">${icon('alert')}${String(warn)}</span>` : ''}</button>`;
     })
     .join('');
-  const marker = (n: Nature): string =>
-    `<marker id="ln-arrow-${n}" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ln-m n-${n}"/></marker>`;
   return {
-    html: `<div class="ln-g" style="width:${String(layout.width)}px;height:${String(layout.height)}px" data-lanes>${lanesHtml}<svg class="ln-svg" width="${String(layout.width)}" height="${String(layout.height)}" aria-hidden="true"><defs>${NATURES.map(marker).join('')}</defs>${paths}</svg>${cardsHtml}${badges}</div>`,
+    html: `<div class="ln-g" style="width:${String(layout.width)}px;height:${String(layout.height)}px" data-lanes>${lanesHtml}<svg class="ln-svg" width="${String(layout.width)}" height="${String(layout.height)}" aria-hidden="true">${arrowMarkers('ln')}${paths}</svg>${cardsHtml}${badges}</div>`,
     width: layout.width,
     height: layout.height,
   };
@@ -999,7 +1027,18 @@ export function lanesView(o: LaneRenderOptions): { html: string; width: number; 
 /** La légende comptée : statuts (des relations dessinées), natures, total. */
 export function laneLegend(m: MapStrings, model: LaneModel): string {
   const count = (c: MapConfidence): number => model.shown.filter((e) => e.confidence === c).length;
-  return `<div class="ln-legend" role="group" aria-label="${esc(m.ln.legend)}"><b>${esc(m.ln.legend)} :</b><span class="lg s-confirmed">${icon('checkCircle')}${esc(m.g.legendConfirmed(count('CONFIRMED')))}</span><span class="lg s-probable">${icon('alert')}${esc(m.g.legendProbable(count('PROBABLE')))}</span><span class="lg s-unknown">${icon('scan')}${esc(m.g.legendUnknown(count('UNKNOWN')))}</span><span class="lg n-flow"><i></i>${esc(m.g.legendFlow)}</span><span class="lg n-external"><i></i>${esc(m.ln.legendExternal)}</span><span class="lg n-db"><i></i>${esc(m.ln.legendDb)}</span><span class="ln-total">${esc(m.ln.total(model.shown.length))}</span></div>`;
+  return `<div class="ln-legend" role="group" aria-label="${esc(m.ln.legend)}"><b>${esc(m.ln.legend)} :</b><span class="lg s-confirmed"><i class="ar-sw ln r-emphasis" aria-hidden="true"></i>${esc(m.g.legendConfirmed(count('CONFIRMED')))}</span><span class="lg s-probable"><i class="ar-sw ln r-dashed" aria-hidden="true"></i>${esc(m.g.legendProbable(count('PROBABLE')))}</span><span class="lg s-unknown"><i class="ar-sw ln r-gap" aria-hidden="true"></i>${esc(m.g.legendUnknown(count('UNKNOWN')))}</span><span class="lg n-flow"><i></i>${esc(m.g.legendFlow)}</span><span class="lg n-external"><i></i>${esc(m.ln.legendExternal)}</span><span class="lg n-db"><i></i>${esc(m.ln.legendDb)}</span><span class="ln-total">${esc(m.ln.total(model.shown.length))}</span></div>`;
+}
+
+/** Le bouton « Graphe seul » / « Afficher les détails » de la barre du graphe en couloirs. */
+export function graphOnlyButton(m: MapStrings, on: boolean): string {
+  const label = on ? m.g.showDetails : m.g.graphOnly;
+  return `<button class="btn small ln-only${on ? ' on' : ''}" data-action="map-g-only" aria-pressed="${String(on)}" title="${esc(on ? m.g.showDetails : m.g.graphOnlyTitle)}">${icon(on ? 'eye' : 'network')}<span>${esc(label)}</span></button>`;
+}
+
+/** En « Graphe seul » : une ligne dit ce qui est replié (relations comprises) et rouvre tout d'un clic. */
+export function hiddenPartsBar(m: MapStrings, parts: readonly string[]): string {
+  return `<div class="ln-folded" role="note">${icon('eye')}<span>${esc(m.g.hiddenParts(parts.join(' · ')))}</span><button class="btn small" data-action="map-g-only" aria-pressed="true">${esc(m.g.showDetails)}</button></div>`;
 }
 
 /** Les critères d'affichage : couches présentes, natures, statuts, profondeur (masquer n'efface aucune relation). */
@@ -1080,15 +1119,22 @@ export const LANES_CSS = `
 .map-explorer.map-apis.trace>.map-acenter{grid-column:1 / -1;order:-1}
 .map-explorer.map-apis.trace>.map-right{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
 @media (max-width:860px){.map-explorer.map-apis.trace{grid-template-columns:1fr}}
-.map-canvas.lanes{height:var(--ln-h,420px);background:var(--qa-color-surface)}
+.map-canvas.lanes{height:var(--ln-h,420px);background-color:#f8fafc;background-image:linear-gradient(#e2e8f0 .5px,transparent .5px),linear-gradient(90deg,#e2e8f0 .5px,transparent .5px);background-size:40px 40px}
 .map-trace.full .map-canvas.lanes{height:calc(100vh - 250px);min-height:320px}
-.ln-g{position:relative;font-size:12px}
-.ln-lane{position:absolute;border-radius:14px;border:1px solid var(--ln-b);background:var(--ln-bg);box-sizing:border-box}
+.map-trace.g-only .map-canvas.lanes{height:calc(100vh - 150px);min-height:360px}
+.map-trace.st-trace.g-only .map-canvas.lanes{height:calc(100vh - 230px)}
+.map-trace.g-only.full .map-canvas.lanes{height:calc(100vh - 170px)}
+.ln-only.on{background:var(--qa-color-primary-soft-2);border-color:var(--qa-color-primary)}
+.ln-folded{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding:6px 10px;border:1px dashed var(--qa-color-border);border-radius:8px;font-size:12px;color:var(--qa-color-muted)}
+.ln-folded .ico{width:14px;height:14px}
+.ln-folded .btn{margin-left:auto}
+.ln-g{position:relative;font-size:12px;color:#0f172a}
+.ln-lane{position:absolute;border-radius:8px;border:1.5px dashed #d97706;background:rgba(251,191,36,.05);box-sizing:border-box}
 .ln-lane header{display:flex;gap:10px;align-items:center;padding:10px 12px 0;height:44px;box-sizing:border-box}
-.ln-li .ico{width:26px;height:26px;color:var(--ln-c);stroke-width:1.7}
+.ln-li .ico{width:18px;height:18px;color:#b45309;stroke-width:1.8}
 .ln-lt{display:flex;flex-direction:column;line-height:1.2;min-width:0}
-.ln-lt b{font-size:14px;color:var(--qa-color-text)}
-.ln-lt small{color:var(--qa-color-muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
+.ln-lt b{font-size:12px;font-weight:600;color:#b45309}
+.ln-lt small{color:#64748b;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
 .ln-ext{margin-left:auto}.ln-ext .ico{width:16px;height:16px;color:var(--qa-color-muted)}
 .ln-int{position:absolute;right:10px;top:-11px;display:inline-flex;gap:4px;align-items:center;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--ln-b);background:var(--qa-color-surface);color:var(--qa-color-muted);cursor:pointer}
 .ln-int .ico{width:12px;height:12px}.ln-int.open,.ln-int.sel{color:var(--ln-c);border-color:var(--ln-c)}
@@ -1102,45 +1148,47 @@ export const LANES_CSS = `
 .l-events,.l-other{--ln-bg:#f4f5f6;--ln-b:#e1e4e7;--ln-c:#64748b}
 .ln-svg{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
 .ln-svg .ln-hit{pointer-events:stroke;cursor:pointer}
-.ln-e .ln-p{fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
-.ln-e .ln-trunk{stroke-width:2.6}
-.ln-e.n-flow .ln-p{stroke:#16a34a}.ln-e.n-external .ln-p{stroke:#7c3aed}.ln-e.n-db .ln-p{stroke:#2563eb}
-.ln-m.n-flow{fill:#16a34a}.ln-m.n-external{fill:#7c3aed}.ln-m.n-db{fill:#2563eb}
-.ln-e .ln-p.st-probable{stroke-dasharray:7 5}
-.ln-e .ln-p.st-unknown{stroke-dasharray:2 5}
+.ln-e .ln-p{fill:none;stroke-linecap:round;stroke-linejoin:round}
 .ln-hit{fill:none;stroke:transparent;stroke-width:14}
-.ln-e.dim{opacity:.16}.ln-e.hl .ln-p{stroke-width:3.2}
-.ln-card{position:absolute;box-sizing:border-box;background:var(--qa-color-surface);border:1px solid var(--qa-color-border);border-radius:10px;padding:7px 10px;cursor:pointer;box-shadow:0 1px 2px rgba(16,40,30,.06);z-index:2;overflow:hidden;transition:opacity .12s,box-shadow .12s}
-.ln-card:hover,.ln-card:focus-visible{box-shadow:0 0 0 2px var(--ln-c,#15803d) inset,0 2px 8px rgba(16,40,30,.12);outline:none}
-.ln-card.own{border-color:var(--qa-color-primary,#15803d);box-shadow:0 0 0 1px var(--qa-color-primary,#15803d) inset}
-.ln-card.sel{box-shadow:0 0 0 2px #2563eb inset,0 3px 10px rgba(37,99,235,.18)}
-.ln-card.dim{opacity:.4}
+.ln-e.dim{opacity:.16}.ln-e.dim .dg-c{display:none}.ln-e.hl .ln-p{stroke-width:2.6}
+.ln-card{--glow:rgba(8,145,178,.45);position:absolute;box-sizing:border-box;background:#fff;border:1.5px solid #64748b;border-radius:6px;padding:7px 10px;cursor:pointer;z-index:2;overflow:hidden;transition:opacity .2s,box-shadow .2s,transform .2s}
+.ln-card.t-fe{background:linear-gradient(rgba(34,211,238,.15),rgba(34,211,238,.15)),#fff;border-color:#0891b2}
+.ln-card.t-bff{--glow:rgba(37,99,235,.45);background:linear-gradient(rgba(96,165,250,.15),rgba(96,165,250,.15)),#fff;border-color:#2563eb}
+.ln-card.t-be{--glow:rgba(5,150,105,.45);background:linear-gradient(rgba(52,211,153,.18),rgba(52,211,153,.18)),#fff;border-color:#059669}
+.ln-card.t-db,.ln-card.k-table{--glow:rgba(124,58,237,.45);background:linear-gradient(rgba(167,139,250,.2),rgba(167,139,250,.2)),#fff;border-color:#7c3aed}
+.ln-card.t-ext{--glow:rgba(100,116,139,.45);background:linear-gradient(rgba(148,163,184,.18),rgba(148,163,184,.18)),#fff;border-color:#64748b}
+.ln-card.t-cloud{--glow:rgba(217,119,6,.45);background:linear-gradient(rgba(251,191,36,.18),rgba(251,191,36,.18)),#fff;border-color:#d97706}
+.ln-card.t-bus{--glow:rgba(234,88,12,.45);background:linear-gradient(rgba(251,146,60,.15),rgba(251,146,60,.15)),#fff;border-color:#ea580c}
+.ln-card.s-unknown{border-style:dashed}
+.ln-card:hover,.ln-card:focus-visible{transform:translateY(-2px);box-shadow:0 6px 18px rgba(15,23,42,.1);outline:none}
+.ln-card.own{box-shadow:0 0 0 3px var(--glow)}
+.ln-card.sel{border-width:2.5px;box-shadow:0 0 0 4px var(--glow);z-index:3}
+.ln-card.dim{opacity:.28;filter:saturate(.4)}
 .ln-ch{display:flex;gap:7px;align-items:center;min-width:0;height:20px}
-.ln-ch b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;color:var(--qa-color-text)}
+.ln-ch b{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;color:#0f172a}
 .ln-ch.two{height:36px;align-items:flex-start}
 .ln-ch.two b{white-space:normal;line-height:16px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .ln-ci .ico{width:16px;height:16px;color:var(--qa-color-muted)}
 .k-component .ln-ci .ico{color:#7c3aed}.k-endpoint .ln-ci .ico{color:#2563eb}.k-class .ln-ci .ico{color:#15803d}.k-dto .ln-ci .ico{color:#2563eb}.k-table .ln-ci .ico{color:#c2850c}.k-external .ln-ci .ico{color:#7c3aed}
 .ln-st .ico{width:16px;height:16px}
 .s-confirmed .ln-st .ico{color:#16a34a}.s-probable .ln-st .ico{color:#d97706}.s-unknown .ln-st .ico{color:#94a3b8}
-.ln-sub{display:block;color:var(--qa-color-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;height:14px;line-height:14px;padding-left:23px}
+.ln-sub{display:block;color:#64748b;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;height:14px;line-height:14px;padding-left:23px}
 .ln-card ul{list-style:none;margin:4px 0 0;padding:0 0 0 23px}
-.ln-card li{height:${String(LINE_H)}px;line-height:${String(LINE_H)}px;font-size:11.5px;color:var(--qa-color-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--qa-font-mono,ui-monospace,monospace)}
+.ln-card li{height:${String(LINE_H)}px;line-height:${String(LINE_H)}px;font-size:11.5px;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--qa-font-mono,ui-monospace,monospace)}
 .ln-more{font-size:11px;padding:0}
-.ln-badge{position:absolute;transform:translate(-50%,-50%);z-index:3;display:inline-flex;gap:5px;align-items:center;border-radius:999px;padding:3px 10px;font-size:11.5px;font-weight:700;background:var(--qa-color-surface);border:1.6px solid;cursor:pointer;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-.ln-badge.n-flow{color:#15803d;border-color:#16a34a}.ln-badge.n-external{color:#6d28d9;border-color:#7c3aed}.ln-badge.n-db{color:#1d4ed8;border-color:#2563eb}
-.ln-badge.open{border-style:dashed}.ln-badge.dim{opacity:.3}.ln-badge.hl{box-shadow:0 0 0 3px rgba(37,99,235,.18)}
+.ln-badge{position:absolute;transform:translate(-50%,-50%);z-index:3;display:inline-flex;gap:5px;align-items:center;border-radius:4px;padding:3px 7px;font-size:10.5px;font-weight:600;background:#f8fafc;border:1px solid transparent;cursor:pointer;white-space:nowrap}
+.ln-badge.n-flow{color:#047857}.ln-badge.n-external{color:#475569}.ln-badge.n-db{color:#6d28d9}.ln-badge:hover{border-color:#cbd5e1}
+.ln-badge.open{border-color:currentColor;border-style:dashed}.ln-badge.dim{opacity:.3}.ln-badge.hl{box-shadow:0 0 0 3px rgba(37,99,235,.18)}
 .ln-badge:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
 .ln-bw{display:inline-flex;align-items:center;gap:2px;color:#b45309;font-weight:600}.ln-bw .ico{width:12px;height:12px}
 .ln-g.hov .ln-card:not(.on){opacity:.45}.ln-g.hov .ln-e:not(.on){opacity:.14}.ln-g.hov .ln-badge:not(.on){opacity:.3}
-.ln-g.hov .ln-e.on .ln-p{stroke-width:3.2}
+.ln-g.hov .ln-e.on .ln-p{stroke-width:2.6}.ln-g.hov .ln-e:not(.on) .dg-c{display:none}
 .ln-legend{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;border:1px solid var(--qa-color-border);border-radius:12px;padding:8px 12px;font-size:12px}
 .ln-legend .lg{display:inline-flex;gap:6px;align-items:center}
 .ln-legend .lg .ico{width:15px;height:15px}
 .ln-legend .s-confirmed .ico{color:#16a34a}.ln-legend .s-probable .ico{color:#d97706}.ln-legend .s-unknown .ico{color:#64748b}
-.ln-legend .lg i{display:inline-block;width:26px;height:0;border-top:2.4px solid;position:relative}
-.ln-legend .lg i::after{content:"";position:absolute;right:-2px;top:-5.5px;border:4px solid transparent;border-left:7px solid}
-.ln-legend .n-flow i{color:#16a34a}.ln-legend .n-external i{color:#7c3aed}.ln-legend .n-db i{color:#2563eb}
+.ln-legend .lg.n-flow i,.ln-legend .lg.n-external i,.ln-legend .lg.n-db i{display:inline-block;width:14px;height:10px;border:1.5px solid;border-radius:3px;background:#f8fafc}
+.ln-legend .n-flow i{color:#059669}.ln-legend .n-external i{color:#64748b}.ln-legend .n-db i{color:#7c3aed}
 .ln-total{margin-left:auto;background:var(--qa-color-primary-soft,#e8f5ec);color:var(--qa-color-primary,#15803d);font-weight:700;border-radius:999px;padding:3px 12px}
 .ln-filters{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;font-size:12px;border:1px dashed var(--qa-color-border);border-radius:10px;padding:8px 12px}
 .ln-fg{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
@@ -1160,6 +1208,4 @@ export const LANES_CSS = `
 .map-gbtns{gap:6px}
 .map-gzoom{height:34px;line-height:34px}
 .map-seg.ln-view .ico{width:15px;height:15px}
-:host([theme="dark"]) .ln-lane{--ln-bg:rgba(255,255,255,.035)}
-@media (prefers-color-scheme:dark){:host([theme="auto"]) .ln-lane{--ln-bg:rgba(255,255,255,.035)}}
 `;

@@ -9,6 +9,8 @@ import {
   type TailCard,
 } from './dashboard-cartography-graph.js';
 import {
+  graphOnlyButton,
+  hiddenPartsBar,
   laneFilters,
   laneLegend,
   laneModel,
@@ -206,7 +208,7 @@ function tracePane(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, sheet: A
         )
         .join(
           '',
-        )}</div></span><button class="btn small${ui.showApiFilters ? ' on' : ''}" data-action="map-ln-filters" aria-expanded="${String(Boolean(ui.showApiFilters))}">${icon('filter')}<span>${esc(m.ln.filters)}${activeFilters ? ` (${String(activeFilters)})` : ''}</span></button>`
+        )}</div></span>${graphOnlyButton(m, Boolean(ui.graphOnly))}<button class="btn small${ui.showApiFilters ? ' on' : ''}" data-action="map-ln-filters" aria-expanded="${String(Boolean(ui.showApiFilters))}">${icon('filter')}<span>${esc(m.ln.filters)}${activeFilters ? ` (${String(activeFilters)})` : ''}</span></button>`
     : '';
   const toolbar = `<div class="map-gtools"><div class="map-seg" role="tablist"><button role="tab" data-action="map-ln-mode" data-mode="path" aria-selected="${String(!full)}">${esc(m.g.mainPath)}</button><button role="tab" data-action="map-ln-mode" data-mode="full" aria-selected="${String(full)}">${esc(m.g.fullGraph)}</button></div>${view}<span class="map-gbtns">${btn('map-g-full', ui.fullscreen ? m.g.exitFullscreen : m.g.fullscreen, ui.fullscreen ? 'minimize' : 'maximize', ` aria-pressed="${String(ui.fullscreen)}"`)}${btn('map-g-fit', m.g.fit, 'scan')}${btn('map-g-zoom', m.g.zoomOut, 'minus', ' data-dir="-1"')}<output class="map-gzoom" aria-live="polite">${esc(m.g.zoomLevel(ui.zoom))}</output>${btn('map-g-zoom', m.g.zoomIn, 'plus', ' data-dir="1"')}</span></div>`;
   const title = `<div class="map-gtitle"><h3>${esc(m.a.tabs.trace)} · <b>${esc(sheet.api.name)}</b></h3>${toolbar}</div>`;
@@ -264,7 +266,21 @@ function tracePane(m: MapStrings, ui: CartographyUi, h: ApiViewHelpers, sheet: A
     esc(m.g.relations(listed.length)),
     esc(scope ? m.g.relations(listed.length) : m.ln.allRelations(listed.length, model.inner.length)),
   );
-  return `<div class="map-trace ln-wrap${ui.fullscreen ? ' full' : ''}" data-map-trace>${title}${ui.showApiFilters ? laneFilters(m, sheet, ui.apiView, ui.apiFilters) : ''}${notes}${canvas}${laneLegend(m, model)}${laneSelection({ ...options, conf: h.conf, evidence: h.evidence, where: h.where })}${table}</div>`;
+  const filters = ui.showApiFilters ? laneFilters(m, sheet, ui.apiView, ui.apiFilters) : '';
+  // Graphe seul : tout ce qui suit le graphe est replié en une ligne, le graphe prend la hauteur de l'écran.
+  if (ui.graphOnly) {
+    const parts = [
+      m.g.parts.legend,
+      ...(selection ? [m.g.parts.selection] : []),
+      ...(notes ? [m.g.parts.notes] : []),
+      scope ? m.g.relations(listed.length) : m.ln.allRelations(listed.length, model.inner.length),
+    ];
+    return `<div class="map-trace ln-wrap g-only${ui.fullscreen ? ' full' : ''}" data-map-trace>${title}${filters}${canvas}${hiddenPartsBar(
+      m,
+      parts.filter((p): p is string => Boolean(p)),
+    )}</div>`;
+  }
+  return `<div class="map-trace ln-wrap${ui.fullscreen ? ' full' : ''}" data-map-trace>${title}${filters}${notes}${canvas}${laneLegend(m, model)}${laneSelection({ ...options, conf: h.conf, evidence: h.evidence, where: h.where })}${table}</div>`;
 }
 
 function featuresTable(m: MapStrings, h: ApiViewHelpers, sheet: ApiSheet): string {

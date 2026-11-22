@@ -1526,7 +1526,7 @@ function diagramView(state: DashboardState, publish: boolean): string {
   const graph = ui.journey.graph;
   const box = bounds(graph);
   const pad = 400;
-  const svg = `<svg class="jn-edges" style="left:${String(box.minX - pad)}px;top:${String(box.minY - pad)}px" width="${String(box.maxX - box.minX + pad * 2)}" height="${String(box.maxY - box.minY + pad * 2)}" viewBox="${String(box.minX - pad)} ${String(box.minY - pad)} ${String(box.maxX - box.minX + pad * 2)} ${String(box.maxY - box.minY + pad * 2)}" aria-hidden="false"><defs><marker id="jn-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"></path></marker><marker id="jn-dot" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle cx="5" cy="5" r="4"></circle></marker></defs>${graph.edges.map((edge) => edgeHtml(state, edge)).join('')}${dataLinks(state)}<path class="jn-temp" d=""></path></svg>`;
+  const svg = `<svg class="jn-edges" style="left:${String(box.minX - pad)}px;top:${String(box.minY - pad)}px" width="${String(box.maxX - box.minX + pad * 2)}" height="${String(box.maxY - box.minY + pad * 2)}" viewBox="${String(box.minX - pad)} ${String(box.minY - pad)} ${String(box.maxX - box.minX + pad * 2)} ${String(box.maxY - box.minY + pad * 2)}" aria-hidden="false"><defs><marker id="jn-arrow" viewBox="0 0 10 7" refX="9" refY="3.5" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="9.1" orient="auto-start-reverse"><polygon points="0 0, 10 3.5, 0 7"></polygon></marker><marker id="jn-dot" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6"><circle cx="5" cy="5" r="4"></circle></marker></defs>${graph.edges.map((edge) => edgeHtml(state, edge)).join('')}${dataLinks(state)}<path class="jn-temp" d=""></path></svg>`;
   const from = ui.connectFrom ? graph.nodes.find((node) => node.id === ui.connectFrom) : undefined;
   const hint =
     ui.tool === 'connect' ? (from ? t.connectPickTo(nodeLabel(t, from)) : t.connectPickFrom) : t.canvasHint;
@@ -2365,7 +2365,7 @@ export const JOURNEY_CSS = `
 .jn-edge.sel .jn-e{stroke:var(--jn-sel);stroke-width:2.6}
 .jn-edge.drop .jn-e{stroke:var(--qa-color-primary);stroke-width:3.2}
 .jn-hit{fill:none;stroke:transparent;stroke-width:14;pointer-events:stroke;cursor:pointer}
-#jn-arrow path{fill:var(--jn-edge)}
+#jn-arrow polygon{fill:var(--jn-edge)}
 .jn-pill rect{stroke-width:1}
 .jn-pill text{font-size:11px;font-weight:700}
 .jn-pill.yes rect{fill:var(--qa-color-primary-soft);stroke:color-mix(in srgb,var(--qa-color-primary) 40%,transparent)}
@@ -2600,4 +2600,16 @@ export const JOURNEY_CSS = `
   .jn-dock-2,.jn-row2{grid-template-columns:minmax(0,1fr)}
   .jn-legend{display:none}
 }
-${LOOP_CSS}${SIM_CSS}${TRACE_VIEW_CSS}`;
+${LOOP_CSS}${SIM_CSS}${TRACE_VIEW_CSS}
+/* Style Archify du compositeur : fond quadrillé, blocs en cyan, décisions en rose, attentes en ambre,
+   traits ardoise à angle droit avec pointes 10 × 7 ; branche vraie en vert, branche fausse en rose ; la sélection reste bleue. */
+.jn{--jn-node-bg:var(--qa-arch-fe-bg,#e0f7fb);--jn-node-bd:var(--qa-arch-fe,#0891b2);--jn-cond-bg:#ffe4e9;--jn-cond-bd:var(--qa-arch-security,#e11d48);--jn-no:var(--qa-arch-security,#e11d48);--jn-edge:var(--qa-arch-ext,#64748b)}
+.jn-composer{--jn-data:var(--qa-arch-db,#7c3aed)}
+.jn-canvas{background-color:var(--qa-arch-canvas,#f8fafc);background-image:linear-gradient(var(--qa-arch-grid,#e2e8f0) .5px,transparent .5px),linear-gradient(90deg,var(--qa-arch-grid,#e2e8f0) .5px,transparent .5px);background-size:40px 40px}
+.jn-node{border-radius:6px;box-shadow:none}
+.jn-e{stroke-width:1.4;stroke-linejoin:round;stroke-linecap:round}
+.jn-pill.yes rect{fill:var(--qa-arch-be-bg,#dcf6ec);stroke:var(--qa-arch-be,#059669)}
+.jn-pill.no rect{fill:#ffe4e9;stroke:var(--qa-arch-security,#e11d48)}
+.jn-dlink path{stroke:var(--qa-arch-db,#7c3aed);stroke-width:1.4;stroke-dasharray:4 4}
+.jn-dlink text{fill:var(--qa-arch-db,#7c3aed);stroke:var(--qa-arch-canvas,#f8fafc)}
+`;
