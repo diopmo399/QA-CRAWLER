@@ -257,6 +257,16 @@ interface FieldInfo {
   property?: string;
   /** L'expression `baseUrl(…)` d'un WebClient / RestClient construit dans la classe. */
   baseUrl?: { start: number; end: number };
+  /** `@Qualifier("nom")` / `@Named("nom")` du champ ou du paramètre de constructeur : le bean demandé. */
+  qualifier?: string;
+}
+
+/** La chaîne littérale unique d'une annotation (`@Qualifier("x")`, `@Service("x")`), si elle en a une. */
+function literalOf(ann: JavaAnnotation | undefined): string | undefined {
+  const values = ann?.args.value ?? ann?.args.name;
+  if (values?.length !== 1) return undefined;
+  const text = values[0]?.parts.map((part) => ('string' in part ? part.string : '\u0000')).join('') ?? '';
+  return text && !text.includes('\u0000') ? text : undefined;
 }
 
 interface LocalInfo {
@@ -553,6 +563,8 @@ function collectFields(ctx: FileContext, decl: JavaTypeDecl): Map<string, FieldI
       const base = findBaseUrl(tokens, field.initializer.start, field.initializer.end);
       if (base) info.baseUrl = base;
     }
+    const wanted = literalOf(annotation(field.annotations, 'Qualifier', 'Named'));
+    if (wanted) info.qualifier = wanted;
     fields.set(field.name, info);
   }
   for (const ctor of decl.methods.filter((m) => m.constructor)) {
@@ -565,9 +577,13 @@ function collectFields(ctx: FileContext, decl: JavaTypeDecl): Map<string, FieldI
       const fieldName = target ?? param.name;
       const info = fields.get(fieldName);
       if (info && property) info.property = property;
+      // `@Qualifier("nom")` sur le paramètre : c'est ce bean que le champ affecté reçoit.
+      const wanted = literalOf(annotation(param.annotations, 'Qualifier', 'Named'));
+      if (info && wanted) info.qualifier = wanted;
       if (!info && !fields.has(param.name)) {
         const created: FieldInfo = { type: param.type };
         if (property) created.property = property;
+        if (wanted) created.qualifier = wanted;
         if (target === undefined) fields.set(param.name, created);
       }
     }
@@ -652,6 +668,20 @@ function analyzeType(ctx: FileContext, decl: JavaTypeDecl): void {
     imports: ctx.java.imports,
   };
   if (ctx.java.package) detail.package = ctx.java.package;
+  // Le câblage Spring écrit : le bean demandé par chaque point d'injection, le nom de bean donné à la classe,
+  // les profils où elle existe. Ils départagent plusieurs implémentations d'un même type.
+  const qualifiers = [...fields.entries()].flatMap(([name, info]) =>
+    info.qualifier ? [`${name}:${info.qualifier}`] : [],
+  );
+  if (qualifiers.length > 0) detail.qualifiers = qualifiers;
+  const bean = literalOf(
+    annotation(decl.annotations, 'Service', 'Component', 'Repository', 'Named', 'Qualifier'),
+  );
+  if (bean) detail.bean = bean;
+  const profiles = (annotation(decl.annotations, 'Profile')?.args.value ?? [])
+    .map((value) => value.parts.map((part) => ('string' in part ? part.string : '')).join(''))
+    .filter(Boolean);
+  if (profiles.length > 0) detail.profiles = profiles;
   // Une classe abstraite n'est jamais l'objet injecté : seules ses sous-classes concrètes le sont.
   if (decl.modifiers.includes('abstract')) detail.abstract = true;
   if (decl.extends.length > 0) detail.extends = decl.extends.map((e) => e.text);

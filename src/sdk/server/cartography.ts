@@ -399,7 +399,15 @@ export async function startScan(
         config,
         allowedRoots,
         incremental,
-        ...(previous ? { previous: { facts: previous.facts, sources: previous.model.scan.sources } } : {}),
+        ...(previous
+          ? {
+              previous: {
+                facts: previous.facts,
+                sources: previous.model.scan.sources,
+                model: previous.model,
+              },
+            }
+          : {}),
         signal: controller.signal,
         ...(maven ? { maven } : {}),
         ...(git

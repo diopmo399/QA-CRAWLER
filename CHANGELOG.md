@@ -4,6 +4,41 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Cartographie : second lot du moteur de reconstruction des flux (statique)
+
+- Mesure : `scan.resolution` compte les liens par confiance, les relations non raccordées par cause, les
+  interruptions de chaîne par code et les questions posées au vérificateur de types.
+- Imports par alias de chemin (`tsconfig` : `paths`, `baseUrl`, `extends`) et fichiers barils ; diagnostic
+  `CLASS_AMBIGUOUS` quand rien ne départage deux classes de même nom.
+- Gardes de pipe négatives et combinées (`!==`, `!includes`, `&&`) ; valeur inconnue bornée par son type
+  écrit (union, enum, champ discriminant), suivie pour chaque valeur admise comme une possibilité.
+- NgRx : actions, groupes d'actions, effets (`ofType`, actions rendues au store), réducteurs, sélecteurs
+  reliés au réducteur de leur clé, `ComponentStore`.
+- Signaux Angular : `signal`, `computed`, `effect`, `toSignal`, `toObservable`.
+- Injection Angular : fournisseurs (`useClass`, `useExisting`, `useFactory`), jetons, portée d'un
+  fournisseur de composant, intercepteurs HTTP listés sur chaque appel.
+- Récepteurs sans injection (`new`, type écrit, type de retour) et second avis du vérificateur de types
+  TypeScript sur la source seule, borné.
+- Java : `@Qualifier`, nom de bean écrit, `@Profile`.
+- Tenue en charge : 1 024 contextes par méthode générique, durées proportionnelles au nombre de fichiers,
+  graphe repris quand rien n'a changé (`scan.graphReused` : 6,0 s → 1,7 s à 500 000 lignes).
+- Version d'analyseur `cartography-13;rxjs-8`. Détail, mesures et limites : `docs/audits/flow-engine-audit.md`.
+
+### Cartographie : complément du moteur de reconstruction des flux (statique)
+
+- Audit par l'exemple : 23 parcours représentatifs (`tests/fixtures/flow-engine`), 10 justes avant, 23
+  après ; l'épreuve à 500 000 lignes reste à 1 200 / 1 200, graphe identique, sans perte de temps.
+- La garde par type d'un pipe est lue où qu'elle soit : après un `map` (objet recopié, champ réécrit),
+  après `withLatestFrom`, dans une fonction nommée, une méthode ou un opérateur maison paramétré.
+- Une émission faite dans un pipe (`tap(() => this.actions.next(…))`) est une émission : un effet en
+  déclenche un autre. Un `dispatch(action)` qui se contente d'émettre est suivi par type.
+- Appels indirects : fonction utilitaire qui reçoit le store, référence de méthode passée en rappel
+  (confirmée si la méthode qui la reçoit l'appelle, probable sinon).
+- Héritage : une méthode héritée est suivie pour la classe réelle du récepteur ; une méthode abstraite
+  garde toutes ses implémentations comme candidates ; les dépendances, clients HTTP et flux d'une classe
+  de base sont connus des sous-classes.
+- Version d'analyseur `cartography-11;rxjs-6`. Détail : `docs/audits/flow-engine-audit.md`.
+
 ### Cartographie : TraceGraph V2 (liens gardés, identité des classes, sens du flux)
 
 - Une relation lue mais non raccordée au graphe n'est plus supprimée sans trace : elle est gardée comme

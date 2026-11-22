@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@c14/*": ["src/app/c14/*"],
+      "@c14-shared": ["src/app/c14/shared/index.ts"]
+    }
+  }
+}

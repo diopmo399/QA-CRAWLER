@@ -167,6 +167,10 @@ export async function readSource(
   const ordered = [...new Set(candidates)].sort(
     (a, b) => tierOf(a) - tierOf(b) || (a < b ? -1 : a > b ? 1 : 0),
   );
+  // La durée par défaut suit le nombre de fichiers à lire (10 ms par fichier, jamais moins que la borne) : un
+  // grand dépôt sur un disque lent n'est pas coupé à mi-lecture. Une borne donnée par l'appelant est tenue.
+  const maxDurationMs =
+    limits === DEFAULT_LIMITS ? Math.max(limits.maxDurationMs, ordered.length * 10) : limits.maxDurationMs;
   for (const file of ordered) {
     if (signal?.aborted) break;
     if (files.length >= limits.maxFiles) {
@@ -175,10 +179,10 @@ export async function readSource(
       limitNotes.add(`file limit reached (${String(limits.maxFiles)})`);
       continue;
     }
-    if (now() - started > limits.maxDurationMs) {
+    if (now() - started > maxDurationMs) {
       skipped++;
       cut.push(path.relative(root, file).split(path.sep).join('/'));
-      limitNotes.add(`duration limit reached (${String(limits.maxDurationMs)} ms)`);
+      limitNotes.add(`duration limit reached (${String(maxDurationMs)} ms)`);
       continue;
     }
     const info = await stat(file).catch(() => undefined);

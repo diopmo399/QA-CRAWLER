@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { ClassIdentity } from '../static-analysis/class-identity.js';
 import { buildStaticGraph } from '../static-analysis/graph-builder.js';
+import { isTsConfig } from '../static-analysis/module-resolution.js';
 import { sourceSetOf } from '../static-analysis/source-set.js';
 import { loadTypeScript, type TypeScriptModule } from '../static-analysis/typescript-loader.js';
 import { analyzeRxjs } from './analyze-rxjs.js';
@@ -89,7 +90,10 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
   );
   // Une identité des classes commune aux trois analyses (graphe statique, flux RxJS, gabarits) : elles
   // désignent un composant ou un service homonyme de la même façon.
-  const identity = new ClassIdentity(relevant);
+  const identity = new ClassIdentity(
+    relevant,
+    files.filter((file) => isTsConfig(file.path)),
+  );
   const graph = buildStaticGraph(ts, sources, {
     classIdentity: identity,
     applicationId: 'cartography',
@@ -107,7 +111,8 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
     // Le budget suit le volume lu (environ un nœud pour deux caractères, jamais moins de 2 millions) : une
     // grande application est analysée en entier ; un budget épuisé est signalé et rend la source partielle.
     maxAstNodes: Math.max(2_000_000, Math.ceil(relevant.reduce((sum, f) => sum + f.text.length, 0) / 2)),
-    maxDurationMs: 120_000,
+    // La durée suit aussi le nombre de fichiers (40 ms par fichier, jamais moins de deux minutes).
+    maxDurationMs: Math.max(120_000, relevant.length * 40),
   });
   const texts = new Map(files.map((file) => [file.path, file.text]));
   const fields: UiField[] = graph.fields.map((field) => {
@@ -194,11 +199,14 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
         const stream = rx.streamOf(el.component, m.root, m.path);
         if (!stream) continue;
         const at = states.findIndex((st) => st.component === el.component && st.member === m.root);
+        // Un signal est aussi un flux : les méthodes qui l'écrivent (set, update) restent ses producteurs.
+        const writers = at >= 0 ? states[at]?.writers : undefined;
         const state: UiState = {
           component: el.component,
           member: m.root,
           kind: 'STREAM',
           stream,
+          ...(writers ? { writers } : {}),
           loc: cond.loc,
         };
         if (at >= 0) states[at] = state;
@@ -246,6 +254,8 @@ export async function analyzeAngular(root: string, files: readonly ReadFile[]): 
     ...(proxies.length ? { proxies } : {}),
     ...(angular.variants.length ? { variants: angular.variants } : {}),
     ...(rx.environment.length ? { environment: rx.environment } : {}),
+    ...(rx.interceptors.length ? { interceptors: rx.interceptors } : {}),
+    ...(rx.inference.asked > 0 ? { inference: rx.inference } : {}),
     warnings: [...graph.warnings, ...structure.warnings, ...rx.warnings],
   };
 }
