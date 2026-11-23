@@ -306,7 +306,7 @@ export function rightFor(segments: readonly string[], method: string): Right {
       // renommer, fusionner, associer : décider ; calculer un impact ne change rien.
       return item === 'config'
         ? 'MANAGE_PROJECTS'
-        : item === 'scans' || item === 'investigations'
+        : item === 'scans' || item === 'investigations' || (item === 'risks' && segments[6] === 'verify')
           ? 'RUN'
           : item === 'impact'
             ? 'VIEW'

@@ -32,6 +32,8 @@ export default tseslint.config(
       'tests/fixtures/flow-engine/',
       // Les onglets Angular analysés par la cartographie (dépendances absentes).
       'tests/fixtures/cartography-tabs/',
+      // Le moteur de risques : application Angular et backend Spring analysés (dépendances absentes).
+      'tests/fixtures/risk/',
       'tests/fixtures/cartography-flow/',
       'tests/fixtures/cartography-entry/',
       'tests/fixtures/cartography-contract/',

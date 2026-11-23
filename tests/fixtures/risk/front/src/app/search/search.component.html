@@ -1,0 +1,8 @@
+<section class="search">
+  <input type="search" (input)="search($any($event.target).value)" />
+  <input type="search" (input)="type($any($event.target).value)" />
+  <button type="button" (click)="refresh()">Rafraîchir</button>
+  @for (c of live$ | async; track c.id) {
+    <p>{{ c.name }}</p>
+  }
+</section>

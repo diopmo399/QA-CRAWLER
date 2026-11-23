@@ -1,0 +1,9 @@
+<section class="orders">
+  @if (current$ | async; as current) {
+    <p>{{ current.total }}</p>
+  }
+  <button type="button" [disabled]="loading" (click)="save()">Enregistrer</button>
+  <button type="button" [disabled]="saving" (click)="saveSafely()">Enregistrer (sûr)</button>
+  <button type="button" (click)="submit()">Soumettre</button>
+  <button type="button" (click)="reload()">Recharger</button>
+</section>

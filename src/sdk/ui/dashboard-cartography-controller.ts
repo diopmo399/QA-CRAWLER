@@ -25,6 +25,8 @@ import {
 } from '../core/cartography.js';
 import { defaultGoal, INV_TABS, type InvTab } from './dashboard-cartography-investigation.js';
 import type { QaCrawlerClient } from '../core/client.js';
+import type { Risk, RiskCategory, RiskSeverity, RiskStatus } from '../core/risk.js';
+import { riskNotice } from './dashboard-cartography-risks.js';
 import { API_TABS, type ApiTab } from './dashboard-cartography-apis.js';
 import { readIds } from './dashboard-cartography-graph.js';
 import { explainSaveError, issueCount, sourceIssues } from './dashboard-cartography-scan.js';
@@ -579,6 +581,11 @@ export class CartographyController {
       await this.loadUnresolved();
       return;
     }
+    if (this.ui.tab === 'risks') {
+      await this.loadRisks();
+      if (this.ui.risk) await this.loadRisk(this.ui.risk.id);
+      return;
+    }
     if (this.ui.tab === 'journey') {
       if (!this.ui.features) await this.loadFeatures();
       if (!this.ui.feature && this.ui.features?.items[0]) this.ui.feature = this.ui.features.items[0].id;
@@ -613,6 +620,66 @@ export class CartographyController {
       ui.unresolved = page;
       ui.uPage = page.page;
     }
+  }
+
+  /** Les risques d'anomalies du dernier scan (une page filtrée et le résumé). */
+  private async loadRisks(): Promise<void> {
+    const ui = this.ui;
+    const minConfidence = Number(ui.rConf);
+    const page = await this.fetch('risks', (api, id, signal) =>
+      api.cartography.risks(
+        id,
+        {
+          page: ui.rPage,
+          size: ui.risks?.size ?? 25,
+          ...(ui.rCategory ? { category: ui.rCategory as RiskCategory } : {}),
+          ...(ui.rSeverity ? { severity: ui.rSeverity as RiskSeverity } : {}),
+          ...(ui.rStatus ? { status: ui.rStatus as RiskStatus } : {}),
+          ...(ui.rLayer ? { layer: ui.rLayer as MapLayer } : {}),
+          ...(ui.rFeature ? { feature: ui.rFeature } : {}),
+          ...(minConfidence > 0 ? { minConfidence } : {}),
+          ...(ui.rQuery.trim() ? { q: ui.rQuery.trim() } : {}),
+          ...(ui.rSuppressed ? { suppressed: true } : {}),
+        },
+        { signal },
+      ),
+    );
+    if (page) {
+      ui.risks = page;
+      ui.rPage = page.page;
+    }
+  }
+
+  /** Le détail d'un risque et son impact à la profondeur choisie. */
+  private async loadRisk(id: string): Promise<void> {
+    const ui = this.ui;
+    const risk = await this.fetch('risk', (api, project, signal) =>
+      api.cartography.risk(project, id, { signal }),
+    );
+    if (!risk) return;
+    ui.risk = risk;
+    ui.riskImpact = undefined;
+    if (ui.rDepth > 5) {
+      const impact = await this.fetch('risk', (api, project, signal) =>
+        api.cartography.riskImpact(project, id, ui.rDepth, { signal }),
+      );
+      if (impact) ui.riskImpact = impact;
+    }
+  }
+
+  /** Une action sur le risque ouvert (vérification, suppression) : le risque rendu remplace l'ancien, la liste est relue. */
+  private async riskAction(
+    run: (api: QaCrawlerClient, project: string, id: string) => Promise<Risk>,
+    notice: string,
+  ): Promise<void> {
+    const id = this.ui.risk?.id;
+    if (!id) return;
+    const risk = await this.fetch('risk', (api, project) => run(api, project, id));
+    if (!risk) return;
+    this.ui.risk = risk;
+    this.ui.rForm = undefined;
+    this.ui.rNotice = notice;
+    await this.loadRisks();
   }
 
   /** Parcours & Graphe : la carte de la fonctionnalité ouverte (une page de relations selon les critères). */
@@ -1618,6 +1685,64 @@ export class CartographyController {
       case 'map-feature':
         this.selectFeature(target.dataset.feature ?? '');
         return true;
+      case 'map-r-open': {
+        const id = target.dataset.risk ?? '';
+        if (!id) return true;
+        ui.rDepth = 5;
+        ui.rForm = undefined;
+        ui.rNotice = undefined;
+        ui.risk = ui.risks?.items.find((r) => r.id === id) ?? ui.risk;
+        void this.run(() => this.loadRisk(id));
+        return true;
+      }
+      case 'map-r-close':
+        ui.risk = undefined;
+        ui.riskImpact = undefined;
+        ui.rForm = undefined;
+        ui.rNotice = undefined;
+        this.host.paint();
+        return true;
+      case 'map-r-expand': {
+        const id = ui.risk?.id;
+        if (!id) return true;
+        ui.rDepth = Math.min(10, ui.rDepth + 2);
+        void this.run(async () => {
+          const impact = await this.fetch('risk', (api, project, signal) =>
+            api.cartography.riskImpact(project, id, ui.rDepth, { signal }),
+          );
+          if (impact) ui.riskImpact = impact;
+        });
+        return true;
+      }
+      case 'map-r-form': {
+        const form = target.dataset.form;
+        ui.rForm = form === 'test' || form === 'suppress' ? form : undefined;
+        ui.rNotice = undefined;
+        this.host.paint();
+        return true;
+      }
+      case 'map-r-verify': {
+        void this.run(() =>
+          this.riskAction(
+            (api, project, id) => api.cartography.verifyRisk(project, id, { method: 'STATE_SIMULATION' }),
+            riskNotice(this.host.state.t.locale, 'riskVerified'),
+          ),
+        );
+        return true;
+      }
+      case 'map-r-unsuppress': {
+        void this.run(() =>
+          this.riskAction(
+            (api, project, id) => api.cartography.suppressRisk(project, id, { reason: '' }),
+            riskNotice(this.host.state.t.locale, 'riskUnsuppressed'),
+          ),
+        );
+        return true;
+      }
+      case 'map-r-rules':
+        // Le panneau se replie de lui-même (élément natif) : l'état suit, sans redessin.
+        ui.rRules = !(target.closest('details')?.open ?? false);
+        return true;
       case 'map-reuse-open':
         this.selectFeature(target.dataset.feature ?? '', target.dataset.concept);
         return true;
@@ -1669,6 +1794,9 @@ export class CartographyController {
         } else if (list === 'unresolved') {
           ui.uPage = page;
           void this.run(() => this.loadUnresolved());
+        } else if (list === 'risks') {
+          ui.rPage = page;
+          void this.run(() => this.loadRisks());
         }
         return true;
       }
@@ -1900,6 +2028,43 @@ export class CartographyController {
       if (ui.api && name) void this.decide({ kind: 'RENAME_API', target: ui.api, value: name });
       return true;
     }
+    if (form.dataset.action === 'map-r-suppress' || form.dataset.action === 'map-r-test') {
+      const data = new FormData(form);
+      const text = (key: string): string => {
+        const value = data.get(key);
+        return typeof value === 'string' ? value.trim() : '';
+      };
+      const notice = (key: Parameters<typeof riskNotice>[1]): string =>
+        riskNotice(this.host.state.t.locale, key);
+      if (form.dataset.action === 'map-r-suppress') {
+        const reason = text('reason');
+        if (reason)
+          void this.run(() =>
+            this.riskAction(
+              (api, project, id) => api.cartography.suppressRisk(project, id, { reason }),
+              notice('riskSuppressed'),
+            ),
+          );
+        return true;
+      }
+      const outcome = text('outcome');
+      const observed = text('observed');
+      const expected = text('expected');
+      if (observed && (outcome === 'REPRODUCED' || outcome === 'REFUTED' || outcome === 'INCONCLUSIVE'))
+        void this.run(() =>
+          this.riskAction(
+            (api, project, id) =>
+              api.cartography.verifyRisk(project, id, {
+                method: 'EXTERNAL_TEST',
+                outcome,
+                observed,
+                ...(expected ? { expected } : {}),
+              }),
+            notice('riskRecorded'),
+          ),
+        );
+      return true;
+    }
     if (form.dataset.action === 'map-field-link') {
       if (ui.field && ui.fieldLinkDraft)
         void this.decide({ kind: 'LINK_FIELD', target: ui.field, value: ui.fieldLinkDraft });
@@ -2038,6 +2203,43 @@ export class CartographyController {
       ui.uPage = 1;
       if (name === 'u-q') this.searchLater(() => this.loadUnresolved());
       else void this.run(() => this.loadUnresolved());
+      return true;
+    }
+    if (name.startsWith('r-') && name !== 'r-rule') {
+      const key = (
+        {
+          'r-category': 'rCategory',
+          'r-severity': 'rSeverity',
+          'r-status': 'rStatus',
+          'r-layer': 'rLayer',
+          'r-feature': 'rFeature',
+          'r-conf': 'rConf',
+          'r-q': 'rQuery',
+        } as const
+      )[name as 'r-q'];
+      if (name === 'r-suppressed') ui.rSuppressed = checked;
+      else ui[key] = value;
+      ui.rPage = 1;
+      if (name === 'r-q') this.searchLater(() => this.loadRisks());
+      else void this.run(() => this.loadRisks());
+      return true;
+    }
+    if (name === 'r-rule') {
+      const rules = ui.risks?.summary.rules ?? [];
+      const disabled = rules.filter((r) => (r.id === value ? !checked : !r.enabled)).map((r) => r.id);
+      void this.run(async () => {
+        const summary = await this.fetch('risks', (api, project) =>
+          api.cartography.riskRules(project, { disabled }),
+        );
+        if (summary) await this.loadRisks();
+      });
+      return true;
+    }
+    if (name === 'risks-size') {
+      ui.rPage = 1;
+      const size = Number(value) || 25;
+      if (ui.risks) ui.risks = { ...ui.risks, size };
+      void this.run(() => this.loadRisks());
       return true;
     }
     if (name === 'unresolved-size') {

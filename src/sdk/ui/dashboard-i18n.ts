@@ -9,6 +9,7 @@ const fr = {
     incidents: 'Investiguer',
     requirements: 'Exigences',
     measure: 'Mesurer',
+    quality: 'Qualité',
     admin: 'Administrer',
   },
   nav: {
@@ -20,6 +21,7 @@ const fr = {
     recordings: 'Enregistrements',
     library: 'Bibliothèque',
     cartography: 'Cartographie',
+    risks: 'Risques d’anomalies',
     tests: 'Tests générés',
     editor: 'Éditeur',
     explorations: 'Explorations',
@@ -2265,6 +2267,7 @@ const en: DashboardStrings = {
     incidents: 'Investigate',
     requirements: 'Requirements',
     measure: 'Measure',
+    quality: 'Quality',
     admin: 'Administer',
   },
   nav: {
@@ -2276,6 +2279,7 @@ const en: DashboardStrings = {
     recordings: 'Recordings',
     library: 'Library',
     cartography: 'Functional map',
+    risks: 'Anomaly risks',
     tests: 'Generated tests',
     editor: 'Editor',
     explorations: 'Explorations',

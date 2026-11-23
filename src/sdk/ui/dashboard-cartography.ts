@@ -49,6 +49,7 @@ import { impactView, SCAN_CSS, scanView, type ScanViewHelpers } from './dashboar
 import { CONCEPT_CSS, conceptDiagrams } from './dashboard-cartography-concept.js';
 import { emptyJourney, JOURNEY_CSS, journeyTab, type JourneyState } from './dashboard-cartography-journey.js';
 import { emptyUnresolved, unresolvedTab, type UnresolvedUi } from './dashboard-cartography-unresolved.js';
+import { emptyRisks, RISKS_CSS, risksTab, type RisksUi } from './dashboard-cartography-risks.js';
 import { header, icon } from './dashboard-parts.js';
 import type { DashboardState } from './dashboard-view.js';
 import { esc } from './view.js';
@@ -72,6 +73,7 @@ export const MAP_TABS = [
   'trace',
   'unresolved',
   'impact',
+  'risks',
 ] as const;
 export type MapTab = (typeof MAP_TABS)[number];
 export const CENTER_TABS = ['summary', 'fields', 'trace', 'reuse', 'scenarios'] as const;
@@ -121,10 +123,12 @@ export type MapPane =
   | 'conditions'
   | 'actions'
   | 'journey'
-  | 'unresolved';
+  | 'unresolved'
+  | 'risks'
+  | 'risk';
 
 /** Parcours & Graphe (JourneyState) : la carte de la fonctionnalité ouverte, sa vue, ses critères, l'élément choisi. */
-export interface CartographyUi extends JourneyState, UnresolvedUi {
+export interface CartographyUi extends JourneyState, UnresolvedUi, RisksUi {
   tab: MapTab;
   summary?: MapSummary;
   loading: Partial<Record<MapPane, boolean>>;
@@ -278,6 +282,7 @@ export interface CartographyUi extends JourneyState, UnresolvedUi {
 export const emptyCartographyUi = (): CartographyUi => ({
   ...emptyJourney(),
   ...emptyUnresolved(),
+  ...emptyRisks(),
   tab: 'overview',
   loading: {},
   errors: {},
@@ -450,6 +455,7 @@ const TAB_ICON: Record<MapTab, string> = {
   apis: 'code',
   structure: 'grid',
   impact: 'trends',
+  risks: 'alert',
 };
 
 export function cartographyView(input: DashboardState): string {
@@ -536,6 +542,21 @@ export function cartographyView(input: DashboardState): string {
       loading: ui.loading.unresolved === true,
       ...(ui.errors.unresolved ? { error: ui.errors.unresolved } : {}),
       paneError,
+    });
+  else if (ui.tab === 'risks')
+    content = risksTab(ui, {
+      locale: state.t.locale === 'en' ? 'en' : 'fr',
+      evidence: (e) => evidenceButton(m, e, state),
+      pager: (list, page, sizes) => pager(m, list, page, sizes),
+      spinner: () => spinner(m),
+      paneError,
+      loading: ui.loading.risks === true,
+      detailLoading: ui.loading.risk === true,
+      ...(ui.errors.risks ? { error: ui.errors.risks } : {}),
+      ...(ui.errors.risk ? { detailError: ui.errors.risk } : {}),
+      canRun: can(state, 'RUN') && state.project?.state !== 'ARCHIVED',
+      canDecide: can(state, 'DECIDE') && state.project?.state !== 'ARCHIVED',
+      features: (ui.features?.items ?? []).map((f) => ({ id: f.id, name: f.name })),
     });
   else if (ui.tab === 'fields') content = fieldsTab(m, state);
   else if (ui.tab === 'coverage') content = coverageTab(m, state, summary);
@@ -1444,7 +1465,7 @@ function evidencePanel(m: MapStrings, ui: CartographyUi): string {
   return `<aside class="map-ev" role="dialog" aria-label="${esc(e ? m.evidenceTitle(e.file, e.line) : m.evidence)}"><div class="card-h"><h2 class="mono">${esc(e ? `${e.source} · ${m.evidenceTitle(e.file, e.line)}` : m.evidence)}</h2><button class="btn small ghost icon-only" data-action="map-evidence-close" aria-label="${esc(m.closeEvidence)}">${icon('close')}</button></div>${code}</aside>`;
 }
 
-export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}${SCAN_CSS}${INVESTIGATION_CSS}${JOURNEY_CSS}${CONCEPT_CSS}
+export const CARTOGRAPHY_CSS = `${GRAPH_CSS}${RISKS_CSS}${APIS_CSS}${LANES_CSS}${STRUCTURE_CSS}${SCAN_CSS}${INVESTIGATION_CSS}${JOURNEY_CSS}${CONCEPT_CSS}
 .sd-note{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sd-note span{flex:1 1 auto}
 .map{display:flex;flex-direction:column;gap:14px}
 .map-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}

@@ -256,6 +256,7 @@ const NAV: { section: NavSection; items: NavView[] }[] = [
   { section: 'incidents', items: ['incidents', 'investigations'] },
   { section: 'requirements', items: ['requirements', 'traceability', 'sources'] },
   { section: 'measure', items: ['indicators', 'trends'] },
+  { section: 'quality', items: ['risks'] },
   { section: 'admin', items: ['environments', 'access'] },
 ];
 
@@ -287,13 +288,15 @@ export function activeNav(route: DashboardRoute): NavView {
 
 export function renderDashboard(state: DashboardState): string {
   const t = state.t;
-  const active = activeNav(state.route);
+  // « Risques d'anomalies » est un onglet de la cartographie, rangé dans le menu sous Qualité.
+  const active =
+    state.route.view === 'cartography' && state.map?.tab === 'risks' ? 'risks' : activeNav(state.route);
   const sections = NAV.map(
     ({ section, items }) =>
       `<div class="sec"><div class="sec-t">${esc(t.sections[section])}</div>${items
         .map(
           (view) =>
-            `<a href="#" data-action="nav" data-view="${view}" ${active === view ? 'aria-current="page"' : ''}>${view === 'incidents' ? incidentIcon() : view === 'investigations' ? icon('search') : icon(view)}<span>${esc(t.nav[view])}</span>${view === 'requirements' && state.req.repository && state.req.repository.pending > 0 ? `<span class="badge" aria-label="${esc(t.req.repoSub(state.req.repository.entities.length, state.req.repository.pending))}">${String(state.req.repository.pending)}</span>` : ''}</a>`,
+            `<a href="#" data-action="nav" data-view="${view}" ${active === view ? 'aria-current="page"' : ''}>${view === 'incidents' ? incidentIcon() : view === 'investigations' ? icon('search') : view === 'risks' ? icon('alert') : icon(view)}<span>${esc(t.nav[view])}</span>${view === 'requirements' && state.req.repository && state.req.repository.pending > 0 ? `<span class="badge" aria-label="${esc(t.req.repoSub(state.req.repository.entities.length, state.req.repository.pending))}">${String(state.req.repository.pending)}</span>` : ''}</a>`,
         )
         .join('')}</div>`,
   ).join('');

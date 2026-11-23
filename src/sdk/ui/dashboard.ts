@@ -2296,7 +2296,13 @@ export class QaCrawlerDashboard extends Base {
         const projectId = this.contextProject();
         if (view === 'projects') this.navigate({ view: 'projects' });
         else if (view === 'access') this.navigate({ view: 'access' });
-        else if (view === 'trends')
+        else if (view === 'risks' || (view === 'cartography' && this.state.map?.tab === 'risks')) {
+          // Les risques sont un onglet de la cartographie (menu Qualité) ; revenir à la cartographie quitte l'onglet.
+          const tab = view === 'risks' ? 'risks' : 'overview';
+          if (this.state.map) this.state.map.tab = tab;
+          if (projectId) this.navigate({ view: 'cartography', projectId, tab });
+          else this.navigate({ view: 'projects' });
+        } else if (view === 'trends')
           this.navigate({
             view: 'trends',
             ...(this.state.projectId ? { projectId: this.state.projectId } : {}),

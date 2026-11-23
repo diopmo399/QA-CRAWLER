@@ -136,6 +136,17 @@ import type {
   MapSource,
   ScanRecord,
 } from './cartography.js';
+import type {
+  Risk,
+  RiskImpact,
+  RiskPage,
+  RiskQuery,
+  RiskRulesInput,
+  RiskSummary,
+  RiskSuppressInput,
+  RiskVerification,
+  RiskVerifyInput,
+} from './risk.js';
 import type { Journey, JourneyCheck, JourneySummary } from './journey.js';
 import type { JourneyPreview } from './journey-loop.js';
 import type { JourneyTraceability } from './journey-trace.js';
@@ -571,6 +582,31 @@ export interface QaCrawlerClient {
      * présentées comme des liens du parcours. Critères : `type` (sorte de relation), `status` (cause), `q`.
      */
     unresolved(projectId: string, query?: MapListQuery, options?: MapRequestOptions): Promise<UnresolvedPage>;
+    /**
+     * Les risques d'anomalies du dernier scan (ou de `query.scan`) : une page filtrée et le résumé (comptes,
+     * règles, métriques, évolution face au scan précédent). Chaque risque est une hypothèse étayée.
+     */
+    risks(projectId: string, query?: RiskQuery, options?: MapRequestOptions): Promise<RiskPage>;
+    /** Un risque complet : preuves, hypothèses, inconnues, impact, vérifications, test proposé. */
+    risk(projectId: string, id: string, options?: MapRequestOptions): Promise<Risk>;
+    /** L'impact d'un risque, développé jusqu'à `depth` (au plus 10). */
+    riskImpact(
+      projectId: string,
+      id: string,
+      depth?: number,
+      options?: MapRequestOptions,
+    ): Promise<RiskImpact>;
+    riskVerifications(
+      projectId: string,
+      id: string,
+      options?: MapRequestOptions,
+    ): Promise<{ verifications: RiskVerification[]; testPlan: string[]; verifiable: boolean }>;
+    /** Vérifier : simulation sur les faits, ou résultat déclaré d'un test exécuté dans le projet. */
+    verifyRisk(projectId: string, id: string, input?: RiskVerifyInput): Promise<Risk>;
+    /** Supprimer (faux positif, comportement voulu) avec une raison ; une raison vide lève la suppression. */
+    suppressRisk(projectId: string, id: string, input: RiskSuppressInput): Promise<Risk>;
+    /** Activer ou désactiver des règles. */
+    riskRules(projectId: string, input: RiskRulesInput): Promise<RiskSummary>;
     /** Une page des champs d'une seule fonctionnalité. */
     featureFields(
       projectId: string,
@@ -1446,6 +1482,40 @@ export function createQaCrawler(options: ClientOptions): QaCrawlerClient {
           undefined,
           mapOptions.signal,
         ),
+      risks: (projectId, query = {}, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/risks${queryString({ ...query, suppressed: query.suppressed ? 'true' : undefined })}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      risk: (projectId, id, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/risks/${encodeURIComponent(id)}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      riskImpact: (projectId, id, depth, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/risks/${encodeURIComponent(id)}/impact${depth ? `?depth=${String(depth)}` : ''}`,
+          undefined,
+          mapOptions.signal,
+        ),
+      riskVerifications: (projectId, id, mapOptions = {}) =>
+        request(
+          'GET',
+          `${project(projectId)}/cartography/risks/${encodeURIComponent(id)}/verifications`,
+          undefined,
+          mapOptions.signal,
+        ),
+      verifyRisk: (projectId, id, input = {}) =>
+        request('POST', `${project(projectId)}/cartography/risks/${encodeURIComponent(id)}/verify`, input),
+      suppressRisk: (projectId, id, input) =>
+        request('POST', `${project(projectId)}/cartography/risks/${encodeURIComponent(id)}/suppress`, input),
+      riskRules: (projectId, input) =>
+        request('POST', `${project(projectId)}/cartography/risks/rules`, input),
       featureMap: (projectId, id, query = {}, mapOptions = {}) =>
         request(
           'GET',

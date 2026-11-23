@@ -4,6 +4,41 @@ Versions selon [SemVer](https://semver.org). `@qa-crawler/core` et `@qa-crawler/
 
 ## Unreleased
 
+### Qualité → Risques d'anomalies
+
+- Nouveau moteur déterministe (sans LLM) qui signale des risques d'anomalie avant toute erreur observée.
+  Il s'appuie sur les faits lus dans le code (AST TypeScript/Angular, analyse Java) et sur le graphe de la
+  cartographie. 17 règles extensibles, qu'on peut désactiver une à une :
+  - état partagé : valeur conservée, mutation en place, remise à zéro partielle, onglets, alias ;
+  - asynchrone : course, réponse périmée, suite perdue, chaîne cassée, indicateur de chargement bloqué,
+    souscription dupliquée ;
+  - ressources : souscription non libérée, écouteur/intervalle non libérés ;
+  - erreurs : HTTP sans suite d'erreur ;
+  - backend Spring : état mutable de singleton, exception avalée, écritures sans transaction.
+- Chaque risque porte :
+  - un statut (potentiel, corroboré, reproduit, réfuté, inconclusif) ;
+  - une confiance chiffrée et expliquée, distincte de la sévérité ;
+  - ses preuves, avec leur source, leur méthode, leur fiabilité et leur relation ;
+  - ses hypothèses, ses inconnues et ses limites ;
+  - les fonctionnalités impactées et un graphe d'impact borné (Source → Donnée → État → Consommateurs →
+    Aval → Fonctionnalités) ;
+  - une correction suggérée et un test ciblé proposé.
+- Vérification :
+  - Une simulation des transitions peut corroborer ou réfuter un risque, jamais le reproduire.
+  - Sans attendu métier, un état conservé reste inconclusif.
+  - Seul le résultat déclaré d'un test exécuté dans le projet peut faire passer un risque à « reproduit ».
+  - Une vérification devient périmée quand le code change.
+  - Une suppression demande une raison, gardée avec son auteur.
+- API :
+  - `GET /cartography/risks` (critères et résumé), `/risks/:id`, `/:id/impact?depth=`, `/:id/evidence` et
+    `/:id/verifications` ;
+  - `POST /:id/verify`, `/:id/suppress` et `/risks/rules`.
+  - Un rapport est persisté par scan, avec l'évolution par rapport au scan précédent.
+- Écran « Qualité → Risques d'anomalies » : indicateurs, répartitions, critères de recherche, liste, détail en sections,
+  graphe d'impact développable, réglage des règles.
+- La version des analyseurs passe à `risk-1`, ce qui déclenche une relecture unique des sources au prochain
+  scan : c'est la migration des scans existants.
+
 ### Cartographie : « Graphe seul » pour voir tout le graphe en couloirs
 
 - Nouveau bouton « Graphe seul » dans la barre du graphe en couloirs (API & Services, Structure & Conditions) :

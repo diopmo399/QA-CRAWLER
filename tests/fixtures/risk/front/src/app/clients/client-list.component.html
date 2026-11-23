@@ -1,0 +1,7 @@
+<section class="clients">
+  @for (client of clients$ | async; track client.id) {
+    <button type="button" (click)="open(client)">Ouvrir</button>
+  }
+  <button type="button" (click)="rename('X')">Renommer</button>
+  <button type="button" (click)="forget()">Oublier</button>
+</section>

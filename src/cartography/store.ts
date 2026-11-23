@@ -8,6 +8,8 @@ import type {
   ScanRecord,
 } from '../sdk/core/cartography.js';
 import type { SourceFacts } from './facts.js';
+import type { RiskReport } from '../sdk/core/risk.js';
+import type { RiskState } from '../risk/engine.js';
 
 /**
  * LA PERSISTANCE DE LA CARTOGRAPHIE, dans le dossier du projet (`cartography/`) : la configuration des
@@ -194,4 +196,40 @@ export async function listInvestigations(projectDir: string): Promise<Investigat
     if (inv) out.push(inv);
   }
   return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+}
+
+// ── Moteur de risques : un rapport par scan, et les décisions des utilisateurs (gardées d'un scan à l'autre) ─
+
+const risksDir = (projectDir: string): string => path.join(dir(projectDir), 'risks');
+
+/** Le rapport de risques d'un scan (absent : à calculer). */
+export async function readRiskReport(projectDir: string, scanId: string): Promise<RiskReport | undefined> {
+  if (!/^scan-[\w-]{1,80}$/.test(scanId)) return undefined;
+  const raw = (await readJson(path.join(risksDir(projectDir), `${scanId}.json`)).catch(() => undefined)) as
+    RiskReport | undefined;
+  return raw?.schema === 1 && raw.scanId === scanId ? raw : undefined;
+}
+
+/** Écrit le rapport ; seuls ceux des scans encore gardés restent. */
+export async function writeRiskReport(projectDir: string, report: RiskReport): Promise<void> {
+  await writeJson(path.join(risksDir(projectDir), `${report.scanId}.json`), report, true);
+  const kept = new Set((await listScans(projectDir)).map((s) => s.id));
+  for (const name of await readdir(risksDir(projectDir)).catch(() => [] as string[]))
+    if (/^scan-[\w-]+\.json$/.test(name) && !kept.has(name.replace(/\.json$/, '')))
+      await rm(path.join(risksDir(projectDir), name), { force: true });
+}
+
+export async function readRiskState(projectDir: string): Promise<RiskState> {
+  const raw = (await readJson(path.join(dir(projectDir), 'risk-state.json')).catch(() => undefined)) as
+    Partial<RiskState> | undefined;
+  return {
+    schema: 1,
+    disabled: Array.isArray(raw?.disabled) ? raw.disabled : [],
+    suppressions: raw?.suppressions ?? {},
+    verifications: raw?.verifications ?? {},
+  };
+}
+
+export async function writeRiskState(projectDir: string, state: RiskState): Promise<void> {
+  await writeJson(path.join(dir(projectDir), 'risk-state.json'), state);
 }

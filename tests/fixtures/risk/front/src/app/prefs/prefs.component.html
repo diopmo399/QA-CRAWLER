@@ -1,0 +1,7 @@
+<section class="prefs">
+  <p>{{ theme$ | async }}</p>
+  @if (user$ | async; as user) {
+    <p class="user">{{ user }}</p>
+  }
+  <button type="button" (click)="pick('dark')">Sombre</button>
+</section>

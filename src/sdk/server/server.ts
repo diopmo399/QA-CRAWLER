@@ -260,6 +260,17 @@ import {
   saveConfig,
   startScan,
 } from './cartography.js';
+import {
+  listRisks,
+  riskDetail,
+  riskEvidence,
+  riskImpact,
+  riskQuery,
+  riskVerifications,
+  setRules as setRiskRules,
+  suppress as suppressRisk,
+  verify as verifyRiskOf,
+} from './risks.js';
 import type { GitPolicy } from '../../cartography/git-source.js';
 import type { MavenLimits, MavenOptions, MavenRemote } from '../../cartography/maven-resolve.js';
 import { AccessError, AccessStore, actionOf, can, rightFor, roleIn, type Identity } from './access.js';
@@ -4505,6 +4516,42 @@ async function handleCartography(
       refuseArchived(project);
       json(await addDecision(project, await readJson(request), authorOf(request)), 201);
       return;
+    }
+    // Les risques d'anomalies : liste filtrée, détail, preuves, impact développable, vérifications,
+    // suppression justifiée, réglage des règles.
+    if (part === 'risks') {
+      const scan = url.searchParams.get('scan') ?? undefined;
+      if (item === undefined && method === 'GET') {
+        json(await listRisks(project, riskQuery(url.searchParams)));
+        return;
+      }
+      if (item === 'rules' && action === undefined && method === 'POST') {
+        refuseArchived(project);
+        json(await setRiskRules(project, await readJson(request)));
+        return;
+      }
+      if (item !== undefined && method === 'GET') {
+        if (action === undefined) json(await riskDetail(project, item, scan));
+        else if (action === 'impact')
+          json(await riskImpact(project, item, queryNumber(url.searchParams.get('depth'))));
+        else if (action === 'evidence') json(await riskEvidence(project, item));
+        else if (action === 'verifications') json(await riskVerifications(project, item));
+        else throw new HttpError(404, 'NOT_FOUND', 'no such route');
+        return;
+      }
+      if (item !== undefined && action === 'verify' && method === 'POST') {
+        refuseArchived(project);
+        json(
+          await verifyRiskOf(project, item, await readOptionalJson(request), authorOf(request).by ?? 'local'),
+        );
+        return;
+      }
+      if (item !== undefined && action === 'suppress' && method === 'POST') {
+        refuseArchived(project);
+        json(await suppressRisk(project, item, await readJson(request), authorOf(request).by ?? 'local'));
+        return;
+      }
+      throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'method not allowed');
     }
     // Les investigations : lancer, lister, lire, reprendre une branche, relancer sur le dernier scan.
     if (part === 'investigations') {

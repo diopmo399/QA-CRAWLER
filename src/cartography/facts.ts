@@ -694,6 +694,148 @@ export interface MavenFacts {
   warnings: string[];
 }
 
+/**
+ * LES FAITS DE RISQUE (lus dans l'AST, jamais devinés d'après un nom) : les données gardées et leur portée,
+ * leurs écritures et remises à zéro, les souscriptions et ce qui les borne, les indicateurs posés autour d'un
+ * traitement asynchrone, les ressources ouvertes, les pipes longue durée, les alias émis puis modifiés.
+ */
+export interface RiskHolder {
+  /** `Classe.membre`. */
+  id: string;
+  owner: string;
+  member: string;
+  kind: 'BEHAVIOR_SUBJECT' | 'REPLAY_SUBJECT' | 'SUBJECT' | 'SIGNAL' | 'FIELD';
+  ownerKind: 'COMPONENT' | 'SERVICE' | 'OTHER';
+  /** ROOT : un seul exemplaire pour l'application (providedIn root/platform/any) ; COMPONENT : fourni par un
+   * composant (détruit avec lui) ; PROVIDED : fourni par un module ou une route ; UNKNOWN : non démontré. */
+  scope: 'ROOT' | 'PROVIDED' | 'COMPONENT' | 'UNKNOWN';
+  /** La valeur initiale (texte borné). */
+  initial?: string;
+  /** Écrite ou relue dans un stockage du navigateur : persistance voulue par le code. */
+  persisted?: string;
+  /** Le membre lui-même est public (ni private, ni protected) : d'autres classes peuvent l'écrire. */
+  public?: boolean;
+  /** Les membres qui l'exposent (`selected$ = this.selected.asObservable()`). */
+  exposedAs?: string[];
+  loc: Loc;
+}
+
+export interface RiskWrite {
+  holder: string;
+  /** `Classe#méthode` qui écrit. */
+  by: string;
+  /** RESET : valeur initiale, null, vide ; VALUE : nouvelle valeur ; MUTATION : modification en place. */
+  value: 'RESET' | 'VALUE' | 'MUTATION';
+  how: 'NEXT' | 'ASSIGN' | 'SET' | 'UPDATE' | 'PROPERTY' | 'METHOD';
+  /** Écrite dans la suite d'un traitement asynchrone. */
+  async?: 'NEXT' | 'ERROR' | 'COMPLETE' | 'AFTER_AWAIT' | 'THEN';
+  text: string;
+  loc: Loc;
+}
+
+export interface RiskSubscription {
+  owner: string;
+  ownerKind: 'COMPONENT' | 'SERVICE' | 'OTHER';
+  /** `Classe#méthode` où la souscription est installée. */
+  method: string;
+  source: string;
+  /** HTTP (se termine), HOLDER (flux d'une donnée gardée), ROUTE, FORM, TIMER, EVENT, OTHER. */
+  sourceKind: 'HTTP' | 'HOLDER' | 'ROUTE' | 'FORM' | 'TIMER' | 'EVENT' | 'OTHER';
+  holder?: string;
+  operators: string[];
+  /** Ce qui la borne ou la libère : takeUntil, takeUntilDestroyed, take, first, unsubscribe… */
+  cleanup: string[];
+  errorHandled: boolean;
+  /** Ce que fait la suite : données écrites, membres affectés, appels. */
+  nextWrites: string[];
+  nextAssigns: string[];
+  nextCalls: string[];
+  /** Installée dans la suite d'une autre souscription (source de celle-ci). */
+  nestedIn?: RiskSubscription['sourceKind'];
+  /** Une souscription précédente gardée dans ce membre est libérée avant (garde contre les réponses obsolètes). */
+  replacesPrevious?: boolean;
+  loc: Loc;
+}
+
+/** Un membre posé à vrai avant un traitement asynchrone, et où il revient à faux. */
+export interface RiskFlag {
+  owner: string;
+  member: string;
+  method: string;
+  via: 'SUBSCRIBE' | 'AWAIT' | 'THEN';
+  resets: ('NEXT' | 'ERROR' | 'COMPLETE' | 'FINALIZE' | 'FINALLY' | 'CATCH' | 'AFTER_AWAIT' | 'SYNC')[];
+  /** Le traitement a une suite d'erreur (rappel error, catchError, catch) qui ne remet pas le membre. */
+  errorPath: boolean;
+  loc: Loc;
+}
+
+export interface RiskResource {
+  owner: string;
+  ownerKind: 'COMPONENT' | 'SERVICE' | 'OTHER';
+  method: string;
+  kind: 'LISTENER' | 'INTERVAL' | 'OBSERVER' | 'WEBSOCKET';
+  target: string;
+  /** Comment elle est libérée dans la classe (removeEventListener, clearInterval, disconnect, close). */
+  released?: string;
+  loc: Loc;
+}
+
+/** Un traitement longue durée (flux d'un store, effet) qui appelle HTTP par un opérateur d'aplatissement. */
+export interface RiskPipe {
+  owner: string;
+  /** `Classe.membre` (flux, effet) ou `Classe#méthode` (souscription). */
+  at: string;
+  source: string;
+  operators: string[];
+  flatten: string;
+  /** L'erreur est rattrapée DANS le flux interne (le flux externe survit). */
+  catchInner: boolean;
+  /** L'erreur est rattrapée seulement après l'aplatissement (le flux externe se termine). */
+  catchOuter: boolean;
+  loc: Loc;
+}
+
+/** Une valeur émise puis modifiée en place par la même méthode (les consommateurs voient la modification). */
+export interface RiskAlias {
+  by: string;
+  holder: string;
+  variable: string;
+  mutation: string;
+  loc: Loc;
+}
+
+export interface JavaRiskFacts {
+  /** Champs modifiables d'un bean singleton (ni final, ni injecté), écrits hors du constructeur. */
+  mutable: { cls: string; stereotype: string; field: string; type: string; writers: string[]; loc: Loc }[];
+  /** Exceptions rattrapées sans suite (bloc vide, journal seul, retour null). */
+  swallowed: {
+    cls: string;
+    method: string;
+    exception: string;
+    how: 'EMPTY' | 'LOG_ONLY' | 'RETURN_NULL';
+    loc: Loc;
+  }[];
+  /** Méthodes de service avec plusieurs écritures en base. */
+  writes: { cls: string; method: string; calls: string[]; transactional: boolean; loc: Loc }[];
+}
+
+export interface RiskFacts {
+  /** La version de l'analyseur (un changement fait relire la source). */
+  analyzer: string;
+  files: number;
+  holders: RiskHolder[];
+  writes: RiskWrite[];
+  subscriptions: RiskSubscription[];
+  flags: RiskFlag[];
+  resources: RiskResource[];
+  pipes: RiskPipe[];
+  aliases: RiskAlias[];
+  /** Les composants affichés dans un onglet : groupe, onglet, composant. */
+  tabs: { group: string; tab: string; component: string }[];
+  java?: JavaRiskFacts;
+  warnings: string[];
+}
+
 export interface SourceFacts {
   sourceId: string;
   layer: MapLayer;
@@ -711,4 +853,6 @@ export interface SourceFacts {
   partial?: string[];
   /** Les routes de passerelle lues (Spring Cloud Gateway, NGINX, Ingress), avec leur preuve. */
   gateway?: GatewayFacts;
+  /** Les faits du moteur de risques (absents d'un scan antérieur : relancer un scan). */
+  risk?: RiskFacts;
 }

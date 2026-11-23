@@ -16,6 +16,8 @@ import { readGateways } from './gateway.js';
 import { readMetadata } from './metadata.js';
 import { analyzeOpenApi } from './analyze-openapi.js';
 import { RXJS_ANALYZER } from './analyze-rxjs.js';
+import { analyzeRisk, RISK_ANALYZER } from './analyze-risk.js';
+import { loadTypeScript } from '../static-analysis/typescript-loader.js';
 import { detectTechnologies, technologyStatuses } from './detect.js';
 import type { SourceFacts } from './facts.js';
 import {
@@ -55,7 +57,7 @@ import { resolveContracts, type MavenOptions } from './maven-resolve.js';
 //      des abonnements (ngOnInit → flux) distincte de leur propagation.
 // 12 : imports par alias de chemin et fichiers barils, mesure de la reconstruction.
 // 13 : câblage Spring (@Qualifier, nom de bean écrit, @Profile), fournisseurs Angular et intercepteurs.
-export const ANALYZERS = `cartography-13;${RXJS_ANALYZER}`;
+export const ANALYZERS = `cartography-13;${RXJS_ANALYZER};${RISK_ANALYZER}`;
 
 export interface ScanOptions {
   config: CartographyConfig;
@@ -297,6 +299,19 @@ export async function runScan(
       // Les passerelles (routes, transformations, destinations) : suivies seulement là où un appel les désigne.
       const gateway = readGateways(read.files, config.entries.length > 0 ? config : undefined);
       if (gateway) sourceFacts.gateway = gateway;
+      // Les faits du moteur de risques (cycle de vie des données, souscriptions, erreurs, ressources) : lus
+      // dans le même passage, repris avec les autres faits quand la source n'a pas changé.
+      const typescript =
+        found.has('ANGULAR') || read.files.some((f) => /\.ts$/.test(f.path) && !/\.d\.ts$/.test(f.path));
+      const java = found.has('SPRING') || found.has('JPA');
+      if (typescript || java) {
+        sourceFacts.risk = analyzeRisk(typescript ? await loadTypeScript() : undefined, read.files, {
+          typescript,
+          java,
+          ...(sourceFacts.ui ? { ui: sourceFacts.ui } : {}),
+        });
+        scan.errors.push(...sourceFacts.risk.warnings.slice(0, 10));
+      }
       // Un budget d'analyse épuisé (nœuds AST, durée, contextes) : une partie des fichiers lus n'est pas
       // analysée. La source est dite partielle, jamais présentée comme complète.
       const exhausted = (sourceFacts.ui?.warnings ?? []).filter((w) =>
